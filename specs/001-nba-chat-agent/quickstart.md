@@ -21,6 +21,8 @@ cd NBAAgent
 cp .env.example .env                 # 若文件尚未生成，按配置契约手工创建
 export PUBLIC_DATA_MODE=fixture
 export LLM_MODE=mock
+export RUNTIME_PROFILE=template
+export HERMES_LITE_MODE=off       # embedded_spike 仅用于本地 fixture 验证
 
 # API
 python -m venv .venv
@@ -86,6 +88,8 @@ npx playwright test tests/e2e
 ```bash
 export PUBLIC_DATA_MODE=live
 export LLM_MODE=mock                 # 无模型凭据时仍可回答事实题
+export RUNTIME_PROFILE=hybrid
+export HERMES_LITE_MODE=sidecar      # 生产/在线剖面不得使用 embedded_spike
 uvicorn apps.api.src.main:app --host 0.0.0.0 --port 8000
 ```
 

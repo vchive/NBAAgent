@@ -24,12 +24,14 @@ flowchart LR
   API --> SG[Safety Guard]
   SG --> CTX[会话/时区上下文]
   CTX --> PARSE[意图/实体/赛季解析]
-  PARSE --> PLAN[查询规划]
+  PARSE --> ADM[准入/截止时间]
+  ADM --> PLAN[查询规划]
   PLAN --> PG[Provider Gateway]
   PG --> NORM[归一化]
   NORM --> VERIFY[事实核验]
   VERIFY --> DERIVE[确定性聚合/PBP]
-  DERIVE --> COMPOSE[回答编排与输出守卫]
+  DERIVE --> SELECT[模板或 Hermes-lite]
+  SELECT --> COMPOSE[回答编排与输出守卫]
   COMPOSE --> API
   API --> UI
 ```
@@ -50,8 +52,11 @@ Provider Gateway 是唯一的公开互联网访问边界。首版以 ESPN Web AP
    Normalizer 将结果映射到统一领域模型并保留缺失值。
 5. Verifier 检查证据可信度、新鲜度、实体/时间一致性和用户前提。系列赛累计、连胜和
    最后 5 秒等结果由确定性 Derivation 从真实比赛/PBP 记录计算，模型不负责算术或选球。
-6. Composer 按官方中文风格生成结构化答案；Output Guard 再检查无证据数字、敏感内容和
-   内部字段泄露。模型不可用时回退模板渲染器。
+6. 客观题优先由确定性模板渲染；战术/复盘等分析题在事实核验完成后才可选用 Hermes-lite
+   进行措辞组织。Hermes 不拥有 Provider、缓存、安全判定、算术或 PBP 选择，且关闭
+   shell、MCP、浏览器、memory、skills 和子代理。其输入只含结构化 FactBundle、规范化问题
+   和风格策略；Output Guard 再检查无证据数字、敏感内容和内部字段泄露。Hermes 不可用时
+   客观题回退模板，分析题只返回已核实事实摘要。
 
 同步 HTTP 和 POST SSE 共用同一个用例；SSE 只在核验完成后发送事实增量，完成事件与同步
 响应使用同一最终 envelope。断线会取消下游任务；重复 `client_message_id` 在同一会话

@@ -23,7 +23,10 @@ CorrectionStatus = CORRECTED | UNVERIFIED
 AnswerBlockType = TEXT | ANALYSIS | WARNING | TABLE | FACT
 HistoryRecordType = CHAMPIONSHIP | FRANCHISE_RECORD | LEAGUE_RECORD | SERIES_RECORD
 EvaluationProviderMode = LIVE | FIXTURE | HYBRID
-ErrorCode = INVALID_PAYLOAD | SAFETY_BLOCKED | AMBIGUOUS_ENTITY | MISSING_SLOT | NO_DATA | UPSTREAM_TIMEOUT | UPSTREAM_RATE_LIMITED | UPSTREAM_AUTH | INVALID_UPSTREAM_DATA | COMPOSER_UNAVAILABLE | OUTPUT_BLOCKED
+ErrorCode = INVALID_PAYLOAD | SAFETY_BLOCKED | AMBIGUOUS_ENTITY | MISSING_SLOT | NO_DATA | SERVICE_BUSY | UPSTREAM_TIMEOUT | UPSTREAM_RATE_LIMITED | UPSTREAM_AUTH | INVALID_UPSTREAM_DATA | COMPOSER_UNAVAILABLE | OUTPUT_BLOCKED
+AdmissionResult = ADMITTED | RATE_LIMITED | QUEUE_FULL | DEADLINE_EXCEEDED
+RuntimeProfile = TEMPLATE | HERMES | HYBRID
+HermesLiteMode = OFF | EMBEDDED_SPIKE | SIDECAR
 ```
 
 | Object | Required fields | Rules |
@@ -144,6 +147,7 @@ QueryIntent
 
 ConversationContext
   session_id: UUID
+  version: int (non-negative, incremented on successful turn commit)
   timezone: IANA timezone
   turn_count: int
   active_game: EntityRef?
@@ -354,6 +358,7 @@ FactAssertion
 ```text
 ConversationRecord
   session_id: UUID
+  version: int (non-negative, incremented on successful turn commit)
   timezone: IANA timezone
   turn_count: int
   active_refs: EntityRef[]
@@ -378,6 +383,12 @@ QueryRecord
   ttft_ms: int?
   total_latency_ms: int?
   error_code: ErrorCode?
+  admission_result: AdmissionResult?
+  queue_wait_ms: int?
+  deadline_at_utc: Instant?
+  hermes_mode: HermesLiteMode?
+  hermes_status: OK|TIMEOUT|UNAVAILABLE|UNSAFE|null
+  fallback_reason: string?
 
 EvaluationTurn
   turn_index: int (1-based, contiguous within the case)
@@ -467,6 +478,12 @@ VERIFIED/UNVERIFIED → DERIVED（如需要）→ COMPOSED → OUTPUT_GUARDED`�
   `parsed_query` 必须非空；安全/范围外/输入校验短路可保持这些字段为空。
 - `QueryRecord.phase=FAILED` 时，`outcome=FAILED` 且 `error_code` 非空；非失败终态不得
   写入技术错误码。
+- `error_code=SERVICE_BUSY` 时，`phase=FAILED, outcome=FAILED`，并且 `admission_result`
+  不得为 `ADMITTED`。
+- `admission_result=QUEUE_FULL|RATE_LIMITED|DEADLINE_EXCEEDED` 时不得访问 Provider 或
+  Hermes；该分支使用 `SERVICE_BUSY` 或等价的本地过载错误，不能伪装成上游限流。
+- `hermes_mode=OFF` 时不得产生 Hermes 调用；`hermes_status` 和 `fallback_reason` 只用于
+  内部 telemetry，不进入用户响应。
 - `EvaluationCase.turns` 的 `turn_index` 必须从 1 连续递增；`category=H` 时长度必须为
   3，其他类别默认长度为 1（扩展多轮案例需显式记录理由）。
 - 不同 `session_id` 的 `ConversationContext` 不可互相引用。

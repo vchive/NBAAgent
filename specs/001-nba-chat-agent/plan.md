@@ -9,20 +9,23 @@
 ## Summary
 
 交付一个可在线访问的中文 NBA Chat Agent，并配套简要方案说明 PDF。系统采用分层、可
-替换的数据访问架构：Web 聊天入口 → 检索前安全门 → 意图/实体/赛季解析 → 公开数据
-适配器 → 归一化与事实核验 → 确定性聚合/PBP 推导 → 官方风格回答。HLD 与 LLD 分别
-记录系统边界和可实现契约；黄金题集负责验证 PDF 的事实、安全、多轮和性能评分维度。
+替换的数据访问架构：Web 聊天入口 → 检索前安全门 → 意图/实体/赛季解析 → 准入预算 →
+公开数据适配器 → 归一化与事实核验 → 确定性聚合/PBP 推导 → 模板或 Hermes-lite 表达 →
+输出守卫。HLD 与 LLD 分别记录系统边界和可实现契约；黄金题集负责验证 PDF 的事实、
+安全、多轮和性能评分维度。Hermes-lite 是可关闭的 Composer/Runtime 适配器，不拥有
+Provider、缓存、安全决策或 NBA 领域事实。
 
 ## Technical Context
 
 **Language/Version**: Python 3.12 for API/domain/evaluation; TypeScript 5.x for Web UI
-**Primary Dependencies**: FastAPI/ASGI, Pydantic v2, httpx, React/Next.js, SSE client, pytest
+**Primary Dependencies**: FastAPI/ASGI, Pydantic v2, httpx, React/Next.js, SSE client, pytest；
+可选 Hermes-lite runtime（版本锁定、sidecar 优先）
 **Storage**: 首版无 NBA 内部数据库；会话与 TTL 缓存采用可替换的轻量存储，评测 fixture 使用版本化 JSON
 **Testing**: pytest（单元/集成/契约）、Playwright（Web E2E）、黄金题回放与时延采集
 **Target Platform**: Linux 容器；公开 Web/API 服务，支持本地 fixture/mock 模式
 **Project Type**: Web application with API service and evaluation CLI
 **Performance Goals**: 项目目标为正常查询 90% 在 5 秒内完成；记录 TTFT 与完整响应时延。PDF 未规定数字阈值
-**Constraints**: 公开互联网取数、不得依赖内部 NBA DB；UTC+8 展示；敏感请求检索前短路；凭据不入库；数据源可替换
+**Constraints**: 公开互联网取数、不得依赖内部 NBA DB；UTC+8 展示；敏感请求检索前短路；凭据不入库；数据源可替换；Hermes 仅接收结构化已核验事实，生产只允许受限 sidecar
 **Scale/Scope**: 面试演示级 v1；单会话至少支持三轮同场追问；A–I 作为黄金评测覆盖建议，不把题型数量当 PDF 硬性规模约束
 
 ## Constitution Check — before design
@@ -149,6 +152,11 @@ docs/
 | SC-008 | Spec golden target；evaluation contract | `EVAL-ACCURACY-001` ≥10 客观题、80% 一致 |
 | SC-009 | Quickstart/config contract | `DOC-003` clean-environment run |
 | SC-010 | HLD observability；HTTP contract | `OPS-TELEM-002` 时间/状态可审计 |
+| ARCH-HERMES-001 | HLD §5.1；LLD §1.3/§4.4 runtime boundary | `SEC-HERMES-001`, `INT-HERMES-001` |
+| ARCH-CAPACITY-001 | HLD §9.2；LLD §3.1/§10 admission budget | `CAP-ADMISSION-001`, `E2E-SSE-001` |
+| ARCH-FAILURE-001 | HLD failure matrix；LLD §10 errors/cancellation | `CHAOS-UPSTREAM-001`, `INT-CANCEL-001` |
+| ARCH-DEPLOY-001 | HLD §9 profiles/health/drain | `OPS-HEALTH-001`, `OPS-DRAIN-001` |
+| ARCH-OBS-001 | HLD observability；LLD §11 telemetry | `OPS-TELEM-001`, `SEC-NO-EGRESS-001` |
 
 ## Constitution Check — after design
 
@@ -166,5 +174,7 @@ replaceable decisions, not hidden assumptions.
 ## Complexity Tracking
 
 无 Constitution 违规项。Provider Gateway、确定性 Derivation 和 Evaluation Runner 是为
-PDF 的联网事实、逐回合核验、安全否决和重复评测要求所必需；每项均有独立契约和测试，
-不再增加未被需求支持的基础设施。
+PDF 的联网事实、逐回合核验、安全否决和重复评测要求所必需；每项均有独立契约和测试。
+Hermes-lite 是可关闭的可选表达运行时，增加 sidecar/capability self-test、准入和回退
+契约的理由是验证首版开发速度收益，同时防止通用 Agent 能力破坏安全/事实不变量；其
+embedded 模式仅限 fixture Spike，生产可回滚到 `template` 而不改变领域层。

@@ -19,8 +19,9 @@
   | `CorrectionStatus` | `corrected`, `unverified` |
 
 Internal `ErrorCode` values `SAFETY_BLOCKED`, `AMBIGUOUS_ENTITY`, `MISSING_SLOT` and `NO_DATA`
-map to the conversational statuses in §3 and are not emitted in the technical `error` object;
-the remaining error codes use the uppercase names shown in §5.
+map to the conversational statuses in §3 and are not emitted in the technical `error` object.
+`SERVICE_BUSY` is a technical overload error and uses the §5 error envelope; the remaining error
+codes use the uppercase names shown there.
 
 - `message` is required, trimmed, 1–2000 Unicode characters.
 - The server creates `request_id` and `session_id` when absent.
@@ -41,13 +42,16 @@ the remaining error codes use the uppercase names shown in §5.
 
 `GET /healthz`
 
-Response `200`:
+Response `200` (liveness; readiness may use `503`):
 
 ```json
-{"status":"ok","version":"v1","mode":"live|fixture|hybrid"}
+{"status":"ok|degraded|not_ready","version":"v1","mode":"live|fixture|hybrid","dependencies":{"session_store":"ok|degraded","cache":"ok|degraded","hermes":"disabled|ok|degraded"}}
 ```
 
-Health must not expose credentials, upstream URLs or detailed dependency errors.
+`/healthz` is a compatibility alias for the public liveness response and must not expose
+credentials, upstream URLs or detailed dependency errors. Deployments SHOULD also expose
+`/livez` (process liveness only) and `/readyz` (local API/session/cache dependencies; external
+Provider/LLM probes are not readiness requirements). A `not_ready` response uses HTTP 503.
 
 ## 3. Synchronous chat
 
@@ -154,7 +158,7 @@ provider metadata.
   "session_id":"uuid",
   "status":"failed",
   "error": {
-    "code":"INVALID_PAYLOAD|UPSTREAM_TIMEOUT|UPSTREAM_RATE_LIMITED|UPSTREAM_AUTH|INVALID_UPSTREAM_DATA|COMPOSER_UNAVAILABLE|OUTPUT_BLOCKED",
+    "code":"INVALID_PAYLOAD|SERVICE_BUSY|UPSTREAM_TIMEOUT|UPSTREAM_RATE_LIMITED|UPSTREAM_AUTH|INVALID_UPSTREAM_DATA|COMPOSER_UNAVAILABLE|OUTPUT_BLOCKED",
     "retryable":true,
     "message":"面向用户的简短说明"
   }
@@ -178,7 +182,8 @@ technical failures:
 | HTTP | Codes |
 |---:|---|
 | 400 | `INVALID_PAYLOAD` |
-| 429 | `UPSTREAM_RATE_LIMITED` (request or upstream limit; include `Retry-After` only when supplied by the application policy) |
+| 429 | `UPSTREAM_RATE_LIMITED` or ingress client rate limit (include `Retry-After` only when supplied by application policy) |
+| 503 | `SERVICE_BUSY` (local queue/capacity or maintenance; include `Retry-After` when available) |
 | 502 | `INVALID_UPSTREAM_DATA`, `UPSTREAM_AUTH` |
 | 504 | `UPSTREAM_TIMEOUT` |
 | 500 | `COMPOSER_UNAVAILABLE`, `OUTPUT_BLOCKED` |

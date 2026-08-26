@@ -4,6 +4,7 @@
 **HLD**: [hld.md](hld.md)
 **Status**: Proposed
 **Date**: 2026-08-26
+**Revision**: v0.2 — 增加 Hermes-lite 适配器、准入预算和可执行状态/失败契约
 
 本文把 HLD 的组件落到可实现的模块、类型、状态、协议和测试。字段名是内部契约示例；
 除明确标注为用户字段的内容外，不得原样回传浏览器。
@@ -20,6 +21,11 @@
 - 测试：pytest（单元、契约、集成）、Playwright（E2E）。
 - 本地运行：Docker Compose；无凭据时使用 fixture/mock provider 和 mock composer。
 
+运行时采用 `hybrid` 策略：客观问题使用模板/确定性 renderer；需要自然语言战术或复盘时，
+才在事实核验完成后调用 Hermes-lite。Hermes 可以以本地 mock、受限 embedded（仅 fixture
+Spike）或隔离 sidecar 运行；生产剖面禁止把 Hermes 作为可直接访问 Provider 的 in-process
+通用 Agent。
+
 这些选择服务于快速交付和可测试性，不是 PDF 的强制技术栈。所有外部依赖均通过端口
 （Protocol）隔离。
 
@@ -34,6 +40,7 @@ apps/api/src/
 ├── application/
 │   ├── chat_use_case.py            # sync/SSE 共用的用例
 │   ├── orchestrator.py             # 状态机与阶段事件
+│   ├── runtime.py                  # template/Hermes runtime selection
 │   └── ports.py                    # Safety/Context/Provider/Composer ports
 ├── domain/
 │   ├── entities.py                 # Game, Player, Team, PlayEvent, Evidence
@@ -51,6 +58,8 @@ apps/api/src/
 │   ├── cache.py
 │   ├── session_store.py
 │   ├── model_composer.py
+│   ├── hermes_runtime.py            # constrained Hermes adapter/sidecar client
+│   ├── admission.py                 # rate limit, semaphore, deadline budget
 │   └── telemetry.py
 └── evaluation/
     ├── runner.py
@@ -64,6 +73,83 @@ apps/web/
 
 tests/{unit,contract,integration,e2e,evaluation}/
 ```
+
+### 1.3 Dependency and capability contract
+
+领域层只依赖 Protocol；具体 Hermes 版本、HTTP 客户端和存储实现只能出现在
+`infrastructure/`。应用启动时执行一次 capability self-test，校验 `CapabilityManifest`
+和策略 hash；失败则拒绝启用 Hermes 并回退 `template`，不能静默打开高权限工具。
+
+```text
+RuntimeProfile = TEMPLATE | HERMES | HYBRID
+HermesLiteMode = OFF | EMBEDDED_SPIKE | SIDECAR
+
+AgentRuntimePort.compose(input: ComposerInput, cancel: CancelToken) -> RuntimeResult
+
+ComposerInput {
+  contract_version: "composer.v1"
+  request_id: UUID
+  opaque_session_id: string          # hash，仅用于关联，不传原始 session id
+  deadline_at_utc: Instant
+  remaining_ms: int
+  locale: "zh-CN"
+  display_timezone: "Asia/Shanghai"
+  sanitized_question: string
+  intent: QueryIntent
+  fact_bundle: FactBundle             # 仅 VERIFIED/PARTIAL 结构化事实
+  style_policy: StylePolicy
+  tool_policy: ToolPolicy
+}
+
+ToolPolicy {
+  tools: []
+  shell: false
+  filesystem: "none"
+  network: "deny"                     # 模型 egress 由独立 gateway 控制
+  mcp: false
+  skills: false
+  memory: false
+  subagents: false
+  max_turns: 1
+}
+
+StylePolicy {
+  locale: "zh-CN"
+  address_user_as: "您"
+  tone: "official-neutral-data-driven"
+  require_fact_labels: true
+  require_analysis_labels: true
+  max_sentences: int | None
+}
+
+RuntimeResult {
+  status: OK | TIMEOUT | UNAVAILABLE | UNSAFE
+  draft_markdown: string | None
+  blocks: AnswerBlock[]
+  used_fact_ids: string[]
+  finish_reason: string | None
+  usage: {input_tokens: int, output_tokens: int} | None
+  latency_ms: int
+  error_code: string | None          # internal-only
+}
+
+CapabilityManifest {
+  hermes_version: string
+  hermes_commit: string
+  policy_version: string
+  policy_hash: string
+  tools_hash: string
+  tools_enabled: []
+  network_mode: "deny" | "model_egress_only"
+  filesystem_mode: "none"
+  sandbox_uid: int
+  read_only_fs: bool
+}
+```
+
+`AgentRuntimePort` 不提供 `search`、`execute`、`memory` 或任意 URL 方法；Hermes adapter
+不得持有 `ProviderPort`、`CachePort` 或 shell/process 执行句柄。`used_fact_ids` 是
+OutputGuard 追溯数字和结论的必要条件，不能由模型自行声明后直接信任。
 
 ## 2. Domain value objects and schemas
 
@@ -172,24 +258,98 @@ RECEIVED
 数据”。客户端断开时取消下游 HTTP/模型任务，并记录 `CLIENT_DISCONNECTED`，不改变已
 保存的会话事实。
 
+### 3.1 Transition guards and orchestrator pseudocode
+
+每次转移都经过显式 guard；guard 失败只能进入定义好的终态，不能跳过阶段或自行补全字段：
+
+| 转移 | 必须满足 | 失败结果 |
+|---|---|---|
+| `RECEIVED → SAFETY_CHECKED` | 原文已校验、SafetyDecision 已持久化 | `FAILED/INVALID_PAYLOAD` |
+| `SAFETY_CHECKED → CONTEXT_RESOLVED` | outcome=`ALLOW` 且 provider/cache 计数仍为 0 | `FAILED/OUTPUT_BLOCKED` |
+| `CONTEXT_RESOLVED → PARSED` | session 版本匹配、上下文未跨会话 | `NEEDS_CLARIFICATION` 或冲突重试 |
+| `PARSED → PLAN_READY` | 必填槽位唯一、过滤器为 typed object | `NEEDS_CLARIFICATION` |
+| `PLAN_READY → RETRIEVING` | admission 通过且剩余 deadline>0 | 本地 `SERVICE_BUSY`/超时 |
+| `NORMALIZED → VERIFIED/UNVERIFIED` | 所有数值保留证据和 null | `NO_DATA` 或 `PARTIAL` |
+| `DERIVED → COMPOSED` | 推导输入均可追溯 | `NO_DATA`，不得调用模型补值 |
+| `COMPOSED → OUTPUT_GUARDED` | 草稿 schema 合法 | `OUTPUT_BLOCKED` |
+| `OUTPUT_GUARDED → COMPLETED` | 所有可见数字能回溯 fact ids | `FAILED/OUTPUT_BLOCKED` |
+
+核心用例可按以下伪代码实现；同步与 SSE 只替换 event sink，不复制业务分支：
+
+```text
+handle(request, event_sink):
+  validate_request(request)
+  q = record_received(request)
+  reserve_idempotency(q.session_id, request.client_message_id)
+  emit(run.started)
+
+  safety = SafetyGuard.classify(request.message)
+  persist(SAFETY_CHECKED, safety)
+  if safety.outcome != ALLOW:
+      return finish_short_circuit(safety, provider=0, cache_read=0, cache_write=0)
+
+  ctx = ContextPort.load(q.session_id)
+  parsed = resolve_context_and_parse(request, ctx)
+  if parsed.missing_slots or parsed.ambiguous:
+      return finish_clarification(provider=0, cache_read=0, cache_write=0)
+
+  admission = AdmissionController.reserve(parsed, q.deadline)
+  plan = QueryPlanner.build(parsed)
+  raw = ProviderGateway.fetch(plan, q.deadline, admission)
+  facts = Verifier.verify(Normalizer.normalize(raw), parsed.premise_claims)
+  derived = Derivation.run(facts, parsed)
+
+  composer = RuntimeSelector.for_intent(parsed.intent_name)
+  draft = composer.compose(to_composer_input(facts, derived, parsed), q.cancel)
+  answer = OutputGuard.validate(draft, facts, derived)
+  ContextPort.save(commit_context(ctx, answer, facts), expected_version=ctx.version)
+  return finish(answer)
+```
+
+`finish_short_circuit`、`finish_clarification` 和 `finish` 都必须先写入最终 telemetry，
+再释放幂等预留；任何异常路径执行同一 `cancel_and_finalize`，避免重复计数或遗留后台任务。
+
 ## 4. Ports and provider protocols
 
 ### 4.1 Application ports
 
 ```python
 SafetyPort.classify(text: str) -> SafetyDecision
-ContextPort.load(session_id: UUID) -> ConversationContext | None
-ContextPort.save(context: ConversationContext) -> None
-ProviderPort.search_games(filters: GameFilters) -> ProviderResult[list[Game]]
-ProviderPort.get_game_summary(game_id: str) -> ProviderResult[GameBundle]
-ProviderPort.get_play_by_play(game_id: str) -> ProviderResult[PlayByPlayBundle]
-ProviderPort.get_player_stats(query: StatsQuery) -> ProviderResult[list[StatLine]]
-ProviderPort.get_team_stats(query: StatsQuery) -> ProviderResult[list[StatLine]]
-ProviderPort.get_standings(season: SeasonLabel) -> ProviderResult[list[Standing]]
-ProviderPort.get_history(query: HistoryQuery) -> ProviderResult[list[HistoryRecord]]
-ProviderPort.search_news(query: NewsQuery) -> ProviderResult[list[NewsItem]]
-ComposerPort.compose(facts: FactBundle, intent: QueryIntent) -> DraftAnswer
+ContextPort.load(session_id: UUID, version: int | None) -> ConversationContext | None
+ContextPort.save(context: ConversationContext, expected_version: int) -> None
+ProviderPort.search_games(filters: GameFilters, budget: RequestBudget) -> ProviderResult[list[Game]]
+ProviderPort.get_game_summary(game_id: str, budget: RequestBudget) -> ProviderResult[GameBundle]
+ProviderPort.get_play_by_play(game_id: str, budget: RequestBudget) -> ProviderResult[PlayByPlayBundle]
+ProviderPort.get_player_stats(query: StatsQuery, budget: RequestBudget) -> ProviderResult[list[StatLine]]
+ProviderPort.get_team_stats(query: StatsQuery, budget: RequestBudget) -> ProviderResult[list[StatLine]]
+ProviderPort.get_standings(season: SeasonLabel, budget: RequestBudget) -> ProviderResult[list[Standing]]
+ProviderPort.get_history(query: HistoryQuery, budget: RequestBudget) -> ProviderResult[list[HistoryRecord]]
+ProviderPort.search_news(query: NewsQuery, budget: RequestBudget) -> ProviderResult[list[NewsItem]]
+AgentRuntimePort.compose(input: ComposerInput, cancel: CancelToken) -> RuntimeResult
 ```
+
+所有耗时方法在真实代码中使用 `async`；上面省略 `async` 仅为突出类型。`RequestBudget`
+和 `CancelToken` 由 `ChatUseCase` 创建并向下游传播，Provider/Runtime 不得自行延长 deadline。
+`ContextPort.save` 使用版本号实现乐观并发控制；冲突时重新加载当前会话一次，仍冲突则返回
+可重试错误，不覆盖其他轮次。
+
+```text
+RequestBudget {
+  deadline_at_utc: Instant
+  max_provider_operations: int = 4
+  max_retries_per_operation: int = 2
+  remaining_ms(): int
+}
+
+CancelToken {
+  is_cancelled(): bool
+  raise_if_cancelled(): None
+}
+```
+
+`ProviderGateway` 内部为每个上游维护独立 semaphore 和 circuit breaker
+（`CLOSED → OPEN → HALF_OPEN`）；所有队列有界。准入失败使用内部 `SERVICE_BUSY`，不与
+上游 `UPSTREAM_RATE_LIMITED` 混淆，HTTP 映射和用户文案由 API 层统一处理。
 
 Provider 方法只接收 typed filters，不接收用户任意 URL，防止 SSRF。只允许 GET/幂等请求
 自动重试；400/401/403 不重试，429/5xx 使用有上限的指数退避和熔断。
@@ -232,6 +392,31 @@ Normalizer 将不同来源映射到 canonical entities；不识别的字段丢�
 适配器必须带 `User-Agent`、超时和响应大小上限，保存 fixture 时去除凭据和不必要原始内容。
 Provider 健康检查只验证允许的端点，不把上游 URL 发送给用户。
 
+### 4.4 HermesRuntimeAdapter
+
+`HermesRuntimeAdapter` 只实现 `AgentRuntimePort`，不实现任何 Provider 方法。适配器在
+调用前执行以下检查，任一项失败即返回 `UNAVAILABLE` 并记录 `fallback_reason`：
+
+1. `ComposerInput.contract_version` 与适配器支持版本一致，`fact_bundle` 至少包含可追溯的
+   `VERIFIED` 或显式标记为 `PARTIAL` 的事实；未核验数字不得进入输入。
+2. `ToolPolicy` 与启动时锁定的策略完全相等（`tools=[]`、network/filesystem/shell/MCP/
+   skills/memory/subagents 全部关闭、`max_turns=1`）。策略差异不能通过用户配置覆盖。
+3. `remaining_ms` 大于最小调用预算；向 sidecar 只发送 `sanitized_question`、意图、事实
+   和风格规则，不发送 Provider URL、原始新闻/PBP 文本、凭据或完整 session ID。
+4. sidecar（生产）使用非 root、只读文件系统、无入站端口和模型 egress allow-list；
+   `EMBEDDED_SPIKE` 仅允许在 fixture 模式，不能作为线上默认值。
+
+响应中的 `used_fact_ids` 只作为候选引用，OutputGuard 会重新根据草稿中的数字、球队/球员
+名称和结论匹配 `FactAssertion`，模型声称使用的 ID 不构成信任依据。状态处理如下：
+
+| RuntimeResult | 客观问题 | F/G 分析问题 | telemetry |
+|---|---|---|---|
+| `OK` | 仍经 OutputGuard | 经 OutputGuard | `hermes_status=ok` |
+| `TIMEOUT`/`UNAVAILABLE` | 模板回退 | 返回已核实事实摘要 + `COMPOSER_UNAVAILABLE` | 记录原因和剩余预算 |
+| `UNSAFE` | 模板回退或安全错误 | 安全错误，不重试模型 | `output_guard_block` |
+
+适配器不保存 Hermes memory；会话摘要仍由 `ContextPort` 以当前 `session_id` 管理。
+
 ## 5. Parsing, time and entity resolution
 
 1. `SafetyGuard` 先对原始文本做本地规则词典（首版必选）+可选本地分类器判定；首版
@@ -250,6 +435,27 @@ Provider 健康检查只验证允许的端点，不把上游 URL 发送给用户
      “最近/最近一次夺冠/卫冕冠军”固定查询最近完成的 Finals/赛季；
    - 任何边界规则必须有固定时钟单测。
 5. `EntityResolver` 使用规范 ID、别名、球队迁移和年份约束消歧；候选多于一个时不得猜。
+
+### 5.1 Parse result and clarification policy
+
+解析器输出一个不可变的内部结果，不直接触发 Provider：
+
+```text
+ParseResult {
+  intent: QueryIntent
+  entity_candidates: {slot: EntityRef[]}
+  normalized_filters: GameFilters | StatsQuery | HistoryQuery | NewsQuery | None
+  missing_slots: Slot[]
+  ambiguity_reasons: string[]
+  confidence: {intent: decimal, entities: decimal, time: decimal}
+}
+```
+
+工程默认阈值（可配置并写入评测报告）为：实体或时间置信度 `< 0.90`、候选数量不为 1、
+或必填槽位缺失时，返回 `needs_clarification`；解析器不得以最近比赛、常用别名或模型
+记忆替代缺失条件。澄清问题最多列出 3 个候选，每个候选只显示用户可理解的名称和时间，
+不显示 canonical ID 或 Provider 字段。用户补充信息后沿用同一 session，但重新生成完整
+`QueryIntent`，不得把上一轮未核实的猜测写入活动实体。
 
 ## 6. Verification and deterministic derivation
 
@@ -326,7 +532,11 @@ TurnSummary 文本仅作为不可信上下文数据，不能覆盖系统策略�
 
 详见 [contracts/http-api.md](contracts/http-api.md)。同步和 SSE 必须调用同一个
 `ChatUseCase`，避免逻辑分叉。SSE 在事实核验完成前只发送进度状态，不发送未经核验的
-数字；核验后才发送增量答案和完成 envelope。
+数字；核验后才发送增量答案和完成 envelope。每条流共享 request deadline，默认最长 30
+秒；发送缓冲有界，慢客户端超过背压阈值则取消下游并记录 `CLIENT_BACKPRESSURE`。反向代理
+必须关闭响应缓冲/会吞事件的压缩（例如 `X-Accel-Buffering: no`），idle timeout 应大于
+15 秒 heartbeat。断线重试只使用原 `(session_id, client_message_id)` replay，不重新执行
+Provider。
 
 ## 10. Error, retry and cache policy
 
@@ -338,6 +548,7 @@ TurnSummary 文本仅作为不可信上下文数据，不能覆盖系统策略�
 | `SAFETY_BLOCKED` | No | 固定 1–2 句礼貌引导 |
 | `AMBIGUOUS_ENTITY` / `MISSING_SLOT` | No | 给候选并请求澄清 |
 | `NO_DATA` | No | 说明暂无匹配记录并建议调整条件 |
+| `SERVICE_BUSY` | Yes | 本地过载，提示稍后重试并可带 Retry-After |
 | `UPSTREAM_TIMEOUT` | Yes | 提示稍后重试，不显示旧数字 |
 | `UPSTREAM_RATE_LIMITED` | Yes | 提示稍后重试并记录退避 |
 | `UPSTREAM_AUTH` | No (operator) | 用户看到服务暂不可用，内部告警 |
@@ -347,7 +558,7 @@ TurnSummary 文本仅作为不可信上下文数据，不能覆盖系统策略�
 
 `SAFETY_BLOCKED`、`AMBIGUOUS_ENTITY`、`MISSING_SLOT` 和 `NO_DATA` 是内部的会话结果码，
 对应 HTTP 契约中的 `blocked`、`needs_clarification` 或 `no_data`（HTTP 200），不是技术
-失败的 error envelope；其余表项才进入 `status=failed`。
+失败的 error envelope；`SERVICE_BUSY` 以及其余表项进入 `status=failed`。
 
 ### 10.2 Cache and sessions
 
@@ -368,10 +579,12 @@ TurnSummary 文本仅作为不可信上下文数据，不能覆盖系统策略�
 ## 11. Observability and privacy
 
 每次请求生成 `request_id`/`trace_id`，记录状态转移、intent、session hash、provider call
-count、cache read/write count、cache hit、evidence state、TTFT、total latency、error code
-和 `safety_category`。红线拒答必须有可验证的 `provider_call_count=0` 且缓存读写计数均为
-0。日志进行文本截断和敏感字段脱敏，凭据通过 secret manager/environment 注入；日志留存
-期限由部署环境配置。
+count、cache read/write count、cache hit、evidence state、admission result、queue wait、
+deadline、TTFT、total latency、error code、Hermes mode/status 和 fallback reason。红线拒答
+必须有可验证的 `provider_call_count=0` 且缓存读写计数均为 0。日志进行文本截断和敏感字段
+脱敏，凭据通过 secret manager/environment 注入；日志留存期限由部署环境配置。Metrics 不
+使用 request/session ID 作为 label，避免高基数；可按 outcome/category/phase 统计成功率、
+P90 时延、队列深度、SSE 连接数、Provider 熔断、Hermes fallback 和安全零调用违规。
 
 ## 12. Test design
 
@@ -382,6 +595,15 @@ count、cache read/write count、cache hit、evidence state、TTFT、total laten
 | Integration | Orchestrator 全链路 | 成功、澄清、空结果、timeout/429、错误前提、session 隔离 |
 | E2E | Web 聊天 | 响应式 UI、加载/流式/断开/重试、键盘可用、卡片/表格可读 |
 | Evaluation | A–I + OUT_OF_SCOPE 黄金题和重复回放 | 事实、时区、三轮一致、安全/范围外 provider=0、七维评分和耗时 |
+
+必须额外覆盖 Hermes-lite 与运行时边界：
+
+| 层级 | 场景 | 必须断言 |
+|---|---|---|
+| Contract | `ComposerInput`/`RuntimeResult` | 不含 URL、原始敏感文本或 Provider 字段；工具策略严格为关闭状态 |
+| Integration | Hermes sidecar 正常/超时/不可用/不安全 | 客观题模板回退；分析题不补数字并返回可理解的不可用结果 |
+| Security | 注入文本、恶意工具配置、网络/文件系统探测 | Hermes 无工具、无 memory、无出站旁路；OutputGuard 阻断未追溯数字 |
+| Operations | admission 满载、SSE 断开、滚动重启、SessionStore 故障 | 队列有界、取消无 orphan、会话不静默串线、幂等结果可恢复 |
 
 黄金集至少包含每类一题，并增加边界/红队变体；每个客观答案保存参考实体、日期、
 关键数值和允许容差。评测同时记录首 token（若流式）和完整答案的起止时间。
@@ -394,14 +616,35 @@ API_BASE_URL=...
 PUBLIC_DATA_MODE=live|fixture|hybrid
 PROVIDER_TIMEOUT_SECONDS=8
 PROVIDER_MAX_RETRIES=2
+REQUEST_DEADLINE_MS=10000
+QUEUE_WAIT_DEADLINE_MS=1000
+MAX_PROVIDER_OPERATIONS=4
 CACHE_TTL_LIVE_SECONDS=45
 CACHE_TTL_BOXSCORE_SECONDS=300
 CACHE_TTL_HISTORY_SECONDS=86400
 SESSION_TTL_SECONDS=86400
+MAX_SESSION_TURNS=8
+MAX_SESSION_BYTES=16384
+CACHE_MAX_ENTRIES=10000
+CACHE_MAX_BYTES=67108864
 LLM_MODE=mock|live
 LLM_TIMEOUT_SECONDS=8
 ALLOWED_ORIGINS=...
 LOG_LEVEL=INFO
+RUNTIME_PROFILE=hybrid
+HERMES_LITE_MODE=off|embedded_spike|sidecar
+HERMES_LITE_ENDPOINT=...
+HERMES_LITE_MAX_TOKENS=800
+HERMES_LITE_TIMEOUT_MS=2500
+HERMES_LITE_MAX_INFLIGHT=4
+MAX_REQUEST_BYTES=32768
+MAX_EVENT_BYTES=16384
+MAX_RESPONSE_BYTES=262144
+MAX_SSE_CONNECTIONS=100
+MAX_INFLIGHT_REQUESTS=32
+QUEUE_MAX_DEPTH=64
+SHUTDOWN_DRAIN_MS=10000
+EGRESS_ALLOWLIST=...
 ```
 
 `.env` 只作为本地未提交文件；仓库只提交 `.env.example`，其中不得包含真实凭据。
