@@ -1,0 +1,192 @@
+# HTTP and SSE Contract
+
+**Version**: `v1`
+**Feature**: [spec.md](../spec.md)
+**Implementation detail**: [lld.md](../lld.md)
+
+## 1. Shared rules
+
+- JSON uses UTF-8; timestamps in wire metadata use ISO-8601 UTC unless the field name says
+  `as_of_beijing`.
+- Wire enum values are lowercase; they serialize the uppercase canonical domain enums defined in
+  `data-model.md` using this mapping:
+
+  | Domain enum | Wire values |
+  |---|---|
+  | `QueryOutcome` | `completed`, `no_data`, `needs_clarification`, `blocked`, `failed` |
+  | `EvidenceState` | `verified`, `partial`, `none` |
+  | `AnswerBlockType` | `text`, `analysis`, `warning`, `table`, `fact` |
+  | `CorrectionStatus` | `corrected`, `unverified` |
+
+Internal `ErrorCode` values `SAFETY_BLOCKED`, `AMBIGUOUS_ENTITY`, `MISSING_SLOT` and `NO_DATA`
+map to the conversational statuses in §3 and are not emitted in the technical `error` object;
+the remaining error codes use the uppercase names shown in §5.
+
+- `message` is required, trimmed, 1–2000 Unicode characters.
+- The server creates `request_id` and `session_id` when absent.
+- `client_timezone`, when present, must be a valid IANA timezone; an invalid value is a
+  `400 INVALID_PAYLOAD` and is never used for a data query. It affects parsing of relative input
+  dates only; user-facing output remains Asia/Shanghai unless a future version adds an explicit
+  display-timezone field.
+- Clients must not send provider URLs, API fields, prompts or arbitrary tool commands.
+- User-facing responses never contain provider names, endpoint URLs, raw fields or internal traces.
+- Sync and SSE routes invoke the same application use case and produce equivalent final envelopes.
+- `as_of_beijing` is nullable for blocked, clarification, empty or failed outcomes. When present
+  it is formatted as `YYYY-MM-DD HH:mm` in `Asia/Shanghai`; it is a display timestamp, not a
+  replacement for internal UTC instants.
+- Safety BLOCK and `OUT_OF_SCOPE` decisions are made before any Provider or Provider-cache lookup;
+  their internal call/read/write counters are all zero.
+
+## 2. Health endpoint
+
+`GET /healthz`
+
+Response `200`:
+
+```json
+{"status":"ok","version":"v1","mode":"live|fixture|hybrid"}
+```
+
+Health must not expose credentials, upstream URLs or detailed dependency errors.
+
+## 3. Synchronous chat
+
+`POST /api/v1/chat`
+
+Request:
+
+```json
+{
+  "session_id": "optional UUID",
+  "message": "2025-26 总决赛 G4 谁得分最高？",
+  "client_timezone": "Asia/Shanghai",
+  "client_message_id": "optional idempotency key"
+}
+```
+
+Response `200` for all conversational outcomes (`completed`, `needs_clarification`, `blocked`,
+or `no_data`). These are successful protocol responses, not transport failures:
+
+```json
+{
+  "request_id": "uuid",
+  "session_id": "uuid",
+  "status": "completed|needs_clarification|blocked|no_data",
+  "answer_markdown": "……",
+  "blocks": [
+    {"type":"text","content":"……"},
+    {"type":"table","columns":["球队","胜场"],"rows":[["示例",1]]}
+  ],
+  "as_of_beijing": "2026-08-26 21:30",
+  "evidence_state": "verified|partial|none",
+  "corrections": [
+    {"status":"corrected|unverified","message":"仅含用户可见的本地化纠偏说明"}
+  ],
+  "follow_up": null,
+  "latency_ms": 1234
+}
+```
+
+`status=failed` uses the technical error envelope in §5. A blocked response must have an internal
+`provider_call_count=0`; that field is intentionally not exposed to the client. A clarification
+response uses `answer_markdown` as the single question and may include `follow_up`. `corrections`
+is always the public mapping described above; internal `Correction.claim`, canonical IDs and
+evidence references are never serialized.
+
+## 4. Streaming chat
+
+`POST /api/v1/chat/stream` with the same request body. Response:
+
+```text
+Content-Type: text/event-stream
+Cache-Control: no-cache
+X-Request-Id: <request id>
+```
+
+Each event is a single JSON payload preceded by `event:` and `data:`. Event order is strict:
+
+1. `run.started`
+2. zero or more `run.status` (safe progress text only)
+3. one of:
+   - `message.delta` events followed by `message.completed`,
+   - `clarification.required` followed by `message.completed` with status `needs_clarification`,
+   - `safety.blocked` followed by `message.completed` with status `blocked`,
+   - `message.completed` with status `no_data`,
+   - `run.error`.
+
+Examples:
+
+```text
+event: run.started
+data: {"request_id":"uuid","session_id":"uuid"}
+
+event: run.status
+data: {"stage":"verifying","text":"正在核对比赛数据"}
+
+event: message.delta
+data: {"text":"勇士在"}
+
+event: message.completed
+data: {"request_id":"uuid","session_id":"uuid","status":"completed","answer_markdown":"…","as_of_beijing":"…","evidence_state":"verified","blocks":[],"corrections":[],"follow_up":null,"latency_ms":1234}
+```
+
+Before verification/derivation, status events must not contain factual numbers. The server sends
+a comment heartbeat (`: heartbeat`) at most every 15 seconds. On client disconnect it cancels
+downstream work and records a telemetry event. A client may retry with the same
+`client_message_id`; the deduplication key is `(session_id, client_message_id)`, so the server
+returns the existing completed result for that session when available. The same client ID in
+another session never reuses a result.
+
+Every `message.completed` payload MUST equal the §3 conversational response envelope (including
+`request_id`, `session_id`, `status`, `blocks`, `corrections`, `follow_up`, `evidence_state`,
+`as_of_beijing` and `latency_ms`); the example above is abbreviated only for readability.
+
+`blocks` follows the canonical `AnswerBlock` union: `text`, `analysis` and `warning` require
+`content`; `fact` uses `label`/`value`/optional `unit`; `table` uses non-empty `columns` and
+same-width `rows`. Unknown block fields are ignored on rendering and must not be used to smuggle
+provider metadata.
+
+## 5. Technical error envelope
+
+```json
+{
+  "request_id":"uuid",
+  "session_id":"uuid",
+  "status":"failed",
+  "error": {
+    "code":"INVALID_PAYLOAD|UPSTREAM_TIMEOUT|UPSTREAM_RATE_LIMITED|UPSTREAM_AUTH|INVALID_UPSTREAM_DATA|COMPOSER_UNAVAILABLE|OUTPUT_BLOCKED",
+    "retryable":true,
+    "message":"面向用户的简短说明"
+  }
+}
+```
+
+`message` is localized and must not contain internal URLs, stack traces, field names or prompts.
+For SSE, `run.error` has the same `error` object and includes `request_id`/`session_id`:
+
+```text
+event: run.error
+data: {"request_id":"uuid","session_id":"uuid","status":"failed","error":{"code":"UPSTREAM_TIMEOUT","retryable":true,"message":"数据暂时不可用，请稍后重试"}}
+```
+
+`OUT_OF_SCOPE` is a conversational `no_data` outcome with a short basketball redirection and
+zero provider calls; it is not a technical failure.
+Conversational codes such as `SAFETY_BLOCKED`, `AMBIGUOUS_ENTITY`, `MISSING_SLOT` and `NO_DATA`
+are represented by the §3 `200` outcome and are not `status=failed`. HTTP status mapping for
+technical failures:
+
+| HTTP | Codes |
+|---:|---|
+| 400 | `INVALID_PAYLOAD` |
+| 429 | `UPSTREAM_RATE_LIMITED` (request or upstream limit; include `Retry-After` only when supplied by the application policy) |
+| 502 | `INVALID_UPSTREAM_DATA`, `UPSTREAM_AUTH` |
+| 504 | `UPSTREAM_TIMEOUT` |
+| 500 | `COMPOSER_UNAVAILABLE`, `OUTPUT_BLOCKED` |
+
+## 6. Security and compatibility requirements
+
+- CORS allowlist is configuration-driven; wildcard origins are forbidden in production.
+- Request body and event size are bounded; server rejects control characters and invalid UTF-8.
+- API is versioned under `/api/v1`; additive fields are allowed, breaking changes require a new
+  version and contract fixtures.
+- Error and status content is safe to log after redaction. No user-supplied URL is fetched.
