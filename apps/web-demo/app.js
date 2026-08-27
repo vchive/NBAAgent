@@ -92,7 +92,7 @@
       { clock: "01:42.0", team: "BOS", teamClass: "token-bos", player: "J. Brown", action: "突破上篮命中 · 2分", detail: "凯尔特人稳住优势", away: 98, home: 103 },
       { clock: "00:58.0", team: "OKC", teamClass: "token-okc", player: "L. Dort", action: "底角三分命中 · 3分", detail: "雷霆再次迫近", away: 101, home: 103 },
       { clock: "00:31.0", team: "BOS", teamClass: "token-bos", player: "D. White", action: "接球三分命中 · 3分", detail: "凯尔特人领先 5 分", away: 101, home: 106 },
-      { clock: "00:05.0", team: "OKC", teamClass: "token-okc", player: "S. Gilgeous-Alexander", action: "突破造犯规 · 罚球 1 中 1", detail: "最后一次有效得分", away: 104, home: 106 },
+      { clock: "00:05.0", team: "OKC", teamClass: "token-okc", player: "S. Gilgeous-Alexander", action: "突破造犯规 · 罚球 1 中 1", detail: "最后一次有效得分", away: 102, home: 106 },
       { clock: "00:00.0", team: "BOS", teamClass: "token-bos", player: "J. Tatum", action: "终场哨响 · 比赛结束", detail: "凯尔特人 108–104 取胜", away: 104, home: 108 },
     ],
     // This fixture ended in regulation.  Keeping OT empty makes the tab a
