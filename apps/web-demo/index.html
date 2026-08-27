@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#07111f" />
+    <meta
+      name="description"
+      content="COURTSIDE NBA Intelligence — NBA 比赛数据与对话演示"
+    />
+    <title>COURTSIDE / NBA Intelligence</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="#top" aria-label="COURTSIDE NBA Intelligence 首页">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 36 36" role="img">
+              <circle cx="18" cy="18" r="16" fill="none" stroke="currentColor" stroke-width="1.5" />
+              <path d="M18 2c4.8 4.5 7.2 9.8 7.2 16S22.8 29.5 18 34M2 18h32M5 9.4c3.8 2.2 8.1 3.3 13 3.3s9.2-1.1 13-3.3M5 26.6c3.8-2.2 8.1-3.3 13-3.3s9.2 1.1 13 3.3" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+            </svg>
+          </span>
+          <span class="brand-copy">
+            <span class="brand-kicker">COURTSIDE</span>
+            <strong>NBA INTELLIGENCE</strong>
+          </span>
+        </a>
+
+        <div class="topbar-actions">
+          <span class="mode-pill" title="当前为本地 fixture 演示数据">
+            <span class="status-dot" aria-hidden="true"></span>
+            <span>FIXTURE MODE</span>
+          </span>
+          <span class="beijing-clock" aria-label="北京时间">
+            <span class="clock-label">北京时间</span>
+            <time id="beijing-time">--:--:--</time>
+          </span>
+          <button class="icon-button new-session-button" id="new-session" type="button" aria-label="开始新对话" title="新对话">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+            <span class="button-label">新对话</span>
+          </button>
+        </div>
+      </header>
+
+      <main class="workspace" id="top">
+        <aside class="rail left-rail" aria-label="赛事导航和示例问题">
+          <div class="rail-heading">
+            <div>
+              <span class="eyebrow">CONTROL ROOM</span>
+              <h2>今日看点</h2>
+            </div>
+            <span class="live-badge"><span class="status-dot" aria-hidden="true"></span> REPLAY</span>
+          </div>
+
+          <button class="featured-game" id="featured-game" type="button" aria-label="查看凯尔特人与雷霆的比赛回放">
+            <span class="game-meta"><span>NBA FINALS · G4 · DEMO FIXTURE</span><span class="game-state">FINAL</span></span>
+            <span class="mini-scoreboard">
+              <span class="mini-team"><span class="team-token token-bos">BOS</span><span>凯尔特人</span></span>
+              <strong>108</strong>
+              <span class="mini-team"><span class="team-token token-okc">OKC</span><span>雷霆</span></span>
+              <strong>104</strong>
+            </span>
+            <span class="game-foot"><span>2026/06/12 · 波士顿</span><span class="arrow" aria-hidden="true">↗</span></span>
+          </button>
+
+          <div class="rail-section">
+            <div class="section-label"><span>快速提问</span><span class="section-count">05</span></div>
+            <div class="prompt-list" id="prompt-list">
+              <button type="button" class="prompt-button" data-prompt="2025-26 总决赛 G4 谁得分最高？">
+                <span class="prompt-index">01</span><span>G4 谁得分最高？</span><span class="prompt-arrow" aria-hidden="true">↗</span>
+              </button>
+              <button type="button" class="prompt-button" data-prompt="这轮系列赛目前大比分是多少？">
+                <span class="prompt-index">02</span><span>系列赛大比分</span><span class="prompt-arrow" aria-hidden="true">↗</span>
+              </button>
+              <button type="button" class="prompt-button" data-prompt="请回放全场最后 5 秒发生了什么？">
+                <span class="prompt-index">03</span><span>最后 5 秒回放</span><span class="prompt-arrow" aria-hidden="true">↗</span>
+              </button>
+              <button type="button" class="prompt-button" data-prompt="凯尔特人为什么能限制对手的挡拆？">
+                <span class="prompt-index">04</span><span>限制挡拆的战术</span><span class="prompt-arrow" aria-hidden="true">↗</span>
+              </button>
+              <button type="button" class="prompt-button" data-prompt="我记得雷霆在 G4 赢了，帮我核验一下。">
+                <span class="prompt-index">05</span><span>核验一个前提</span><span class="prompt-arrow" aria-hidden="true">↗</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="rail-note">
+            <span class="note-icon" aria-hidden="true">◌</span>
+            <p>回答以已核验事实为基础。数字由比赛记录确定性汇总，分析与事实分开呈现。</p>
+          </div>
+
+          <div class="rail-footer">
+            <span>NBA AGENT / v0.1</span>
+            <span class="online-label"><span class="status-dot" aria-hidden="true"></span> API READY</span>
+          </div>
+        </aside>
+
+        <section class="chat-panel" aria-label="NBA 对话窗口">
+          <div class="panel-header">
+            <div>
+              <span class="eyebrow">LIVE QUERY DESK / 001</span>
+              <h1>问问场边，发生了什么</h1>
+              <p class="panel-subtitle">比赛、球员、关键回合与战术复盘，一次问清。</p>
+            </div>
+            <div class="connection-state" id="connection-state" data-state="ready" aria-live="polite">
+              <span class="connection-dot" aria-hidden="true"></span>
+              <span id="connection-label">就绪</span>
+            </div>
+          </div>
+
+          <div class="chat-scroll" id="chat-log" role="log" aria-live="polite" aria-relevant="additions text" aria-busy="false">
+            <div class="day-divider"><span>今天 · 2026 年 6 月 12 日</span></div>
+
+            <article class="message assistant-message welcome-message" data-message-id="welcome">
+              <div class="message-avatar assistant-avatar" aria-hidden="true">CS</div>
+              <div class="message-body">
+                <div class="message-meta"><strong>COURTSIDE</strong><span>19:42</span><span class="verified-mark">✓ 已核验</span></div>
+                <div class="answer-card">
+                  <div class="answer-lead">
+                    <span class="answer-label">赛后速报</span>
+                    <h3>凯尔特人守住主场，以 <strong>108–104</strong> 击败雷霆。</h3>
+                    <p>杰伦·布朗拿下全场最高的 <strong>32 分</strong>，末节最后 5 秒的防守回合锁定胜局。</p>
+                  </div>
+                  <div class="fact-grid" aria-label="比赛关键数据">
+                    <div class="fact-card accent-green"><span class="fact-label">终场比分</span><strong class="fact-value">108–104</strong><span class="fact-unit">FINAL</span></div>
+                    <div class="fact-card accent-orange"><span class="fact-label">得分王</span><strong class="fact-value">J. Brown</strong><span class="fact-unit">32 PTS</span></div>
+                    <div class="fact-card accent-blue"><span class="fact-label">系列赛</span><strong class="fact-value">BOS 3–1</strong><span class="fact-unit">领先</span></div>
+                  </div>
+                  <div class="answer-foot">
+                    <span class="evidence-chip verified"><span aria-hidden="true">✓</span> 已核验</span>
+                    <span>公开资料 · 数据截至北京时间 2026-06-13 11:42</span>
+                  </div>
+                </div>
+              </div>
+            </article>
+          </div>
+
+          <div class="stream-status" id="stream-status" role="status" aria-live="polite" hidden>
+            <span class="stream-spinner" aria-hidden="true"></span>
+            <span class="stream-stage" id="stream-stage">正在准备</span>
+            <button type="button" class="stop-button" id="stop-stream" aria-label="停止生成">停止</button>
+          </div>
+
+          <form class="composer" id="chat-form" novalidate>
+            <div class="composer-shell">
+              <label class="sr-only" for="message-input">输入您的 NBA 问题</label>
+              <textarea id="message-input" name="message" rows="1" maxlength="2000" autocomplete="off" placeholder="问一个关于比赛的问题……" aria-describedby="composer-help"></textarea>
+              <button class="send-button" id="send-button" type="submit" aria-label="发送问题">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h15M13 6l6 6-6 6" /></svg>
+              </button>
+            </div>
+            <div class="composer-meta" id="composer-help">
+              <span>Enter 发送 · Shift + Enter 换行</span>
+              <span id="char-count">0 / 2000</span>
+            </div>
+          </form>
+        </section>
+
+        <aside class="rail right-rail" aria-label="比赛 HUD 和逐回合回放">
+          <section class="hud-card panel-card" aria-labelledby="hud-title">
+            <div class="card-heading">
+              <div><span class="eyebrow">GAME HUD / DEMO FINALS G4</span><h2 id="hud-title">终场数据</h2></div>
+              <span class="status-tag final-tag">FINAL</span>
+            </div>
+            <div class="scoreboard">
+              <div class="score-team away-team">
+                <span class="team-token token-okc large-token">OKC</span>
+                <span class="team-name">雷霆</span>
+                <span class="team-record">客场 · 1–3</span>
+              </div>
+              <div class="score-center">
+                <div class="score-line"><strong id="away-score">104</strong><span>—</span><strong id="home-score">108</strong></div>
+                <span class="score-clock" id="score-clock">00:00 · Q4</span>
+              </div>
+              <div class="score-team home-team">
+                <span class="team-token token-bos large-token">BOS</span>
+                <span class="team-name">凯尔特人</span>
+                <span class="team-record">主场 · 3–1</span>
+              </div>
+            </div>
+            <div class="quarter-strip" aria-label="各节比分，顺序为客队 OKC–主队 BOS">
+              <div data-quarter="Q1"><span>Q1</span><strong>27–24</strong></div>
+              <div data-quarter="Q2"><span>Q2</span><strong>25–31</strong></div>
+              <div data-quarter="Q3"><span>Q3</span><strong>28–31</strong></div>
+              <div class="current" data-quarter="Q4"><span>Q4</span><strong>24–22</strong></div>
+            </div>
+            <div class="possession-row"><span><span class="possession-dot bos-pos" aria-hidden="true"></span> 最后控球：BOS</span><span>节奏 98.4</span></div>
+          </section>
+
+          <section class="pbp-card panel-card" aria-labelledby="pbp-title">
+            <div class="card-heading pbp-heading">
+              <div><span class="eyebrow">PLAY-BY-PLAY / EVENT REPLAY</span><h2 id="pbp-title">关键回合</h2></div>
+              <span class="event-count" id="event-count">06 EVENTS</span>
+            </div>
+            <div class="period-tabs" role="tablist" aria-label="选择比赛节次">
+              <button type="button" class="period-tab" role="tab" aria-selected="false" aria-controls="pbp-list" data-period="Q2">Q2</button>
+              <button type="button" class="period-tab" role="tab" aria-selected="false" aria-controls="pbp-list" data-period="Q3">Q3</button>
+              <button type="button" class="period-tab active" role="tab" aria-selected="true" aria-controls="pbp-list" data-period="Q4">Q4</button>
+              <button type="button" class="period-tab" role="tab" aria-selected="false" aria-controls="pbp-list" data-period="OT">OT</button>
+            </div>
+            <div class="pbp-list" id="pbp-list" role="list" aria-label="逐回合事件"></div>
+            <div class="replay-controls">
+              <button type="button" class="replay-play" id="replay-play" aria-label="播放关键回合" aria-pressed="false">
+                <svg class="play-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10-6.5z" /></svg>
+                <svg class="pause-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h3v14H7zM14 5h3v14h-3z" /></svg>
+                <span id="replay-label">播放回放</span>
+              </button>
+              <div class="replay-progress">
+                <label class="sr-only" for="pbp-slider">回放进度</label>
+                <input id="pbp-slider" type="range" min="0" max="5" value="5" step="1" />
+                <div class="progress-labels"><span id="replay-position">06 / 06</span><span>按序回放 · 非视频</span></div>
+              </div>
+            </div>
+            <div class="selected-play" id="selected-play" aria-live="polite">
+              <span class="selected-play-kicker">SELECTED MOMENT</span>
+              <p id="selected-play-text">终场哨响，凯尔特人以 108–104 取胜。</p>
+            </div>
+          </section>
+
+          <section class="evidence-card panel-card" aria-labelledby="evidence-title">
+            <div class="card-heading"><div><span class="eyebrow">DATA INTEGRITY</span><h2 id="evidence-title">口径说明</h2></div><span class="integrity-icon" aria-hidden="true">✓</span></div>
+            <ul class="integrity-list">
+              <li><span class="integrity-dot green" aria-hidden="true"></span><span><strong>已核验事实</strong><small>比分、得分和回合来自 fixture 记录</small></span></li>
+              <li><span class="integrity-dot amber" aria-hidden="true"></span><span><strong>分析观点</strong><small>以“分析”标签与事实明确区分</small></span></li>
+              <li><span class="integrity-dot gray" aria-hidden="true"></span><span><strong>暂无数据</strong><small>缺失字段不会用 0 或旧数据填充</small></span></li>
+            </ul>
+          </section>
+        </aside>
+      </main>
+
+      <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+    </div>
+    <script src="./app.js" defer></script>
+  </body>
+</html>

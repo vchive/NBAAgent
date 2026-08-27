@@ -5,8 +5,23 @@ Driven Development）流程推进。
 
 ## 当前阶段：需求与方案设计
 
-已完成需求规格、研究记录、HLD、LLD、数据模型、接口契约和验收指南；业务代码和部署
-链接将在下一阶段按任务清单实现。
+已完成需求规格、研究记录、HLD、LLD、数据模型、接口契约和验收指南；业务服务代码和
+部署链接将在下一阶段按任务清单实现，当前可先用 UI Demo 验证交互方案。
+
+## UI 交互 Demo
+
+赛事转播风格的零依赖前端 Demo 已放在 [`apps/web-demo`](apps/web-demo/)。它用本地
+fixture 演示聊天流式状态、事实/分析分层、错误与重试、会话隔离，以及 Q2/Q3/Q4/OT
+节次切换；回放是 PBP 事件定位，不是视频播放，OT 标签会明确展示本场无加时的空状态。
+
+启动方式：
+
+```bash
+python3 -m http.server 4173 --directory apps/web-demo
+```
+
+打开 <http://127.0.0.1:4173> 即可查看。详细的交互探针和真实 API 接入替换点见
+[`apps/web-demo/README.md`](apps/web-demo/README.md)。
 
 - [需求规格](specs/001-nba-chat-agent/spec.md)
 - [实施计划](specs/001-nba-chat-agent/plan.md)

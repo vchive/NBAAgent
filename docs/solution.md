@@ -2,7 +2,10 @@
 
 **对应需求**：[spec.md](../specs/001-nba-chat-agent/spec.md)
 **详细设计**：[HLD](../specs/001-nba-chat-agent/hld.md) · [LLD](../specs/001-nba-chat-agent/lld.md)
-**状态**：需求与方案设计阶段（实现前）
+**状态**：需求与方案设计阶段；UI 交互原型已提供（业务服务尚未实现）
+
+可运行的赛事转播风格 UI 原型位于 [`apps/web-demo`](../apps/web-demo/)，用于先确认聊天、
+状态反馈和 PBP 事件回放的交互，不代表真实 Provider 或在线数据已经接入。
 
 ## 1. 目标与边界
 

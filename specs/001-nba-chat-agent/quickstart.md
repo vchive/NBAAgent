@@ -15,6 +15,17 @@ Phase 2 实现的目标结构；在业务代码尚未生成前不能直接执行
 
 ## 2. Local fixture mode (no external network)
 
+### 2.1 UI-only interaction prototype
+
+业务 API 尚未实现时，可先启动零依赖 UI 原型确认交互和视觉方案：
+
+```bash
+python3 -m http.server 4173 --directory apps/web-demo
+```
+
+访问 `http://127.0.0.1:4173`。该页面仅使用内置 fixture，回放为 PBP 事件定位（非视频），
+不需要 Node、模型凭据或外部数据源；完整 API fixture 验收仍按本节后续命令进行。
+
 ```bash
 git clone git@github.com:vchive/NBAAgent.git
 cd NBAAgent
