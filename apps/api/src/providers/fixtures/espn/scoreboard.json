@@ -1,0 +1,18 @@
+{
+  "events": [
+    {
+      "id": "401-fixture-g4",
+      "date": "2026-06-12T01:30:00Z",
+      "season": {"year": 2026, "displayName": "2025-26"},
+      "status": {"type": {"state": "post", "completed": true}},
+      "competitions": [{
+        "competitors": [
+          {"homeAway": "home", "score": "108", "team": {"id": "2", "displayName": "Boston Celtics", "abbreviation": "BOS"}},
+          {"homeAway": "away", "score": "104", "team": {"id": "25", "displayName": "Oklahoma City Thunder", "abbreviation": "OKC"}}
+        ],
+        "series": {"id": "fixture-series", "gameNumber": 4},
+        "notes": [{"headline": "NBA Finals - Game 4"}]
+      }]
+    }
+  ]
+}

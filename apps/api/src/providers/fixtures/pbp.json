@@ -1,0 +1,17 @@
+{
+  "version": "fixture.v1",
+  "bundles": {
+    "2026-finals-g4": {
+      "game_id": "2026-finals-g4",
+      "sequence_valid": true,
+      "events": [
+        {"event_id": "g4-pbp-001", "game_id": "2026-finals-g4", "sequence": 1, "provider_index": 0, "period": 4, "clock_seconds_remaining": 134.0, "event_type": "SHOT", "shooter": {"kind": "PLAYER", "canonical_id": "shai-gilgeous-alexander", "display_name": "谢伊·吉尔杰斯-亚历山大", "aliases": ["S. Gilgeous-Alexander"], "confidence": 1.0}, "assister": null, "shot_type": "TWO_POINT", "points": 2, "home_score_after": 101, "away_score_after": 98, "wallclock_utc": "2026-06-12T03:16:00Z", "raw_text_hash": null},
+        {"event_id": "g4-pbp-002", "game_id": "2026-finals-g4", "sequence": 2, "provider_index": 1, "period": 4, "clock_seconds_remaining": 102.0, "event_type": "SHOT", "shooter": {"kind": "PLAYER", "canonical_id": "jaylen-brown", "display_name": "杰伦·布朗", "aliases": ["J. Brown"], "confidence": 1.0}, "assister": null, "shot_type": "TWO_POINT", "points": 2, "home_score_after": 103, "away_score_after": 98, "wallclock_utc": "2026-06-12T03:17:00Z", "raw_text_hash": null},
+        {"event_id": "g4-pbp-003", "game_id": "2026-finals-g4", "sequence": 3, "provider_index": 2, "period": 4, "clock_seconds_remaining": 58.0, "event_type": "SHOT", "shooter": {"kind": "PLAYER", "canonical_id": "lu-dort", "display_name": "吕冈茨·多尔特", "aliases": ["L. Dort", "Dort"], "confidence": 1.0}, "assister": null, "shot_type": "THREE_POINT", "points": 3, "home_score_after": 103, "away_score_after": 101, "wallclock_utc": "2026-06-12T03:18:00Z", "raw_text_hash": null},
+        {"event_id": "g4-pbp-004", "game_id": "2026-finals-g4", "sequence": 4, "provider_index": 3, "period": 4, "clock_seconds_remaining": 31.0, "event_type": "SHOT", "shooter": {"kind": "PLAYER", "canonical_id": "derrick-white", "display_name": "德里克·怀特", "aliases": ["D. White"], "confidence": 1.0}, "assister": null, "shot_type": "THREE_POINT", "points": 3, "home_score_after": 106, "away_score_after": 101, "wallclock_utc": "2026-06-12T03:18:27Z", "raw_text_hash": null},
+        {"event_id": "g4-pbp-005", "game_id": "2026-finals-g4", "sequence": 5, "provider_index": 4, "period": 4, "clock_seconds_remaining": 5.0, "event_type": "FREE_THROW", "shooter": {"kind": "PLAYER", "canonical_id": "shai-gilgeous-alexander", "display_name": "谢伊·吉尔杰斯-亚历山大", "aliases": ["S. Gilgeous-Alexander"], "confidence": 1.0}, "assister": null, "shot_type": "FREE_THROW", "points": 1, "home_score_after": 106, "away_score_after": 102, "wallclock_utc": "2026-06-12T03:18:53Z", "raw_text_hash": null},
+        {"event_id": "g4-pbp-006", "game_id": "2026-finals-g4", "sequence": 6, "provider_index": 5, "period": 4, "clock_seconds_remaining": 0.0, "event_type": "OTHER", "shooter": null, "assister": null, "shot_type": "NONE", "points": null, "home_score_after": 108, "away_score_after": 104, "wallclock_utc": "2026-06-12T03:19:00Z", "raw_text_hash": null}
+      ]
+    }
+  }
+}

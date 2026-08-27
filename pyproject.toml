@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nba-chat-agent"
+version = "0.1.0"
+description = "Evidence-first Chinese NBA chat agent"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "httpx>=0.27,<1",
+  "pydantic>=2.7,<3",
+  "uvicorn>=0.30,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3,<9",
+  "pytest-asyncio>=0.24,<1",
+  "ruff>=0.6,<1",
+]
+
+[project.scripts]
+nba-agent = "apps.api.src.main:run"
+nba-agent-eval = "apps.api.src.evaluation.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["apps*"]
+
+# The fixture-first runtime loads these immutable snapshots relative to the
+# provider/evaluation packages.  Include them in wheels as well as editable
+# installs so a clean environment behaves exactly like the repository checkout.
+[tool.setuptools.package-data]
+"apps.api.src.providers" = ["fixtures/*.json", "fixtures/espn/*.json"]
+"apps.api.src.evaluation" = ["*.jsonl"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+addopts = "-q"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+exclude = ["apps/web-demo"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+# Keep the explicit enum/error aliases: they are part of the domain wire
+# vocabulary and make cancellation/error boundaries readable on Python 3.12.
+ignore = ["UP041", "UP042"]

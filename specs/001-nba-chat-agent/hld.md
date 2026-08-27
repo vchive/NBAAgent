@@ -1,7 +1,7 @@
 # NBA Chat Agent — High-Level Design (HLD)
 
 **Feature**: [001-nba-chat-agent](spec.md)
-**Status**: Proposed
+**Status**: Fixture MVP implemented; final online delivery pending
 **Date**: 2026-08-26
 **Audience**: 面试评审、实现人员和部署维护人员
 **Revision**: v0.2 — 增加 Hermes-lite 运行时边界、部署剖面和安全/运维细节
@@ -36,6 +36,7 @@
 - 公开来源实时查询、字段归一化、事实核验、确定性聚合及友好证据状态。
 - 当前会话的多轮上下文（至少支持围绕一场比赛连续三轮追问）。
 - Web 聊天、普通 HTTP 与 SSE 流式两种入口。
+- 左栏赛事焦点/历史回顾日期投影；它只读取日期范围 scoreboard，不改变聊天上下文。
 
 ### Non-goals
 
@@ -69,10 +70,11 @@ flowchart LR
 ```mermaid
 flowchart TB
     subgraph Client[浏览器]
-      UI[Chat UI\n消息/卡片/表格/加载/错误]
+      UI[Static Web Demo\n聊天/赛事焦点/PBP/加载/错误]
     end
     subgraph Service[应用服务]
       API[Versioned Chat API\n同步 + SSE]
+      HIGHLIGHTS[Highlights API\n日期/空状态]
       ORCH[Chat Orchestrator]
       SAFE[Safety Guard\npre-retrieval]
       CTX[Conversation Manager]
@@ -95,6 +97,7 @@ flowchart TB
       HERMES[Hermes-lite sidecar\n无工具/无 Provider]
     end
     UI --> API --> ORCH
+    UI -. date projection .-> HIGHLIGHTS
     ORCH --> SAFE
     SAFE --> CTX --> INT --> ADM --> PLAN --> PG
     PG <--> CACHE
@@ -116,8 +119,9 @@ Hermes。
 
 | 组件 | 职责 | 明确不负责 |
 |---|---|---|
-| Web Chat UI | 输入、会话展示、增量文本、状态和错误呈现 | 事实判断、敏感策略、直接访问外网 |
+| Web Chat UI | 输入、会话展示、增量文本、赛事焦点日期切换、PBP 文字回放、状态和错误呈现 | 事实判断、敏感策略、直接访问外网 |
 | Chat API | 鉴权边界（如启用）、请求校验、同步/SSE 协议和版本 | 业务推理和供应商格式解析 |
+| Highlights API | 按请求时区投影日期赛事、拒绝未来日期、返回空集合 | 聊天意图、会话上下文和 PBP 事实推导 |
 | Safety Guard | 识别红线、生成 1–2 句拒答、在检索前短路 | 对敏感请求进行搜索或辩论 |
 | Conversation Manager | 会话隔离、活动实体、轮次和上下文压缩 | 跨会话共享用户内容 |
 | Intent/Time Parser | 题型、实体、槽位、赛季、日期和时区解析 | 代替事实数据源给答案 |
@@ -485,6 +489,7 @@ P50/P90/P95、超时/错误率、SSE 断开率、准入拒绝率和 fallback 率
 | FR-019–021 | Pre-retrieval Safety Guard、Refusal Templates | 安全红队测试、provider call=0 断言 |
 | FR-022–023 | Resilience、Observability、Session Store | 错误契约、超时/429/隔离测试 |
 | FR-024–026 | Evaluation Runner、报告和方案文档 | `contracts/evaluation.md`、黄金题回放 |
+| FR-027 | Highlights API、日期选择器、文字 PBP 投影 | `contracts/http-api.md`、日期/空状态 UI 验收 |
 | ARCH-HERMES-001 | Hermes-lite boundary/capability self-test | `SEC-HERMES-001`, `INT-HERMES-001` |
 | ARCH-CAPACITY-001 | Admission budget、bounded queue、backpressure | `CAP-ADMISSION-001`, `E2E-SSE-001` |
 | ARCH-FAILURE-001 | Failure/degradation matrix and cancellation | `CHAOS-UPSTREAM-001`, `INT-CANCEL-001` |

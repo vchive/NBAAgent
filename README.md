@@ -3,10 +3,51 @@
 面向中文球迷的 NBA Chat Agent 笔试题项目，按 GitHub SpecKit 的 SDD（Specification-
 Driven Development）流程推进。
 
-## 当前阶段：需求与方案设计
+## 当前阶段：fixture-first Agent 垂直切片（fixture MVP gate passed；final delivery gates pending）
 
-已完成需求规格、研究记录、HLD、LLD、数据模型、接口契约和验收指南；业务服务代码和
-部署链接将在下一阶段按任务清单实现，当前可先用 UI Demo 验证交互方案。
+已完成需求规格、研究记录、HLD、LLD、数据模型、接口契约和验收指南，并打通了默认
+fixture/mock 模式的 FastAPI Agent：同步聊天、POST SSE、会话隔离、事实核验、PBP/系列赛
+确定性推导、安全短路、重试/缓存和“赛事焦点/历史回顾”日期投影均可离线运行。fixture
+MVP gate 已通过本地可运行检查；最终交付 gates 仍待完成（详见“下一步”）。ESPN 与
+Hermes-lite 保留为可替换适配器，默认关闭，不需要任何凭据。
+
+启动 API：
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e '.[dev]'
+cp .env.example .env  # 可选；不要提交 .env
+uvicorn apps.api.src.main:app --reload --port 8000
+```
+
+探活和示例请求：
+
+```bash
+curl -fsS http://127.0.0.1:8000/healthz
+curl -fsS -X POST http://127.0.0.1:8000/api/v1/chat \
+  -H 'content-type: application/json' \
+  -d '{"message":"2025-26 总决赛 G4 谁得分最高？"}'
+curl -fsS 'http://127.0.0.1:8000/api/v1/highlights?date=2026-06-12&timezone=Asia/Shanghai'
+```
+
+运行测试：
+
+```bash
+python3 -m pytest -q
+```
+
+可选的容器启动：
+
+```bash
+docker compose up --build
+```
+
+评测 CLI：
+
+```bash
+python -m apps.api.src.evaluation.cli --repeat 3
+```
 
 ## UI 交互 Demo
 
@@ -46,5 +87,6 @@ SpecKit 项目治理原则位于 [.specify/memory/constitution.md](.specify/memo
 
 ## 下一步
 
-方案评审通过后运行 `$speckit-tasks` 生成依赖排序任务，再运行 `$speckit-implement` 开始
-实现。上线前必须完成 fixture 模式验收、公开 URL 探活、A–I 黄金题回放和方案 PDF 导出。
+后续按 [`specs/001-nba-chat-agent/tasks.md`](specs/001-nba-chat-agent/tasks.md) 继续补齐
+live provider、受限 Hermes sidecar、Playwright、公网部署验收和方案 PDF；fixture 模式始终
+是本地可复现的默认路径。

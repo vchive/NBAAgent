@@ -1,0 +1,190 @@
+/*
+ * COURTSIDE API transport.
+ *
+ * The visual demo remains useful without a running API, but when the FastAPI
+ * service is reachable this tiny client switches the same reducer to the
+ * real POST-SSE and highlights contracts.  It deliberately exposes no raw
+ * provider response or arbitrary URL fetching surface to the page.
+ */
+(function () {
+  "use strict";
+
+  function trimBase(value) {
+    return String(value || "").replace(/\/+$/, "");
+  }
+
+  function defaultBase() {
+    if (window.COURTSIDE_API_BASE) return trimBase(window.COURTSIDE_API_BASE);
+    // A same-origin API is convenient for a mounted deployment.  The local
+    // static demo is normally served on 4173 while uvicorn runs on 8000.
+    if (window.location.port === "8000") return window.location.origin;
+    if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
+      return "http://127.0.0.1:8000";
+    }
+    return "";
+  }
+
+  const baseUrl = defaultBase();
+
+  function endpoint(path) {
+    return `${baseUrl}${path}`;
+  }
+
+  async function withTimeout(ms, operation) {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), ms);
+    try {
+      return await operation(controller.signal);
+    } finally {
+      window.clearTimeout(timer);
+    }
+  }
+
+  async function probe() {
+    if (!baseUrl) return false;
+    try {
+      const response = await withTimeout(900, (signal) => fetch(endpoint("/healthz"), {
+        method: "GET",
+        headers: { Accept: "application/json" },
+        signal,
+        credentials: "omit",
+      }));
+      return response.ok;
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  class SSEParser {
+    constructor(onEvent) {
+      this.buffer = "";
+      this.event = "message";
+      this.data = [];
+      this.onEvent = onEvent;
+    }
+
+    feed(chunk) {
+      this.buffer += chunk;
+      const lines = this.buffer.split(/\r?\n/);
+      this.buffer = lines.pop() || "";
+      lines.forEach((line) => this.consume(line));
+    }
+
+    flush() {
+      if (this.buffer) this.consume(this.buffer);
+      this.buffer = "";
+      this.dispatch();
+    }
+
+    consume(line) {
+      if (line === "") {
+        this.dispatch();
+        return;
+      }
+      if (line.startsWith(":")) return;
+      const separator = line.indexOf(":");
+      const field = separator === -1 ? line : line.slice(0, separator);
+      const value = separator === -1 ? "" : line.slice(separator + 1).replace(/^ /, "");
+      if (field === "event") this.event = value || "message";
+      if (field === "data") this.data.push(value);
+    }
+
+    dispatch() {
+      if (!this.data.length) {
+        this.event = "message";
+        return;
+      }
+      const raw = this.data.join("\n");
+      this.onEvent(this.event, raw);
+      this.event = "message";
+      this.data = [];
+    }
+  }
+
+  async function streamChat({ message, sessionId, clientMessageId, onEvent, signal }) {
+    if (!baseUrl) throw new Error("API base is not configured");
+    const response = await fetch(endpoint("/api/v1/chat/stream"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+      body: JSON.stringify({
+        message,
+        session_id: sessionId || undefined,
+        client_message_id: clientMessageId || undefined,
+        client_timezone: "Asia/Shanghai",
+      }),
+      credentials: "omit",
+      signal,
+    });
+
+    const contentType = response.headers.get("content-type") || "";
+    if (!response.ok || !contentType.includes("text/event-stream")) {
+      let payload = null;
+      try {
+        payload = await response.json();
+      } catch (_error) {
+        // Keep the public error generic; the UI must not display raw response text.
+      }
+      const error = new Error(payload?.error?.message || "服务暂时不可用，请稍后重试。");
+      error.publicPayload = payload || {
+        status: "failed",
+        error: { code: "SERVICE_BUSY", retryable: true, message: error.message },
+      };
+      error.network = false;
+      throw error;
+    }
+
+    if (!response.body) throw new Error("流式响应不可用");
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    const parser = new SSEParser((eventName, raw) => {
+      let payload;
+      try {
+        payload = JSON.parse(raw);
+      } catch (_error) {
+        return;
+      }
+      onEvent(eventName, payload);
+    });
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      parser.feed(decoder.decode(chunk.value, { stream: true }));
+    }
+    parser.feed(decoder.decode());
+    parser.flush();
+  }
+
+  async function highlights(dateValue, timezone) {
+    if (!baseUrl) throw new Error("API base is not configured");
+    const query = new URLSearchParams({ timezone: timezone || "Asia/Shanghai" });
+    if (dateValue) query.set("date", dateValue);
+    let response;
+    try {
+      response = await fetch(endpoint(`/api/v1/highlights?${query.toString()}`), {
+        method: "GET",
+        headers: { Accept: "application/json" },
+        credentials: "omit",
+      });
+    } catch (cause) {
+      const error = new Error("日期赛事连接暂时不可用。", { cause });
+      error.network = true;
+      throw error;
+    }
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      const error = new Error(payload?.error?.message || "日期赛事暂时不可用。");
+      error.publicPayload = payload;
+      error.network = false;
+      throw error;
+    }
+    return payload;
+  }
+
+  window.CourtsideApi = {
+    baseUrl,
+    probe,
+    streamChat,
+    highlights,
+    SSEParser,
+  };
+})();

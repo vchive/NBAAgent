@@ -323,6 +323,65 @@ p {
   box-shadow: 0 0 0 3px rgba(255, 108, 126, 0.12), 0 0 14px rgba(255, 108, 126, 0.45);
 }
 
+.highlight-switcher {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: -10px;
+  padding: 3px;
+  border: 1px solid rgba(132, 164, 198, 0.16);
+  border-radius: 999px;
+  background: rgba(7, 17, 31, 0.52);
+}
+
+.highlight-mode {
+  border: 0;
+  border-radius: 999px;
+  padding: 7px 10px;
+  color: var(--ink-500);
+  background: transparent;
+  font: 600 10px/1 var(--font-mono);
+  cursor: pointer;
+  transition: color 160ms ease, background 160ms ease;
+}
+
+.highlight-mode:hover,
+.highlight-mode.active {
+  color: var(--ink-100);
+  background: rgba(85, 213, 230, 0.14);
+}
+
+.highlight-date-label {
+  margin-left: auto;
+  color: var(--ink-500);
+  font: 600 9px/1 var(--font-mono);
+}
+
+.highlight-date {
+  max-width: 118px;
+  padding: 6px 7px;
+  color: var(--ink-200);
+  border: 1px solid rgba(132, 164, 198, 0.2);
+  border-radius: 7px;
+  background: rgba(15, 31, 53, 0.9);
+  font: 600 10px/1 var(--font-mono);
+}
+
+.highlight-date[hidden] {
+  display: none;
+}
+
+.highlights-empty {
+  padding: 19px 15px;
+  color: var(--ink-500);
+  border: 1px dashed rgba(132, 164, 198, 0.24);
+  border-radius: var(--radius-md);
+  background: rgba(11, 24, 41, 0.45);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .featured-game {
   width: 100%;
   display: grid;
@@ -418,6 +477,11 @@ p {
 .token-okc {
   background: linear-gradient(145deg, #ef8e54, #a94b46);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.24), 0 5px 18px rgba(239, 142, 84, 0.18);
+}
+
+.token-neutral {
+  background: linear-gradient(145deg, #6e8298, #3d5065);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
 }
 
 .game-foot {

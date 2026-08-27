@@ -1,0 +1,54 @@
+{
+  "version": "fixture.v1",
+  "series": [
+    {
+      "series_id": "2026-finals-bos-okc",
+      "season": "2025-26",
+      "stage": "FINALS",
+      "home": {"kind": "TEAM", "canonical_id": "bos", "display_name": "凯尔特人", "aliases": ["BOS"], "confidence": 1.0},
+      "away": {"kind": "TEAM", "canonical_id": "okc", "display_name": "雷霆", "aliases": ["OKC"], "confidence": 1.0},
+      "game_ids": ["2026-finals-g1", "2026-finals-g2", "2026-finals-g3", "2026-finals-g4"]
+    }
+  ],
+  "edge_cases": {
+    "sequence_valid": {
+      "game_id": "edge-sequence-valid",
+      "events": [
+        {"event_id": "valid-1", "sequence": 1, "provider_index": 0, "period": 4, "clock_seconds_remaining": 2.0, "event_type": "SHOT", "shot_type": "THREE_POINT", "points": 3},
+        {"event_id": "valid-2", "sequence": 2, "provider_index": 1, "period": 4, "clock_seconds_remaining": 0.0, "event_type": "OTHER", "shot_type": "NONE", "points": null}
+      ],
+      "sequence_valid": true
+    },
+    "sequence_missing": {
+      "game_id": "edge-sequence-missing",
+      "events": [
+        {"event_id": "missing-1", "sequence": null, "provider_index": 0, "period": 4, "clock_seconds_remaining": 2.0, "event_type": "SHOT", "shot_type": "TWO_POINT", "points": 2},
+        {"event_id": "missing-2", "sequence": 2, "provider_index": 1, "period": 4, "clock_seconds_remaining": 0.0, "event_type": "OTHER", "shot_type": "NONE", "points": null}
+      ],
+      "sequence_valid": false
+    },
+    "overtime": {
+      "game_id": "edge-overtime",
+      "events": [
+        {"event_id": "ot-1", "sequence": 10, "provider_index": 0, "period": 5, "clock_seconds_remaining": 1.5, "event_type": "SHOT", "shot_type": "TWO_POINT", "points": 2},
+        {"event_id": "ot-2", "sequence": 11, "provider_index": 1, "period": 5, "clock_seconds_remaining": 0.0, "event_type": "OTHER", "shot_type": "NONE", "points": null}
+      ],
+      "sequence_valid": true
+    },
+    "duplicate": {
+      "game_id": "edge-duplicate",
+      "events": [
+        {"event_id": "dup-1", "sequence": 1, "provider_index": 0, "period": 4, "clock_seconds_remaining": 3.0, "event_type": "SHOT", "shot_type": "TWO_POINT", "points": 2},
+        {"event_id": "dup-2", "sequence": 1, "provider_index": 1, "period": 4, "clock_seconds_remaining": 2.0, "event_type": "SHOT", "shot_type": "THREE_POINT", "points": 3}
+      ],
+      "sequence_valid": false
+    },
+    "null_fields": {
+      "game_id": "edge-null-fields",
+      "events": [
+        {"event_id": "null-1", "sequence": 1, "provider_index": 0, "period": 4, "clock_seconds_remaining": 1.0, "event_type": "SHOT", "shot_type": "UNKNOWN", "points": null, "shooter": null, "assister": null, "home_score_after": null, "away_score_after": null}
+      ],
+      "sequence_valid": true
+    }
+  }
+}

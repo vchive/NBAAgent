@@ -1,0 +1,33 @@
+services:
+  nba-agent:
+    build:
+      context: .
+    image: nba-agent:fixture
+    environment:
+      APP_ENV: local
+      PUBLIC_DATA_MODE: fixture
+      LLM_MODE: mock
+      RUNTIME_PROFILE: template
+      HERMES_LITE_MODE: off
+      ALLOWED_ORIGINS: http://localhost:4173,http://127.0.0.1:4173,http://localhost:54572,http://127.0.0.1:54572
+    ports:
+      - "8000:8000"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)
+      interval: 30s
+      timeout: 3s
+      start_period: 8s
+      retries: 3

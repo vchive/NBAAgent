@@ -2,10 +2,28 @@
 
 **对应需求**：[spec.md](../specs/001-nba-chat-agent/spec.md)
 **详细设计**：[HLD](../specs/001-nba-chat-agent/hld.md) · [LLD](../specs/001-nba-chat-agent/lld.md)
-**状态**：需求与方案设计阶段；UI 交互原型已提供（业务服务尚未实现）
+**状态**：fixture MVP gate 已通过；fixture-first Agent 垂直切片、API、离线/在线自适应 UI
+Demo、契约与单元测试均可在本地运行。最终交付 gates 仍待完成，包括 Playwright、正式
+公网部署和方案 PDF；本地 Docker/Compose profile 已提供。
 
-可运行的赛事转播风格 UI 原型位于 [`apps/web-demo`](../apps/web-demo/)，用于先确认聊天、
-状态反馈和 PBP 事件回放的交互，不代表真实 Provider 或在线数据已经接入。
+可运行的赛事转播风格 UI 位于 [`apps/web-demo`](../apps/web-demo/)。页面启动时会探测
+FastAPI：服务可用时消费真实 POST-SSE 和 highlights 接口；服务不可用时自动回退到内置
+fixture，因此交互演示不依赖外网或凭据。当前回放是文字 PBP 定位，不是视频播放。
+
+本地最小启动方式：
+
+```bash
+cp .env.example .env  # 4173 Web Demo 跨源调用 API 时启用本地 CORS；不要提交 .env
+set -a; . ./.env; set +a  # Settings 读取进程环境变量，不会自动解析 .env 文件
+python3 -m pip install -e '.[dev]'
+uvicorn apps.api.src.main:app --reload --port 8000
+# 另开终端
+python3 -m http.server 4173 --directory apps/web-demo
+```
+
+浏览器访问 `http://127.0.0.1:4173`。默认 API 使用 fixture/mock/template；将
+`PUBLIC_DATA_MODE` 改为 `live` 或 `hybrid` 可启用 allow-list ESPN 适配器（详见
+[quickstart](../specs/001-nba-chat-agent/quickstart.md)）。
 
 ## 1. 目标与边界
 
@@ -92,12 +110,29 @@ Safety Guard 在任何外部检索前运行；一条消息同时包含正常篮�
 计数为 0。每题按 PDF 的七个维度记录档位、可配置数值、TTFT、完整时延、证据状态和安全
 否决；题意理解、事实准确或安全不合格时该题为 0 分。
 
-本阶段提交需求规格、研究记录、HLD、LLD、统一数据模型、HTTP/SSE/Provider/评测契约和
-本地验收指南。实现阶段再生成任务清单、代码、fixture、公开部署链接，并将本说明导出为
-PDF 作为最终提交物。
+当前仓库已经提交需求规格、研究记录、HLD、LLD、统一数据模型、HTTP/SSE/Provider/评测
+契约、本地验收指南，以及一条可运行的 fixture-first 垂直切片：
+
+- FastAPI 同步聊天、POST SSE、健康检查和日期范围 highlights 接口；
+- 中文意图/实体/赛季解析、事实核验、系列赛与最后 5 秒 PBP 确定性推导；
+- 会话隔离、幂等重放、取消传播、TTL 缓存、重试/fallback、检索前安全短路和脱敏 telemetry；
+- 受限 Hermes-lite runtime seam（默认关闭）与模板回退；
+- 赛事转播风格静态 UI，支持“今日赛事 / 历史回顾”日期切换，并在 API 不可用时离线演示。
+
+仍待完成的交付项包括：补齐更完整的集成/E2E 覆盖、正式公网探活、正式 Hermes sidecar
+接入，以及将本说明导出为 `solution.pdf`。本地 Docker/ASGI profile 已提供，当前黄金集
+也已达到至少十条客观题的目标；这些后续项目不会改变
+当前 fixture 模式的可复现路径。
 
 ## 7. 设计取舍与未决项
 
 PDF 没有规定语言、模型、数据供应商、数据库、部署平台、并发量或具体时延阈值；Python
-API + React Web、ESPN-first、单 API 副本和 90% 查询 5 秒内的目标均是可替换的工程决策，
-不是题目硬性承诺。上线前必须重新核查公开数据源的条款、robots、访问频率和稳定性。
+API + 零依赖静态 Web Demo（后续可替换为 React/Next.js）、ESPN-first、单 API 副本和 90%
+查询 5 秒内的目标均是可替换的工程决策，不是题目硬性承诺。上线前必须重新核查公开数据
+源的条款、robots、访问频率和稳定性。
+
+“今日看点”与“历史回顾”是左侧 scoreboard/highlights 的日期投影，不会占用聊天的
+`HISTORY` 意图：用户可以选择过去日期，未来日期返回可理解的 400，空日期显示明确空状态。
+API 模式按服务端时钟计算“今天”；为保持离线 Demo 可复现，fixture 展示固定的
+`2026-06-12` 样例，真实当天没有记录时会显示空状态。当前没有获得授权的直播源或视频切片，故 v1 只展示文字 PBP；未来在确认版权、来源和嵌入
+策略后，可在同一投影旁增加可选媒体卡片，不让第三方 URL 进入聊天或任意抓取面。

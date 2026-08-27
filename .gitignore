@@ -6,4 +6,7 @@ venv/
 .DS_Store
 dist/
 build/
+*.egg-info/
+coverage/
+.pytest_cache/
 *.log

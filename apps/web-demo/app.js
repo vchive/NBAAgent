@@ -12,8 +12,24 @@
 
   const el = {
     time: $("#beijing-time"),
+    modeLabel: $("#mode-label"),
+    onlineLabel: $("#online-label"),
+    onlineLabelText: $("#online-label-text"),
+    dayDivider: $("#day-divider"),
     newSession: $("#new-session"),
     featuredGame: $("#featured-game"),
+    featuredGameMeta: $("#featured-game-meta"),
+    featuredGameState: $("#featured-game-state"),
+    featuredHomeToken: $("#featured-home-token"),
+    featuredHomeName: $("#featured-home-name"),
+    featuredAwayToken: $("#featured-away-token"),
+    featuredAwayName: $("#featured-away-name"),
+    featuredGameFoot: $("#featured-game-foot"),
+    highlightsTitle: $("#highlights-title"),
+    highlightModes: $$("[data-highlight-mode]"),
+    highlightDateLabel: $("#highlight-date-label"),
+    highlightDate: $("#highlight-date"),
+    highlightsEmpty: $("#highlights-empty"),
     promptList: $("#prompt-list"),
     chatLog: $("#chat-log"),
     chatForm: $("#chat-form"),
@@ -37,6 +53,16 @@
     awayScore: $("#away-score"),
     homeScore: $("#home-score"),
     scoreClock: $("#score-clock"),
+    hudEyebrow: $("#hud-eyebrow"),
+    hudStatus: $("#hud-status"),
+    hudAwayToken: $("#hud-away-token"),
+    hudAwayName: $("#hud-away-name"),
+    hudAwayRecord: $("#hud-away-record"),
+    hudHomeToken: $("#hud-home-token"),
+    hudHomeName: $("#hud-home-name"),
+    hudHomeRecord: $("#hud-home-record"),
+    hudPossession: $("#hud-possession"),
+    hudPace: $("#hud-pace"),
     toast: $("#toast"),
   };
 
@@ -85,12 +111,77 @@
     lastRequest: null,
     contextRequest: null,
     retryCount: 0,
+    highlightMode: "today",
+    highlightDate: "2026-06-12",
+    activeGame: null,
+    activePbp: PBP,
+    apiAvailable: false,
+    apiProbeComplete: false,
+    highlightRequest: 0,
   };
+
+  // The static demo keeps one deterministic featured game offline.  The same
+  // shape is returned by GET /api/v1/highlights in the API implementation, so
+  // this projection can switch transports without changing the interaction.
+  const HIGHLIGHT_FIXTURES = {
+    "2026-06-12": {
+      game_id: "2026-finals-g4",
+      date: "2026-06-12",
+      home_name: "凯尔特人",
+      home_abbreviation: "BOS",
+      away_name: "雷霆",
+      away_abbreviation: "OKC",
+      home_score: 108,
+      away_score: 104,
+      series_game_number: 4,
+      status: "final",
+      quarter_scores: { Q1: "27–24", Q2: "25–31", Q3: "28–31", Q4: "24–22" },
+      pace: "98.4",
+    },
+  };
+
+  // Only the local G4 snapshot currently has a text replay.  API highlights
+  // can contain other games; those cards still update the scoreboard, while
+  // the replay deliberately enters a truthful "暂无逐回合记录" state instead
+  // of showing G4 events for the wrong game.
+  const PBP_BY_GAME = {
+    "2026-finals-g4": PBP,
+  };
+
+  const KNOWN_TOKEN_CLASSES = ["token-bos", "token-okc", "token-neutral"];
+
+  function formatShortDate(value) {
+    return String(value || "").replaceAll("-", "/");
+  }
+
+  function tokenClass(abbreviation) {
+    const key = String(abbreviation || "").trim().toLowerCase();
+    return ["bos", "okc"].includes(key) ? `token-${key}` : "token-neutral";
+  }
+
+  function setTeamToken(node, abbreviation) {
+    if (!node) return;
+    node.classList.remove(...KNOWN_TOKEN_CLASSES);
+    node.classList.add(tokenClass(abbreviation));
+    node.textContent = abbreviation || "—";
+  }
+
+  function statusLabel(status) {
+    return {
+      final: "FINAL",
+      live: "LIVE",
+      scheduled: "SCHEDULED",
+      postponed: "POSTPONED",
+    }[String(status || "").toLowerCase()] || "UNKNOWN";
+  }
 
   function loadSessionId() {
     try {
       const existing = window.sessionStorage.getItem(STORAGE_KEY);
-      if (existing) return existing;
+      // The API contract requires a UUID session id. Older demo builds used
+      // a human-readable fallback (for example session-...); discard those
+      // values instead of sending an invalid id after a browser upgrade.
+      if (existing && isUuid(existing)) return existing;
     } catch (_error) {
       // Private browsing can disable storage; an in-memory id is sufficient.
     }
@@ -107,9 +198,19 @@
     if (window.crypto && typeof window.crypto.randomUUID === "function") {
       return window.crypto.randomUUID();
     }
-    return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    // session_id is sent to FastAPI as a UUID. Keep the fallback RFC-4122
+    // shaped even in older/insecure browsers where randomUUID is unavailable;
+    // the prefix is intentionally ignored for wire compatibility.
+    const bytes = Array.from({ length: 16 }, () => Math.floor(Math.random() * 256));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = bytes.map((value) => value.toString(16).padStart(2, "0")).join("");
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
   }
 
+  function isUuid(value) {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ""));
+  }
   function updateClock() {
     if (!el.time) return;
     const value = new Intl.DateTimeFormat("zh-CN", {
@@ -146,6 +247,26 @@
     if (!el.connectionState) return;
     el.connectionState.dataset.state = status;
     el.connectionLabel.textContent = label;
+  }
+
+  function setTransportLabel(available) {
+    const live = Boolean(available);
+    if (el.modeLabel) {
+      el.modeLabel.textContent = live ? "LIVE API" : "FIXTURE MODE";
+      el.modeLabel.parentElement?.setAttribute(
+        "title",
+        live ? "已连接 NBA Agent API" : "当前为本地 fixture 演示数据",
+      );
+    }
+    if (el.onlineLabel) {
+      if (el.onlineLabelText) {
+        el.onlineLabelText.textContent = live ? "API READY" : "OFFLINE DEMO";
+      }
+      el.onlineLabel.parentElement?.setAttribute(
+        "title",
+        live ? "已连接本地 NBA Agent API" : "当前使用内置 fixture 演示数据",
+      );
+    }
   }
 
   function setComposerBusy(busy) {
@@ -248,6 +369,17 @@
       minute: "2-digit",
       hour12: false,
     }).format(new Date());
+  }
+
+  function beijingDateString(date = new Date()) {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Shanghai",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(date);
+    const values = Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+    return `${values.year}-${values.month}-${values.day}`;
   }
 
   function createTextWithBold(text) {
@@ -533,6 +665,7 @@
   function cancelRun(showMessage = true) {
     const run = state.run;
     if (!run) return;
+    if (run.abortController) run.abortController.abort();
     run.timers.forEach((timer) => window.clearTimeout(timer));
     if (showMessage && run.placeholder) {
       run.placeholder.bubble.classList.remove("streaming-bubble");
@@ -788,6 +921,79 @@
     schedule(run, () => handleStreamEvent("message.completed", response), 1380 + chunks.length * 45);
   }
 
+  function startApiRun(message, options = {}) {
+    if (state.streaming || !window.CourtsideApi) return false;
+    const clientMessageId = options.clientMessageId || makeId("client");
+    if (!options.reuseUser) appendUserMessage(message);
+    const placeholder = createAssistantPlaceholder();
+    const controller = new AbortController();
+    const run = {
+      message,
+      clientMessageId,
+      requestId: null,
+      placeholder,
+      partialText: "",
+      timers: [],
+      started: false,
+      branch: null,
+      live: true,
+      abortController: controller,
+    };
+    state.run = run;
+    setComposerBusy(true);
+    setStreamStatus(true, "正在准备");
+    setConnection("working", "连接中");
+
+    window.CourtsideApi.streamChat({
+      message,
+      sessionId: state.sessionId,
+      clientMessageId,
+      signal: controller.signal,
+      onEvent: (eventName, payload) => handleStreamEvent(eventName, payload),
+    }).then(() => {
+      // A healthy server always emits a terminal event.  If a proxy closes the
+      // stream early, surface a retryable error instead of leaving the input
+      // locked in a perpetual loading state.
+      if (state.run === run) {
+        finishRun({
+          request_id: run.requestId || makeId("request"),
+          session_id: state.sessionId,
+          status: "failed",
+          error: { code: "UPSTREAM_TIMEOUT", retryable: true, message: "数据连接暂时中断，请稍后重试。" },
+        });
+      }
+    }).catch((error) => {
+      if (controller.signal.aborted || state.run !== run) return;
+      // Auto-fallback is intentionally limited to transport failures.  A
+      // valid API error must remain visible so the user can retry it.
+      if (error?.network !== false) {
+        state.run = null;
+        placeholder.article.remove();
+        setComposerBusy(false);
+        setStreamStatus(false);
+        setConnection("ready", "离线演示");
+        showToast("API 暂不可用，已切换到离线演示");
+        startDemoRun(message, { reuseUser: true, clientMessageId });
+        return;
+      }
+      finishRun(error.publicPayload || {
+        request_id: run.requestId || makeId("request"),
+        session_id: state.sessionId,
+        status: "failed",
+        error: { code: "SERVICE_BUSY", retryable: true, message: error.message || "服务暂时不可用，请稍后重试。" },
+      });
+    });
+    return true;
+  }
+
+  function startRequest(message, options = {}) {
+    if (!options.forceDemo && state.apiAvailable && window.CourtsideApi) {
+      return startApiRun(message, options);
+    }
+    startDemoRun(message, options);
+    return true;
+  }
+
   function chunkText(text, size) {
     const chunks = [];
     for (let index = 0; index < text.length; index += size) chunks.push(text.slice(index, index + size));
@@ -805,7 +1011,7 @@
     el.input.value = "";
     updateCharCount();
     autoGrowInput();
-    startDemoRun(message);
+    startRequest(message);
   }
 
   function retryLastRequest() {
@@ -815,7 +1021,7 @@
     if (lastAssistant) lastAssistant.remove();
     state.retryCount += 1;
     showToast("正在使用同一请求重试");
-    startDemoRun(state.lastRequest.message, {
+    startRequest(state.lastRequest.message, {
       reuseUser: true,
       clientMessageId: state.lastRequest.clientMessageId,
       // Let the offline demo demonstrate a successful recovery while still
@@ -843,9 +1049,215 @@
     el.input.focus();
   }
 
+  function resetHud() {
+    setTeamToken(el.hudAwayToken, "—");
+    setTeamToken(el.hudHomeToken, "—");
+    if (el.hudAwayName) el.hudAwayName.textContent = "暂无比赛";
+    if (el.hudHomeName) el.hudHomeName.textContent = "暂无比赛";
+    if (el.hudAwayRecord) el.hudAwayRecord.textContent = "客场";
+    if (el.hudHomeRecord) el.hudHomeRecord.textContent = "主场";
+    if (el.hudEyebrow) el.hudEyebrow.textContent = "GAME HUD / NO GAME SELECTED";
+    if (el.hudStatus) el.hudStatus.textContent = "NO DATA";
+    if (el.awayScore) el.awayScore.textContent = "—";
+    if (el.homeScore) el.homeScore.textContent = "—";
+    if (el.scoreClock) el.scoreClock.textContent = "—";
+    if (el.hudPossession) el.hudPossession.textContent = "最后控球：—";
+    if (el.hudPace) el.hudPace.textContent = "节奏 —";
+    el.quarterCells.forEach((cell) => {
+      const score = $("[data-quarter-score]", cell);
+      if (score) score.textContent = "—";
+    });
+  }
+
+  function applyGameToHud(game) {
+    const gameNumber = game.series_game_number ? `G${game.series_game_number}` : "GAME";
+    const pbp = PBP_BY_GAME[game.game_id] || null;
+    const fixture = Object.values(HIGHLIGHT_FIXTURES).find((item) => item.game_id === game.game_id);
+    const quarterScores = game.quarter_scores || fixture?.quarter_scores || {};
+    setTeamToken(el.hudAwayToken, game.away_abbreviation || "AWAY");
+    setTeamToken(el.hudHomeToken, game.home_abbreviation || "HOME");
+    if (el.hudAwayName) el.hudAwayName.textContent = game.away_name || "客队";
+    if (el.hudHomeName) el.hudHomeName.textContent = game.home_name || "主队";
+    if (el.hudAwayRecord) el.hudAwayRecord.textContent = "客场";
+    if (el.hudHomeRecord) el.hudHomeRecord.textContent = "主场";
+    if (el.hudEyebrow) el.hudEyebrow.textContent = `GAME HUD / ${gameNumber}`;
+    if (el.hudStatus) el.hudStatus.textContent = statusLabel(game.status);
+    if (el.awayScore) el.awayScore.textContent = game.away_score == null ? "—" : String(game.away_score);
+    if (el.homeScore) el.homeScore.textContent = game.home_score == null ? "—" : String(game.home_score);
+    if (el.scoreClock) el.scoreClock.textContent = statusLabel(game.status) === "FINAL" ? "00:00 · FINAL" : statusLabel(game.status);
+    if (el.hudPossession) el.hudPossession.textContent = "最后控球：—";
+    const pace = game.pace ?? fixture?.pace;
+    if (el.hudPace) el.hudPace.textContent = pace == null ? "节奏 —" : `节奏 ${pace}`;
+    if (pbp) {
+      const allEvents = Object.values(pbp).flat();
+      const last = allEvents[allEvents.length - 1];
+      if (last) {
+        if (el.hudPossession) el.hudPossession.textContent = `最后控球：${last.team}`;
+      }
+    }
+    el.quarterCells.forEach((cell) => {
+      const period = cell.dataset.quarter;
+      const score = $("[data-quarter-score]", cell);
+      if (!score) return;
+      score.textContent = quarterScores[period] || "—";
+    });
+  }
+
+  function renderHighlightProjection(games, mode, dateValue) {
+    const game = games && games[0];
+    state.highlightMode = mode;
+    state.highlightDate = dateValue;
+    el.highlightModes.forEach((button) => {
+      const active = button.dataset.highlightMode === mode;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+    const safeDate = dateValue || state.highlightDate || "";
+    if (el.highlightDate) {
+      el.highlightDate.value = safeDate;
+      el.highlightDate.hidden = mode !== "history";
+    }
+    if (el.highlightDateLabel) {
+      el.highlightDateLabel.hidden = mode !== "history";
+    }
+    if (el.highlightsTitle) {
+      el.highlightsTitle.textContent = mode === "history" ? `历史回顾 · ${formatShortDate(safeDate)}` : "今日看点";
+    }
+    if (el.dayDivider) {
+      const dividerText = mode === "history"
+        ? `历史回顾 · ${formatShortDate(safeDate)}`
+        : (state.apiAvailable ? `今天 · ${formatShortDate(safeDate)}` : `演示日期 · ${formatShortDate(safeDate)}`);
+      const label = $("span", el.dayDivider);
+      if (label) label.textContent = dividerText;
+    }
+    if (!game) {
+      state.activeGame = null;
+      state.activePbp = null;
+      el.featuredGame.hidden = true;
+      if (el.highlightsEmpty) {
+        // Reset a transient validation message before rendering a normal
+        // empty-date response.
+        el.highlightsEmpty.textContent = "这一天暂无可用比赛记录。";
+        el.highlightsEmpty.hidden = false;
+      }
+      resetHud();
+      renderPbp("Q4");
+      return;
+    }
+    state.activeGame = game;
+    state.activePbp = PBP_BY_GAME[game.game_id] || null;
+    el.featuredGame.hidden = false;
+    if (el.highlightsEmpty) el.highlightsEmpty.hidden = true;
+    el.featuredGame.setAttribute("aria-label", `查看${game.home_name}与${game.away_name}的比赛回放`);
+    setTeamToken(el.featuredHomeToken, game.home_abbreviation || "HOME");
+    setTeamToken(el.featuredAwayToken, game.away_abbreviation || "AWAY");
+    if (el.featuredHomeName) el.featuredHomeName.textContent = game.home_name || "主队";
+    if (el.featuredAwayName) el.featuredAwayName.textContent = game.away_name || "客队";
+    if (el.featuredGameMeta) {
+      const gameNumber = game.series_game_number ? `G${game.series_game_number}` : "GAME";
+      el.featuredGameMeta.textContent = `NBA · ${gameNumber} · ${String(game.game_id || "").toUpperCase()}`;
+    }
+    if (el.featuredGameState) el.featuredGameState.textContent = statusLabel(game.status);
+    const scores = $$(".mini-scoreboard > strong", el.featuredGame);
+    if (scores[0]) scores[0].textContent = game.home_score == null ? "—" : String(game.home_score);
+    if (scores[1]) scores[1].textContent = game.away_score == null ? "—" : String(game.away_score);
+    if (el.featuredGameFoot) {
+      el.featuredGameFoot.textContent = `${formatShortDate(safeDate)} · ${mode === "history" ? "历史回顾" : "今日赛事"}`;
+    }
+    applyGameToHud(game);
+    renderPbp("Q4");
+  }
+
+  async function loadHighlights(mode, selectedDate) {
+    const requestNumber = ++state.highlightRequest;
+    const fallbackDate = selectedDate || "2026-06-12";
+    // Record the requested mode synchronously so an API probe finishing later
+    // cannot overwrite a user's in-flight history selection.
+    state.highlightMode = mode;
+    if (mode === "history" && selectedDate) state.highlightDate = selectedDate;
+    if (state.apiAvailable && window.CourtsideApi) {
+      try {
+        const payload = await window.CourtsideApi.highlights(
+          mode === "today" ? null : selectedDate,
+          "Asia/Shanghai",
+        );
+        if (requestNumber !== state.highlightRequest) return;
+        const dateValue = payload?.date || selectedDate || beijingDateString();
+        renderHighlightProjection(payload?.games || [], mode, dateValue);
+        if (!payload?.games?.length && mode === "history") showToast("该日期暂无比赛记录");
+        return;
+      } catch (error) {
+        if (requestNumber !== state.highlightRequest) return;
+        const publicError = error?.publicPayload?.error;
+        // A reachable API error is authoritative: clear stale cards and show
+        // the server's safe message.  Only a transport failure may fall back
+        // to the local fixture, and that state is labelled explicitly.
+        if (error?.network === false) {
+          // A future-date rejection must not leave the previously selected
+          // game's card visible as if it belonged to the rejected/failed date.
+          const message = publicError?.message || "日期赛事暂时不可用。";
+          clearHighlightProjection(message);
+          showToast(message);
+          if (mode === "history" && el.highlightDate) {
+            el.highlightDate.value = state.highlightDate;
+          }
+          return;
+        }
+        setTransportLabel(false);
+        state.apiAvailable = false;
+      }
+    }
+    const fixture = HIGHLIGHT_FIXTURES[fallbackDate];
+    renderHighlightProjection(fixture ? [fixture] : [], mode, fallbackDate);
+    if (!fixture && mode === "history") showToast("该日期暂无比赛记录");
+    if (state.apiProbeComplete && !state.apiAvailable) {
+      setConnection("ready", "离线演示");
+    }
+  }
+
+  function setHighlightsMode(mode) {
+    const selectedDate = mode === "today"
+      ? (state.apiAvailable ? beijingDateString() : "2026-06-12")
+      : (el.highlightDate?.value || state.highlightDate || "2026-06-12");
+    loadHighlights(mode, selectedDate);
+  }
+
+  function selectHighlightDate(value) {
+    if (!value) return;
+    const today = beijingDateString();
+    if (value > today) {
+      // Keep the prior date selected for a predictable retry, but clear the
+      // stale game card immediately and expose a persistent in-rail error.
+      // Invalidate any older, still-pending highlights request so its response
+      // cannot put the stale card back after this validation failure.
+      state.highlightRequest += 1;
+      clearHighlightProjection("未来日期不可查询。");
+      showToast("不能选择未来日期");
+      if (el.highlightDate) el.highlightDate.value = state.highlightDate;
+      return;
+    }
+    loadHighlights("history", value);
+  }
+
+  function clearHighlightProjection(message = "这一天暂无可用比赛记录。") {
+    state.activeGame = null;
+    state.activePbp = null;
+    if (el.featuredGame) el.featuredGame.hidden = true;
+    if (el.highlightsEmpty) {
+      el.highlightsEmpty.textContent = message;
+      el.highlightsEmpty.hidden = false;
+    }
+    resetHud();
+    renderPbp("Q4");
+  }
+
+  function currentPbp() {
+    return state.activePbp || {};
+  }
+
   function renderPbp(period, preserveIndex = false) {
     state.currentPeriod = period;
-    const events = PBP[period] || [];
+    const events = currentPbp()[period] || [];
     const requested = preserveIndex ? state.pbpIndex : events.length - 1;
     state.pbpIndex = Math.max(0, Math.min(requested, Math.max(events.length - 1, 0)));
     el.pbpList.textContent = "";
@@ -862,7 +1274,9 @@
       empty.className = "pbp-empty";
       empty.setAttribute("role", "listitem");
       empty.setAttribute("aria-live", "polite");
-      empty.textContent = period === "OT" ? "本场没有加时回合，终场在第四节结束时确定。" : "暂无逐回合记录。";
+      empty.textContent = !state.activeGame
+        ? "暂无选中的比赛，先从左侧选择一场赛事。"
+        : (period === "OT" ? "本场没有加时回合，终场在第四节结束时确定。" : "该场暂无可用的逐回合记录。");
       el.pbpList.append(empty);
       el.periodTabs.forEach((tab) => {
         const active = tab.dataset.period === period;
@@ -872,9 +1286,12 @@
       updateQuarterHighlight(period);
       el.replayPosition.textContent = "00 / 00";
       el.selectedPlayText.textContent = empty.textContent;
-      el.awayScore.textContent = "104";
-      el.homeScore.textContent = "108";
-      el.scoreClock.textContent = "00:00 · FINAL";
+      const game = state.activeGame;
+      el.awayScore.textContent = game?.away_score == null ? "—" : String(game.away_score);
+      el.homeScore.textContent = game?.home_score == null ? "—" : String(game.home_score);
+      el.scoreClock.textContent = game
+        ? (statusLabel(game.status) === "FINAL" ? "00:00 · FINAL" : statusLabel(game.status))
+        : "—";
       return;
     }
 
@@ -882,6 +1299,7 @@
       const item = document.createElement("button");
       item.type = "button";
       item.className = "pbp-event";
+      item.setAttribute("role", "listitem");
       item.dataset.index = String(index);
       item.setAttribute("aria-label", `${event.clock} ${event.player} ${event.action}`);
 
@@ -923,7 +1341,7 @@
   }
 
   function selectPbp(index, shouldScroll = false) {
-    const events = PBP[state.currentPeriod] || [];
+    const events = currentPbp()[state.currentPeriod] || [];
     if (!events.length) return;
     state.pbpIndex = Math.max(0, Math.min(Number(index) || 0, events.length - 1));
     const event = events[state.pbpIndex];
@@ -958,9 +1376,13 @@
       stopReplay();
       return;
     }
-    const events = PBP[state.currentPeriod] || [];
+    const events = currentPbp()[state.currentPeriod] || [];
     if (!events.length) {
-      showToast("本场暂无加时回合");
+      showToast(!state.activeGame
+        ? "请先选择一场比赛"
+        : state.currentPeriod === "OT"
+          ? "本场暂无加时回合"
+          : "该场暂无可用的逐回合记录");
       return;
     }
     if (state.pbpIndex >= events.length - 1) selectPbp(0, true);
@@ -1023,6 +1445,27 @@
     };
   }
 
+  async function detectApi() {
+    if (!window.CourtsideApi) return;
+    const available = await window.CourtsideApi.probe();
+    state.apiAvailable = available;
+    state.apiProbeComplete = true;
+    setTransportLabel(available);
+    if (available) {
+      setConnection("ready", "API 就绪");
+      // Replace the offline preview with the server's real local-day
+      // projection as soon as the probe succeeds.  The fixture remains visible
+      // while the probe is pending, but a connected “今日赛事” rail must not
+      // silently show an old demo date.
+      // The probe is asynchronous; do not reset a history view selected while
+      // it was in flight.  ``loadHighlights`` records mode synchronously for
+      // the same race window.
+      if (state.highlightMode === "today") {
+        loadHighlights("today", beijingDateString());
+      }
+    }
+  }
+
   function bindEvents() {
     el.chatForm.addEventListener("submit", (event) => {
       event.preventDefault();
@@ -1053,10 +1496,16 @@
       }
     });
     el.newSession.addEventListener("click", newSession);
+    el.highlightModes.forEach((button) => {
+      button.addEventListener("click", () => setHighlightsMode(button.dataset.highlightMode || "today"));
+    });
+    el.highlightDate?.addEventListener("change", () => selectHighlightDate(el.highlightDate.value));
     el.featuredGame.addEventListener("click", () => {
+      if (!state.activeGame) return;
       renderPbp("Q4");
       document.querySelector(".pbp-card")?.scrollIntoView({ behavior: "smooth", block: "center" });
-      showToast("已定位到 G4 第四节回放");
+      const gameNumber = state.activeGame.series_game_number ? `G${state.activeGame.series_game_number}` : "该场";
+      showToast(state.activePbp ? `已定位到 ${gameNumber} 第四节文字回放` : `${gameNumber} 暂无可用文字回放`);
     });
 
     el.promptList.addEventListener("click", (event) => {
@@ -1067,7 +1516,7 @@
       el.input.value = "";
       updateCharCount();
       autoGrowInput();
-      startDemoRun(prompt);
+      startRequest(prompt);
     });
 
     el.pbpList.addEventListener("click", (event) => {
@@ -1101,9 +1550,15 @@
     window.setInterval(updateClock, 1000);
     updateCharCount();
     autoGrowInput();
+    if (el.highlightDate) el.highlightDate.max = beijingDateString();
     renderPbp("Q4");
+    setTransportLabel(false);
+    renderHighlightProjection([HIGHLIGHT_FIXTURES["2026-06-12"]], "today", "2026-06-12");
     initSseParserDemo();
     bindEvents();
+    // Probing is deliberately best-effort and bounded.  If uvicorn is not
+    // running, the page stays fully usable as an offline interaction demo.
+    detectApi();
   }
 
   init();

@@ -1,0 +1,9 @@
+{
+  "version": "fixture.v1",
+  "records": [
+    {"record_id": "history:nba:2025-26:champion", "record_type": "CHAMPIONSHIP", "subject": {"kind": "TEAM", "canonical_id": "bos", "display_name": "凯尔特人", "aliases": ["BOS"], "confidence": 1.0}, "season": "2025-26", "value": "凯尔特人", "evidence_id": "fixture:history:2025-26"},
+    {"record_id": "history:nba:2024-25:champion", "record_type": "CHAMPIONSHIP", "subject": {"kind": "TEAM", "canonical_id": "den", "display_name": "掘金", "aliases": ["DEN"], "confidence": 1.0}, "season": "2024-25", "value": "掘金", "evidence_id": "fixture:history:2024-25"},
+    {"record_id": "history:bos:titles", "record_type": "FRANCHISE_RECORD", "subject": {"kind": "TEAM", "canonical_id": "bos", "display_name": "凯尔特人", "aliases": ["BOS"], "confidence": 1.0}, "season": null, "value": 18, "evidence_id": "fixture:history:bos:titles"},
+    {"record_id": "history:nba:1998-99:champion", "record_type": "CHAMPIONSHIP", "subject": {"kind": "TEAM", "canonical_id": "sas", "display_name": "马刺", "aliases": ["SAS"], "confidence": 1.0}, "season": "1998-99", "value": "马刺", "evidence_id": "fixture:history:1998-99"}
+  ]
+}

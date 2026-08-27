@@ -1,10 +1,16 @@
 # COURTSIDE NBA UI Demo
 
-这是一个零依赖的前端展示页，用本地 fixture 模拟 NBA Chat Agent 的 SSE 事件，不需要
-Node、构建工具或任何 API 凭据。页面包含比赛 HUD、聊天流式状态、事实卡片、表格和
-逐回合回放。
+这是一个零依赖的赛事转播风格前端（纯 HTML/CSS/JavaScript），包含比赛 HUD、聊天流式
+状态、事实卡片、表格和逐回合回放。它有两个传输模式：
 
-## 启动
+- API 可用时，`api-client.js` 探测 `/healthz`，聊天走 `POST /api/v1/chat/stream`，左栏
+  赛事焦点走 `GET /api/v1/highlights`；
+- API 不可用时，自动切换到内置 fixture，仍可完整演示交互，不需要 Node、构建工具、外网
+  或 API 凭据。
+
+页面不会主动抓取任意 URL，也不会把 Provider 字段渲染给用户。
+
+## 启动离线 Demo
 
 在仓库根目录执行：
 
@@ -14,7 +20,7 @@ python3 -m http.server 4173 --directory apps/web-demo
 
 浏览器打开 <http://localhost:4173>。
 
-也可以使用任意静态文件服务器托管该目录。输入问题时，页面会离线模拟以下交互：
+也可以使用任意静态文件服务器托管该目录。没有运行 API 时，页面会离线模拟以下交互：
 
 - 普通 NBA 问题：阶段状态 → 增量回答 → 已核验卡片/表格；
 - “最后 5 秒 / 关键回合”：同时展示 Q4 PBP 表格并可在右侧回放；切到 OT 会展示本场无加时的空状态；
@@ -23,6 +29,46 @@ python3 -m http.server 4173 --directory apps/web-demo
 - “博彩 / 下注”等红线：只展示安全提示；
 - 输入“断线”或“超时”：展示可重试错误卡片；
 - “新对话”：清理当前页面消息并生成隔离的 session id。
+
+## 连接本地 FastAPI
+
+想验证真实 Agent 链路时，先在另一个终端从仓库根目录启动 API：
+
+```bash
+cp .env.example .env       # 允许 4173 页面跨源访问；不要提交 .env
+set -a; . ./.env; set +a    # Settings 读取进程环境变量，不会自动解析 .env 文件
+python3 -m pip install -e '.[dev]'
+uvicorn apps.api.src.main:app --reload --port 8000
+```
+
+然后仍访问 <http://localhost:4173>。页面默认在 `localhost/127.0.0.1` 上尝试
+`http://127.0.0.1:8000`；探测成功后，发送问题会消费真实 POST-SSE，日期切换会消费真实
+highlights 响应。API 返回的技术错误会保留在错误卡片中，网络不可达则回退离线 fixture。
+
+若 API 部署在其他地址，可在加载页面前设置全局变量：
+
+```html
+<script>window.COURTSIDE_API_BASE = "https://your-api.example";</script>
+<script src="./api-client.js"></script>
+```
+
+服务端需将静态页面的来源加入 `ALLOWED_ORIGINS`；不要把凭据写进页面或浏览器代码。
+
+## 日期与回放交互
+
+左栏保留两个互斥模式：
+
+- “今日赛事”：请求当前 `Asia/Shanghai` 日历日；
+- “历史回顾”：显示日期选择器，可查询今天以前的日期。未来日期由 API 返回 400，页面
+  会清空旧卡片并提示“不能选择未来日期”；没有比赛时清空旧卡片并显示空状态。
+
+这个切换只影响 scoreboard/highlights 投影，不会把聊天中的 `HISTORY` 意图误当成同一件事。
+API 模式按服务端时钟返回“今天”；离线 Demo 为保证视觉可复现，将“今天”固定到 fixture
+日期 `2026-06-12`，`2026-06-13` 用于演示无数据状态。
+
+右侧“回放”是按节次、时间窗筛选的文字 PBP 事件定位，明确标注“非视频”。项目当前没有
+授权的直播源或视频切片，因此不嵌入第三方播放器；取得合规媒体授权后可增加独立媒体卡片，
+不改变聊天事实核验链路。
 
 ## 交互路径
 
@@ -45,6 +91,7 @@ python3 -m http.server 4173 --directory apps/web-demo
   说明；窄屏按“问题入口 → 聊天 → HUD”顺序堆叠。
 - 所有内容均为自绘 CSS/SVG，不引入 NBA 或赛事官方 Logo、字体和受版权限制的素材。
 
-真实服务接入时，可保留 `AnswerBlock` 渲染器和 `CourtsideSSEParser`，将
-`startDemoRun` 替换为 `fetch('/api/v1/chat/stream', { method: 'POST' })` 的
-`ReadableStream` 消费逻辑即可。
+实现说明：`app.js` 的 `startRequest` 在 API 与 Demo 之间选择传输，`startApiRun` 复用和
+离线模式相同的消息 reducer；`api-client.js` 内的 `SSEParser` 使用 `fetch` +
+`ReadableStream` 消费 POST-SSE（不能用只支持 GET 的原生 `EventSource`）。因此后续替换
+视觉组件时不需要重写 API 契约。

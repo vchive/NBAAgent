@@ -1,0 +1,29 @@
+{
+  "version": "objective-envelope.v1",
+  "cases": [
+    {
+      "case_id": "game-leader-g4",
+      "prompt": "2025-26 总决赛 G4 谁得分最高？",
+      "status": "completed",
+      "evidence_state": "verified",
+      "contains": ["杰伦·布朗", "32"],
+      "game_id": "2026-finals-g4"
+    },
+    {
+      "case_id": "game-result-g4",
+      "prompt": "2025-26 总决赛 G4 比赛结果",
+      "status": "completed",
+      "evidence_state": "verified",
+      "contains": ["凯尔特人", "108", "104"],
+      "game_id": "2026-finals-g4"
+    },
+    {
+      "case_id": "empty-date",
+      "prompt": "2026-06-13 有哪些比赛？",
+      "status": "no_data",
+      "evidence_state": "none",
+      "contains": ["暂无"],
+      "game_id": null
+    }
+  ]
+}

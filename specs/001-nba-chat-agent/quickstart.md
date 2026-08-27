@@ -1,117 +1,182 @@
 # NBA Chat Agent — Quickstart and Validation Guide
 
-**Feature**: [spec.md](spec.md)
+**Feature**: [spec.md](spec.md)<br>
 **Design**: [hld.md](hld.md), [lld.md](lld.md)
 
-本指南用于开发者和面试评审在干净环境中启动、验收和导出交付物。以下目录和命令是
-Phase 2 实现的目标结构；在业务代码尚未生成前不能直接执行，任务完成后必须保持本文件
-可执行。实现阶段如包管理器有调整，必须同步更新本文件。
+本指南对应当前仓库中的 fixture-first 垂直切片。API 和零依赖 Web Demo 可以在没有外网、
+模型或数据源凭据的情况下运行；`live`/`hybrid` 是可选的公开数据探针。Docker/Compose
+profile 已提供；Playwright、正式公网部署和方案 PDF 尚未纳入本地最小路径。
 
 ## 1. Prerequisites
 
-- Linux/macOS/WSL，Python 3.12，Node.js 20+，Docker（可选）。
-- Git 能访问仓库；联网模式需要公开数据源可访问。
-- 不需要提交或共享任何 API key。模型和数据源凭据（如将来需要）通过本地 `.env` 注入。
+- Linux/macOS/WSL，Python 3.12（必需）。
+- Git；联网 profile 需要能够访问 allow-list 中的公开 ESPN endpoint。
+- Node.js 20+ 仅用于可选的 JavaScript 语法检查，不参与 Web Demo 构建。
+- Docker/Compose 可选；仓库提供 fixture 默认的镜像和 compose profile。
+- 不需要提交或共享 API key；本地凭据（如未来接入模型）通过 `.env` 注入，`.env` 不得提交。
 
-## 2. Local fixture mode (no external network)
+## 2. Install
 
-### 2.1 UI-only interaction prototype
+```bash
+git clone git@github.com:vchive/NBAAgent.git
+cd NBAAgent
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e '.[dev]'
+```
 
-业务 API 尚未实现时，可先启动零依赖 UI 原型确认交互和视觉方案：
+连接 4173 Web Demo 时请复制配置模板（它会把本地静态页面加入 CORS allow-list；在
+Codex 预览中使用 54572 端口时也已包含对应 loopback 来源）；仅做 API/curl 验证时可跳过：
+
+```bash
+cp .env.example .env       # 不要提交 .env
+set -a; . ./.env; set +a    # Settings 读取进程环境变量，不会自动解析 .env 文件
+```
+
+默认配置是 `PUBLIC_DATA_MODE=fixture`、`LLM_MODE=mock`、`RUNTIME_PROFILE=template` 和
+`HERMES_LITE_MODE=off`，所有本地示例均可离线完成。
+
+## 3. Start the API (fixture mode)
+
+在已激活虚拟环境的终端运行：
+
+```bash
+uvicorn apps.api.src.main:app --reload --port 8000
+```
+
+API 提供：
+
+- `GET /healthz`、`GET /livez`、`GET /readyz`：探活/就绪；
+- `POST /api/v1/chat`：同步聊天；
+- `POST /api/v1/chat/stream`：使用 `fetch` + `ReadableStream` 的 POST-SSE；
+- `GET /api/v1/highlights?date=YYYY-MM-DD&timezone=Asia/Shanghai`：左栏赛事焦点投影。
+
+## 4. Start the Web Demo
+
+另开终端（无需 Node 或 npm）：
 
 ```bash
 python3 -m http.server 4173 --directory apps/web-demo
 ```
 
-访问 `http://127.0.0.1:4173`。该页面仅使用内置 fixture，回放为 PBP 事件定位（非视频），
-不需要 Node、模型凭据或外部数据源；完整 API fixture 验收仍按本节后续命令进行。
+浏览器访问 <http://127.0.0.1:4173>。页面会在加载时短暂探测 `http://127.0.0.1:8000`：
+
+- API 探测成功：聊天和 highlights 使用真实 FastAPI；
+- API 不可达：自动回退内置 fixture，仍可演示流式状态、错误/重试、会话隔离和 PBP 回放。
+
+部署到其他 API 地址时，可在页面加载 `api-client.js` 前设置
+`window.COURTSIDE_API_BASE`；服务端的 `ALLOWED_ORIGINS` 必须包含静态页面来源。
+
+## 5. Start with Docker Compose (optional)
+
+在仓库根目录运行：
 
 ```bash
-git clone git@github.com:vchive/NBAAgent.git
-cd NBAAgent
-cp .env.example .env                 # 若文件尚未生成，按配置契约手工创建
-export PUBLIC_DATA_MODE=fixture
-export LLM_MODE=mock
-export RUNTIME_PROFILE=template
-export HERMES_LITE_MODE=off       # embedded_spike 仅用于本地 fixture 验证
-
-# API
-python -m venv .venv
-source .venv/bin/activate
-pip install -e '.[dev]'
-uvicorn apps.api.src.main:app --reload --port 8000
-
-# Web（另开终端）
-npm ci --prefix apps/web
-npm run dev --prefix apps/web
+docker compose up --build
 ```
 
-浏览器访问 `http://localhost:3000`。fixture 模式必须无需外网即可运行一条 A–I 题型样例、
-错误场景和三轮 H 场景。
-
-## 3. API smoke checks
+Compose 会以非 root 用户启动 fixture API，映射 `http://127.0.0.1:8000`，并通过
+`/healthz` 做容器健康检查。另开终端启动静态 Demo：
 
 ```bash
-curl -fsS http://localhost:8000/healthz
+python3 -m http.server 4173 --directory apps/web-demo
+```
 
-curl -fsS -X POST http://localhost:8000/api/v1/chat \
+停止服务：`docker compose down`。联网数据和 Hermes sidecar 仍需显式配置，不会被镜像
+默认值悄悄启用。
+
+## 6. API smoke checks
+
+```bash
+curl -fsS http://127.0.0.1:8000/healthz
+curl -fsS http://127.0.0.1:8000/livez
+curl -fsS http://127.0.0.1:8000/readyz
+
+curl -fsS -X POST http://127.0.0.1:8000/api/v1/chat \
   -H 'Content-Type: application/json' \
   -d '{"message":"2025-26 总决赛 G4 谁得分最高？","client_timezone":"Asia/Shanghai"}'
 
-curl -N -X POST http://localhost:8000/api/v1/chat/stream \
+curl -N -X POST http://127.0.0.1:8000/api/v1/chat/stream \
   -H 'Accept: text/event-stream' -H 'Content-Type: application/json' \
-  -d '{"message":"那场最后5秒发生了什么？","session_id":"<上一请求返回的 UUID>"}'
+  -d '{"message":"2025-26 总决赛 G4 最后 5 秒发生了什么？","client_timezone":"Asia/Shanghai"}'
+
+curl -fsS 'http://127.0.0.1:8000/api/v1/highlights?date=2026-06-12&timezone=Asia/Shanghai'
+curl -fsS 'http://127.0.0.1:8000/api/v1/highlights?date=2026-06-13&timezone=Asia/Shanghai'
+curl -i 'http://127.0.0.1:8000/api/v1/highlights?date=2099-01-01&timezone=Asia/Shanghai'
 ```
 
-SSE 客户端使用 `fetch()` + `ReadableStream` 读取 POST 响应；不要使用只支持 GET 的原生
-`EventSource`。检查事件顺序为 `run.started → run.status* → message.delta* →
-message.completed`，且核验前不出现未经核实的数字。
+最后一个请求应为 `400 INVALID_PAYLOAD`（未来日期）；`2026-06-13` 是 fixture 的空日期，
+应返回 `200` 且 `games` 为空。SSE 正常顺序为 `run.started → run.status* → message.delta* →
+message.completed`；澄清、安全短路和技术错误分别使用对应的终止事件。原生
+`EventSource` 只支持 GET，不能用于这个 POST-SSE 接口。
 
-## 4. Required acceptance scenarios
+## 7. Product acceptance scenarios
 
 | Check | Action | Expected |
 |---|---|---|
-| Core facts | 提问球队/球员/赛程/赛果/数据 | 返回结构化答案与北京时间截至口径 |
-| Time | 在固定时钟下问“本赛季/最近/今年” | 使用跨年赛季标签，跨时区日期正确 |
-| Correction | 提供错误比分或得分前提 | 独立核验并礼貌纠正，不把“没查到”当作错误 |
-| PBP | 问最后 5 秒出手/助攻/比分 | 基于逐回合 fixture，类型和顺序正确 |
-| Analysis | 问战术或主观比较 | 先结论，再 2–4 条事实理由；区分推断 |
-| Follow-up | 同场连续三轮“那场/最后那个球” | 上下文正确且三轮事实一致；新 session 不串线 |
-| Safety | 逐类提交红线问题 | 1–2 句礼貌拒答；provider call/cache read-write count 均为 0 |
-| Failure | 模拟 timeout/429/空/部分 JSON | 明确可重试或暂无数据，不输出旧/虚构数字 |
-| UI | 断网、断流、窄屏、键盘操作 | 加载/错误/重试清晰，布局可用 |
+| Core facts | 提问球队/球员/赛程/赛果/数据 | 结构化答案、证据状态和北京时间截至口径 |
+| Time | 问“本赛季/最近/今天”或指定日期 | 使用 `YYYY-YY` 赛季与正确的时区日期 |
+| Correction | 提供错误比分或得分前提 | 独立核验并礼貌纠正；缺数据不等同于错误 |
+| PBP | 问全场最后 5 秒/指定节次 | 按完整 PBP 记录筛选，包含 0 和 5 秒边界 |
+| Analysis | 问战术或复盘 | 先结论，再列已核验事实；推断与事实分层 |
+| Follow-up | 同一 session 连续问“那场/最后那个球” | 上下文可解析；新 session 不串线 |
+| Safety | 提交博彩、隐私、犯罪/假球等红线 | 1–2 句礼貌拒答，检索与缓存计数为 0 |
+| Failure | 模拟 timeout/429/空/无效 JSON | 明确可重试或暂无数据，不展示旧/虚构数字 |
+| Highlights | 切换“今日赛事/历史回顾”和日期 | 空/未来日期均清除旧卡片；未来日期提示错误 |
+| UI | 断网、断流、窄屏、键盘操作 | 加载/错误/重试清晰，PBP 明确标注“非视频” |
 
-## 5. Automated verification
+左栏的“今日赛事 / 历史回顾”是 scoreboard/highlights 的日期投影，不是聊天中的
+`HISTORY` intent。API 模式按服务端时钟解析今天；离线 Demo 固定展示 `2026-06-12` fixture，
+该日期有比赛，`2026-06-13` 用于演示无比赛。项目没有已
+授权的直播源或视频切片，右侧回放仅定位文字 PBP；未来的媒体卡片必须先通过版权和来源审核。
 
-目标测试命令：
+## 8. Automated verification
+
+在仓库根目录、虚拟环境已激活时运行：
 
 ```bash
-pytest -q tests/unit tests/contract tests/integration
-pytest -q tests/evaluation --mode fixture --repeat 3
-npx playwright test tests/e2e
+python -m pytest -q
+python -m compileall -q apps
+node --check apps/web-demo/app.js       # 可选：需要 Node.js
+python -m apps.api.src.evaluation.cli --repeat 1
 ```
 
-评测运行器必须输出每题七维得分、否决标记、TTFT、完整时延、证据状态和重复运行差异；
-具体 JSONL 与权重见 [contracts/evaluation.md](contracts/evaluation.md)。
+当前测试覆盖领域模型、时间/赛季/PBP 算法、安全守卫、Provider/HTTP/SSE 契约、会话/缓存
+边界、ESPN 适配器和评测安全映射。`make test`、`make api`、`make demo`、`make eval` 和
+`make docker-up` 是上述命令的快捷入口；`make lint` 可用于开发期检查，当前仍有历史代码
+风格告警，不改变运行时契约。
 
-## 6. Live mode and deployment smoke test
+评测 runner、报告模块和独立 CLI 已存在于 `apps/api/src/evaluation/`，黄金集当前包含
+A–I 覆盖和 16 条允许的客观题；完整 A–I 集成回放和 Playwright E2E 仍列在
+[tasks.md](tasks.md) 的后续任务中。
+
+## 9. Optional live/hybrid profile
+
+ESPN adapter 已实现为 HTTPS allow-list、超时和响应大小受限的可替换 Provider；上线前必须
+重新确认公开数据服务的条款、robots、频率限制和稳定性。无模型凭据时仍可使用模板回答：
 
 ```bash
-export PUBLIC_DATA_MODE=live
-export LLM_MODE=mock                 # 无模型凭据时仍可回答事实题
-export RUNTIME_PROFILE=hybrid
-export HERMES_LITE_MODE=sidecar      # 生产/在线剖面不得使用 embedded_spike
+export PUBLIC_DATA_MODE=live       # 只访问 allow-list 公开 endpoint
+export LLM_MODE=mock
+export RUNTIME_PROFILE=template
+export HERMES_LITE_MODE=off
 uvicorn apps.api.src.main:app --host 0.0.0.0 --port 8000
 ```
 
-上线前：
+开发期也可用 `PUBLIC_DATA_MODE=hybrid`：先尝试公开源，发生有类型的上游错误后才使用本地
+fixture fallback；权威空结果不会被旧 fixture 覆盖。
 
-1. 使用 `GET /healthz` 和一条非敏感基准题探活。
-2. 重复访问部署 URL，确认无需登录、HTTPS 有效、Web/API CORS 正确。
-3. 运行一条安全题并在内部指标确认 `provider_call_count=0` 且
-   `cache_read_count=cache_write_count=0`。
-4. 保存评测报告和简要方案说明 PDF；PDF 可写技术栈、数据获取方式和亮点，但用户回答
-   仍不得泄露内部 provider/API/字段。
+`HermesRuntimeAdapter` 目前是受限 runtime seam 和本地 fallback，`embedded_spike` 只适合
+fixture 验证；正式 sidecar、部署、容量和外部 URL 探活均未完成，不能把 `sidecar` 配置当作
+已上线模型服务。
 
-部署 URL 由发布环境注入，不写死在代码或测试 fixture；交付时在项目 release note 中记录
-最终公开链接和探活时间。
+## 10. Delivery checklist
+
+上线或提交评审前仍需：
+
+1. 在干净环境重跑本指南和完整测试，并保存评测报告；
+2. 补齐 Playwright E2E、公网 HTTPS 探活和更完整的 deployment evidence（本地 Docker/ASGI profile 已提供）；
+3. 持续扩充黄金题并在目标环境记录七维评分、TTFT、完整延迟和安全否决；
+4. 审核数据源/视频版权后再考虑媒体嵌入；
+5. 将 [`docs/solution.md`](../../docs/solution.md) 导出为 `solution.pdf`，不在用户答案中
+   暴露 Provider URL、原始字段、内部 trace 或凭据。

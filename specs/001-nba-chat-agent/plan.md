@@ -17,9 +17,10 @@ Provider、缓存、安全决策或 NBA 领域事实。
 
 ## Technical Context
 
-**Language/Version**: Python 3.12 for API/domain/evaluation; TypeScript 5.x for Web UI
-**Primary Dependencies**: FastAPI/ASGI, Pydantic v2, httpx, React/Next.js, SSE client, pytest；
-可选 Hermes-lite runtime（版本锁定、sidecar 优先）
+**Language/Version**: Python 3.12 for API/domain/evaluation; dependency-free HTML/CSS/ES2022
+for the current Web Demo (a React/Next.js migration remains optional after the fixture MVP)
+**Primary Dependencies**: FastAPI/ASGI, Pydantic v2, httpx, browser `fetch`/ReadableStream for
+POST-SSE, pytest；可选 Hermes-lite runtime（版本锁定、sidecar 优先）
 **Storage**: 首版无 NBA 内部数据库；会话与 TTL 缓存采用可替换的轻量存储，评测 fixture 使用版本化 JSON
 **Testing**: pytest（单元/集成/契约）、Playwright（Web E2E）、黄金题回放与时延采集
 **Target Platform**: Linux 容器；公开 Web/API 服务，支持本地 fixture/mock 模式
@@ -32,7 +33,7 @@ Provider、缓存、安全决策或 NBA 领域事实。
 
 | Gate | Result | Evidence |
 |---|---|---|
-| Specification-first | PASS | `spec.md` defines scope, scenarios, FR-001–026 and SC-001–010 |
+| Specification-first | PASS | `spec.md` defines scope, scenarios, FR-001–027 and SC-001–011 |
 | Evidence-first facts | PASS | Provider → Normalizer → Verifier → Derivation chain in HLD/LLD |
 | Safety before retrieval | PASS | Safety Guard is the first orchestrator branch; no-retrieval test required |
 | Contract/test-first | PASS | API/provider/evaluation contracts and traceability matrix planned |
@@ -89,10 +90,11 @@ apps/
 │   │   ├── providers/               # public-source adapters
 │   │   ├── infrastructure/         # cache, session, model, observability
 │   │   └── evaluation/              # runner and report generation
-└── web/
-    ├── app/                         # chat route and layout
-    ├── components/                  # messages, cards, status, errors
-    └── lib/                         # API/SSE client helpers
+└── web-demo/
+    ├── index.html                   # zero-build chat/HUD layout
+    ├── styles.css                   # responsive broadcast-style visual system
+    ├── app.js                       # UI state, PBP replay and fixture fallback
+    └── api-client.js                # optional FastAPI/SSE/highlights transport
 
 tests/
 ├── unit/
@@ -103,8 +105,11 @@ tests/
 
 docs/
 ├── solution.md                      # source for the brief solution explanation
-└── solution.pdf                     # exported submission artifact (generated in Phase 2)
+└── solution.pdf                     # exported submission artifact (generated before final delivery)
 ```
+
+根目录还提供 `Dockerfile`、`docker-compose.yml` 和 `.dockerignore`，用于 fixture 默认的
+本地 ASGI profile；评测 CLI 位于 `apps/api/src/evaluation/cli.py`。
 
 **Structure Decision**: 采用一个仓库、API 与 Web 两个应用目录，领域和 Provider 通过
 端口隔离；测试按单元/契约/集成/E2E/评测分层。方案文档与实现文档均位于 Feature 目录，
@@ -142,6 +147,7 @@ docs/
 | FR-024 | HLD delivery；evaluation contract | `DOC-001` 方案 PDF 清单 |
 | FR-025 | Quickstart；evaluation contract | `DOC-002`, `EVAL-RUN-001` 可复现 |
 | FR-026 | Evaluation contract | `EVAL-REPORT-001` 七维汇总 |
+| FR-027 | HLD highlights projection；HTTP contract；Web Demo | `CONTRACT-HIGHLIGHTS-001`, `E2E-HIGHLIGHTS-001` 日期/空状态/隔离 |
 | SC-001 | HLD deployment；quickstart | `OPS-001` 公网 URL/HTTPS 探活 |
 | SC-002 | Evaluation contract | `EVAL-COVERAGE-001` A–I 覆盖报告 |
 | SC-003 | HLD multi-turn；LLD context | `EVAL-H-001` 三轮一致 |
@@ -152,6 +158,7 @@ docs/
 | SC-008 | Spec golden target；evaluation contract | `EVAL-ACCURACY-001` ≥10 客观题、80% 一致 |
 | SC-009 | Quickstart/config contract | `DOC-003` clean-environment run |
 | SC-010 | HLD observability；HTTP contract | `OPS-TELEM-002` 时间/状态可审计 |
+| SC-011 | HLD highlights projection；quickstart | `CONTRACT-HIGHLIGHTS-001`, `E2E-HIGHLIGHTS-001` |
 | ARCH-HERMES-001 | HLD §5.1；LLD §1.3/§4.4 runtime boundary | `SEC-HERMES-001`, `INT-HERMES-001` |
 | ARCH-CAPACITY-001 | HLD §9.2；LLD §3.1/§10 admission budget | `CAP-ADMISSION-001`, `E2E-SSE-001` |
 | ARCH-FAILURE-001 | HLD failure matrix；LLD §10 errors/cancellation | `CHAOS-UPSTREAM-001`, `INT-CANCEL-001` |
@@ -168,8 +175,13 @@ docs/
 | Contract/test-first | PASS | Versioned HTTP, SSE, Provider and Evaluation contracts plus test matrix |
 | Observable/reproducible | PASS | Redacted telemetry, fixture mode, clock injection and quickstart |
 
-No violations or unresolved design gates remain. Provider and hosting choices are explicitly
-replaceable decisions, not hidden assumptions.
+**Fixture MVP gate: PASSED.** The local fixture path (including the shared sync/SSE envelope,
+core safety/fact/context flow, and quickstart) is runnable and reproducible.
+
+**Final delivery gates: PENDING.** `tasks.md` still tracks integration/evaluation coverage,
+deployment/public URL evidence, and the final solution PDF. These pending delivery gates do not
+block the local fixture MVP. Provider and hosting choices remain explicitly replaceable decisions,
+not hidden assumptions.
 
 ## Complexity Tracking
 

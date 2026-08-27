@@ -1,0 +1,18 @@
+{
+  "header": {
+    "id": "401-fixture-g4",
+    "date": "2026-06-12T01:30:00Z",
+    "season": {"year": 2026, "displayName": "2025-26"},
+    "status": {"type": {"state": "post", "completed": true}},
+    "competitions": [{
+      "competitors": [
+        {"homeAway": "home", "score": "108", "team": {"id": "2", "displayName": "Boston Celtics", "abbreviation": "BOS"}},
+        {"homeAway": "away", "score": "104", "team": {"id": "25", "displayName": "Oklahoma City Thunder", "abbreviation": "OKC"}}
+      ],
+      "series": {"id": "fixture-series", "gameNumber": 4},
+      "notes": [{"headline": "NBA Finals - Game 4"}]
+    }]
+  },
+  "boxscore": {"players": [{"statistics": [{"labels": ["MIN", "PTS", "REB", "AST"], "athletes": [{"athlete": {"id": "1", "displayName": "Jaylen Brown"}, "stats": ["36", "32", "8", "5"]}]}]}]},
+  "plays": [{"id": "fixture-play-1", "sequenceNumber": 1, "period": {"number": 4}, "clock": {"displayValue": "0:05.0"}, "type": {"text": "Free Throw"}, "text": "Jaylen Brown free throw made", "participants": [{"athlete": {"id": "1", "displayName": "Jaylen Brown"}, "type": "shooter"}], "scoringPlay": true, "scoreValue": 1, "homeScore": 108, "awayScore": 104}]
+}

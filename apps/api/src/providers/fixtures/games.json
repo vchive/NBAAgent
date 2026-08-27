@@ -1,0 +1,65 @@
+{
+  "version": "fixture.v1",
+  "games": [
+    {
+      "game_id": "2026-finals-g4",
+      "season": "2025-26",
+      "start_utc": "2026-06-12T01:30:00Z",
+      "home": {"kind": "TEAM", "canonical_id": "bos", "display_name": "凯尔特人", "aliases": ["Boston Celtics", "Celtics", "BOS"], "confidence": 1.0},
+      "away": {"kind": "TEAM", "canonical_id": "okc", "display_name": "雷霆", "aliases": ["Oklahoma City Thunder", "Thunder", "OKC"], "confidence": 1.0},
+      "status": "FINAL",
+      "home_score": 108,
+      "away_score": 104,
+      "series_id": "2026-finals-bos-okc",
+      "series_game_number": 4
+    },
+    {
+      "game_id": "2026-finals-g3",
+      "season": "2025-26",
+      "start_utc": "2026-06-10T01:30:00Z",
+      "home": {"kind": "TEAM", "canonical_id": "okc", "display_name": "雷霆", "aliases": ["Oklahoma City Thunder", "Thunder", "OKC"], "confidence": 1.0},
+      "away": {"kind": "TEAM", "canonical_id": "bos", "display_name": "凯尔特人", "aliases": ["Boston Celtics", "Celtics", "BOS"], "confidence": 1.0},
+      "status": "FINAL",
+      "home_score": 101,
+      "away_score": 112,
+      "series_id": "2026-finals-bos-okc",
+      "series_game_number": 3
+    },
+    {
+      "game_id": "2026-finals-g2",
+      "season": "2025-26",
+      "start_utc": "2026-06-08T01:30:00Z",
+      "home": {"kind": "TEAM", "canonical_id": "okc", "display_name": "雷霆", "aliases": ["Oklahoma City Thunder", "Thunder", "OKC"], "confidence": 1.0},
+      "away": {"kind": "TEAM", "canonical_id": "bos", "display_name": "凯尔特人", "aliases": ["Boston Celtics", "Celtics", "BOS"], "confidence": 1.0},
+      "status": "FINAL",
+      "home_score": 107,
+      "away_score": 99,
+      "series_id": "2026-finals-bos-okc",
+      "series_game_number": 2
+    },
+    {
+      "game_id": "2026-finals-g1",
+      "season": "2025-26",
+      "start_utc": "2026-06-06T01:30:00Z",
+      "home": {"kind": "TEAM", "canonical_id": "bos", "display_name": "凯尔特人", "aliases": ["Boston Celtics", "Celtics", "BOS"], "confidence": 1.0},
+      "away": {"kind": "TEAM", "canonical_id": "okc", "display_name": "雷霆", "aliases": ["Oklahoma City Thunder", "Thunder", "OKC"], "confidence": 1.0},
+      "status": "FINAL",
+      "home_score": 118,
+      "away_score": 110,
+      "series_id": "2026-finals-bos-okc",
+      "series_game_number": 1
+    },
+    {
+      "game_id": "2026-regular-bos-okc",
+      "season": "2025-26",
+      "start_utc": "2026-05-20T00:00:00Z",
+      "home": {"kind": "TEAM", "canonical_id": "bos", "display_name": "凯尔特人", "aliases": ["Boston Celtics", "Celtics", "BOS"], "confidence": 1.0},
+      "away": {"kind": "TEAM", "canonical_id": "okc", "display_name": "雷霆", "aliases": ["Oklahoma City Thunder", "Thunder", "OKC"], "confidence": 1.0},
+      "status": "FINAL",
+      "home_score": 106,
+      "away_score": 103,
+      "series_id": null,
+      "series_game_number": null
+    }
+  ]
+}

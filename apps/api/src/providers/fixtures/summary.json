@@ -1,0 +1,15 @@
+{
+  "version": "fixture.v1",
+  "summaries": {
+    "2026-finals-g4": {
+      "leaders": [
+        {"subject": {"kind": "PLAYER", "canonical_id": "jaylen-brown", "display_name": "杰伦·布朗", "aliases": ["J. Brown", "Jaylen Brown", "布朗"], "confidence": 1.0}, "game_id": "2026-finals-g4", "scope": "GAME", "metrics": {"points": 32, "rebounds": 8, "assists": 5}, "metric_definitions": {"points": "得分", "rebounds": "篮板", "assists": "助攻"}, "evidence_ids": ["fixture:summary:2026-finals-g4:brown"]},
+        {"subject": {"kind": "PLAYER", "canonical_id": "jayson-tatum", "display_name": "杰森·塔图姆", "aliases": ["J. Tatum", "Jayson Tatum", "塔图姆"], "confidence": 1.0}, "game_id": "2026-finals-g4", "scope": "GAME", "metrics": {"points": 27, "rebounds": 10, "assists": 7}, "metric_definitions": {"points": "得分", "rebounds": "篮板", "assists": "助攻"}, "evidence_ids": ["fixture:summary:2026-finals-g4:tatum"]},
+        {"subject": {"kind": "PLAYER", "canonical_id": "shai-gilgeous-alexander", "display_name": "谢伊·吉尔杰斯-亚历山大", "aliases": ["S. Gilgeous-Alexander", "Shai", "亚历山大"], "confidence": 1.0}, "game_id": "2026-finals-g4", "scope": "GAME", "metrics": {"points": 29, "rebounds": 6, "assists": 8}, "metric_definitions": {"points": "得分", "rebounds": "篮板", "assists": "助攻"}, "evidence_ids": ["fixture:summary:2026-finals-g4:shai"]},
+        {"subject": {"kind": "PLAYER", "canonical_id": "derrick-white", "display_name": "德里克·怀特", "aliases": ["D. White", "Derrick White", "怀特"], "confidence": 1.0}, "game_id": "2026-finals-g4", "scope": "GAME", "metrics": {"points": 18, "rebounds": 4, "assists": 4}, "metric_definitions": {"points": "得分", "rebounds": "篮板", "assists": "助攻"}, "evidence_ids": ["fixture:summary:2026-finals-g4:white"]}
+      ],
+      "stat_lines": [],
+      "series": {"series_id": "2026-finals-bos-okc", "season": "2025-26", "stage": "FINALS", "home": {"kind": "TEAM", "canonical_id": "bos", "display_name": "凯尔特人", "aliases": ["BOS"], "confidence": 1.0}, "away": {"kind": "TEAM", "canonical_id": "okc", "display_name": "雷霆", "aliases": ["OKC"], "confidence": 1.0}}
+    }
+  }
+}

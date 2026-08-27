@@ -2,7 +2,7 @@
 
 **Feature**: [spec.md](spec.md)
 **HLD**: [hld.md](hld.md)
-**Status**: Proposed
+**Status**: Fixture MVP implemented; final online delivery pending
 **Date**: 2026-08-26
 **Revision**: v0.2 — 增加 Hermes-lite 适配器、准入预算和可执行状态/失败契约
 
@@ -16,10 +16,12 @@
 首版实现采用以下可替换基线：
 
 - API/domain/evaluation：Python 3.12、FastAPI/ASGI、Pydantic v2、httpx。
-- Web：TypeScript、React/Next.js；POST SSE 由 `fetch()` + `ReadableStream` 客户端读取。
-  原生 `EventSource` 仅支持 GET，不用于本契约。
+- Web：当前为零构建的 HTML/CSS/ES2022 Demo（`apps/web-demo`）；POST SSE 由浏览器
+  `fetch()` + `ReadableStream` 客户端读取。原生 `EventSource` 仅支持 GET，不用于本契约。
+  正式产品可在契约稳定后迁移到 React/Next.js，不改变 API/状态机。
 - 测试：pytest（单元、契约、集成）、Playwright（E2E）。
-- 本地运行：Docker Compose；无凭据时使用 fixture/mock provider 和 mock composer。
+- 本地运行：`uvicorn` + Python 静态文件服务器；无凭据时使用 fixture/mock provider 和
+  mock composer。Docker/Compose 是后续部署任务，不是当前 fixture MVP 的前置条件。
 
 运行时采用 `hybrid` 策略：客观问题使用模板/确定性 renderer；需要自然语言战术或复盘时，
 才在事实核验完成后调用 Hermes-lite。Hermes 可以以本地 mock、受限 embedded（仅 fixture
@@ -66,10 +68,11 @@ apps/api/src/
     ├── golden_cases.jsonl
     └── report.py
 
-apps/web/
-├── app/chat/page.tsx
-├── components/{ChatWindow,Message,Status,FactCard,ErrorState}.tsx
-└── lib/chat-client.ts
+apps/web-demo/
+├── index.html                       # 聊天、赛事焦点、HUD 和 PBP 布局
+├── styles.css                       # 响应式赛事转播视觉样式
+├── app.js                           # UI reducer、日期投影和文字回放
+└── api-client.js                    # 可选 FastAPI/SSE/highlights transport
 
 tests/{unit,contract,integration,e2e,evaluation}/
 ```
@@ -538,6 +541,16 @@ TurnSummary 文本仅作为不可信上下文数据，不能覆盖系统策略�
 15 秒 heartbeat。断线重试只使用原 `(session_id, client_message_id)` replay，不重新执行
 Provider。
 
+### 9.1 Date-scoped highlights projection
+
+`GET /api/v1/highlights?date=YYYY-MM-DD&timezone=...` is a read-only scoreboard projection,
+separate from the chat `HISTORY` intent. The service converts the requested local calendar day
+to a half-open UTC range, rejects dates later than the injected clock's local day, and returns a
+provider-free `games` projection plus `evidence_state`/`as_of_beijing`. An empty successful result
+is represented by `games: []`; the browser must clear the prior card before rendering it. The
+static demo uses `2026-06-12` as its explicit offline fixture date and labels the PBP panel as
+text-only; no third-party media URL is accepted by this contract.
+
 ## 10. Error, retry and cache policy
 
 ### 10.1 Error taxonomy
@@ -593,7 +606,7 @@ P90 时延、队列深度、SSE 连接数、Provider 熔断、Hermes fallback �
 | Unit | 时区/赛季、别名、SafetyGuard、Normalizer、Derivation、OutputGuard | 边界时刻、缺字段不填 0、红线短路、PBP 选择正确 |
 | Contract | HTTP JSON、SSE 顺序、Provider fixture、错误码 | schema 版本、隐藏内部字段、retryable 标记 |
 | Integration | Orchestrator 全链路 | 成功、澄清、空结果、timeout/429、错误前提、session 隔离 |
-| E2E | Web 聊天 | 响应式 UI、加载/流式/断开/重试、键盘可用、卡片/表格可读 |
+| E2E | Web 聊天与赛事焦点 | 响应式 UI、加载/流式/断开/重试、键盘可用、卡片/表格可读；日期/空状态/未来日期 |
 | Evaluation | A–I + OUT_OF_SCOPE 黄金题和重复回放 | 事实、时区、三轮一致、安全/范围外 provider=0、七维评分和耗时 |
 
 必须额外覆盖 Hermes-lite 与运行时边界：
@@ -662,4 +675,5 @@ traceability” 小节；该矩阵是实现和代码审查的唯一任务 ID 来
 | Provider / Normalizer | null/字段映射、重试策略 | provider fixtures、错误码 | live/fixture gateway | A/B/C/E 客观题 |
 | Verifier / Derivation | 前提纠偏、系列赛、PBP | FactBundle/Evidence schema | partial/conflict upstream | D/E 准确性题 |
 | Composer / API | 风格、结构、状态 | HTTP/SSE envelope | Web loading/stream/error | F/G 表达题 |
+| Highlights projection | 日期范围、未来校验、空集合 | `/api/v1/highlights` schema | 左栏今日/历史切换、旧卡片清除 | SC-011 日期验收 |
 | Telemetry / Evaluation Runner | 脱敏、权重计算 | report schema | repeated replay | 七维评分/时延 |

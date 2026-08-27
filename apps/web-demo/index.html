@@ -30,7 +30,7 @@
         <div class="topbar-actions">
           <span class="mode-pill" title="当前为本地 fixture 演示数据">
             <span class="status-dot" aria-hidden="true"></span>
-            <span>FIXTURE MODE</span>
+            <span id="mode-label">FIXTURE MODE</span>
           </span>
           <span class="beijing-clock" aria-label="北京时间">
             <span class="clock-label">北京时间</span>
@@ -48,21 +48,29 @@
           <div class="rail-heading">
             <div>
               <span class="eyebrow">CONTROL ROOM</span>
-              <h2>今日看点</h2>
+              <h2 id="highlights-title">今日看点</h2>
             </div>
             <span class="live-badge"><span class="status-dot" aria-hidden="true"></span> REPLAY</span>
           </div>
 
+          <div class="highlight-switcher" role="group" aria-label="赛事焦点时间范围">
+            <button type="button" class="highlight-mode active" data-highlight-mode="today" aria-pressed="true">今日赛事</button>
+            <button type="button" class="highlight-mode" data-highlight-mode="history" aria-pressed="false">历史回顾</button>
+            <label class="highlight-date-label" id="highlight-date-label" for="highlight-date" hidden>日期</label>
+            <input id="highlight-date" class="highlight-date" type="date" value="2026-06-12" aria-label="选择回顾日期" hidden />
+          </div>
+
           <button class="featured-game" id="featured-game" type="button" aria-label="查看凯尔特人与雷霆的比赛回放">
-            <span class="game-meta"><span>NBA FINALS · G4 · DEMO FIXTURE</span><span class="game-state">FINAL</span></span>
+            <span class="game-meta"><span id="featured-game-meta">NBA FINALS · G4 · DEMO FIXTURE</span><span class="game-state" id="featured-game-state">FINAL</span></span>
             <span class="mini-scoreboard">
-              <span class="mini-team"><span class="team-token token-bos">BOS</span><span>凯尔特人</span></span>
+              <span class="mini-team"><span class="team-token token-bos" id="featured-home-token">BOS</span><span id="featured-home-name">凯尔特人</span></span>
               <strong>108</strong>
-              <span class="mini-team"><span class="team-token token-okc">OKC</span><span>雷霆</span></span>
+              <span class="mini-team"><span class="team-token token-okc" id="featured-away-token">OKC</span><span id="featured-away-name">雷霆</span></span>
               <strong>104</strong>
             </span>
-            <span class="game-foot"><span>2026/06/12 · 波士顿</span><span class="arrow" aria-hidden="true">↗</span></span>
+            <span class="game-foot"><span id="featured-game-foot">2026/06/12 · 波士顿</span><span class="arrow" aria-hidden="true">↗</span></span>
           </button>
+          <div class="highlights-empty" id="highlights-empty" hidden>这一天暂无可用比赛记录。</div>
 
           <div class="rail-section">
             <div class="section-label"><span>快速提问</span><span class="section-count">05</span></div>
@@ -92,7 +100,7 @@
 
           <div class="rail-footer">
             <span>NBA AGENT / v0.1</span>
-            <span class="online-label"><span class="status-dot" aria-hidden="true"></span> API READY</span>
+            <span class="online-label" id="online-label"><span class="status-dot" aria-hidden="true"></span> <span id="online-label-text">OFFLINE DEMO</span></span>
           </div>
         </aside>
 
@@ -110,7 +118,7 @@
           </div>
 
           <div class="chat-scroll" id="chat-log" role="log" aria-live="polite" aria-relevant="additions text" aria-busy="false">
-            <div class="day-divider"><span>今天 · 2026 年 6 月 12 日</span></div>
+            <div class="day-divider" id="day-divider"><span>演示日期 · 2026 年 6 月 12 日</span></div>
 
             <article class="message assistant-message welcome-message" data-message-id="welcome">
               <div class="message-avatar assistant-avatar" aria-hidden="true">CS</div>
@@ -160,32 +168,32 @@
         <aside class="rail right-rail" aria-label="比赛 HUD 和逐回合回放">
           <section class="hud-card panel-card" aria-labelledby="hud-title">
             <div class="card-heading">
-              <div><span class="eyebrow">GAME HUD / DEMO FINALS G4</span><h2 id="hud-title">终场数据</h2></div>
-              <span class="status-tag final-tag">FINAL</span>
+              <div><span class="eyebrow" id="hud-eyebrow">GAME HUD / DEMO FINALS G4</span><h2 id="hud-title">终场数据</h2></div>
+              <span class="status-tag final-tag" id="hud-status">FINAL</span>
             </div>
             <div class="scoreboard">
               <div class="score-team away-team">
-                <span class="team-token token-okc large-token">OKC</span>
-                <span class="team-name">雷霆</span>
-                <span class="team-record">客场 · 1–3</span>
+                <span class="team-token token-okc large-token" id="hud-away-token">OKC</span>
+                <span class="team-name" id="hud-away-name">雷霆</span>
+                <span class="team-record" id="hud-away-record">客场 · 1–3</span>
               </div>
               <div class="score-center">
                 <div class="score-line"><strong id="away-score">104</strong><span>—</span><strong id="home-score">108</strong></div>
                 <span class="score-clock" id="score-clock">00:00 · Q4</span>
               </div>
               <div class="score-team home-team">
-                <span class="team-token token-bos large-token">BOS</span>
-                <span class="team-name">凯尔特人</span>
-                <span class="team-record">主场 · 3–1</span>
+                <span class="team-token token-bos large-token" id="hud-home-token">BOS</span>
+                <span class="team-name" id="hud-home-name">凯尔特人</span>
+                <span class="team-record" id="hud-home-record">主场 · 3–1</span>
               </div>
             </div>
             <div class="quarter-strip" aria-label="各节比分，顺序为客队 OKC–主队 BOS">
-              <div data-quarter="Q1"><span>Q1</span><strong>27–24</strong></div>
-              <div data-quarter="Q2"><span>Q2</span><strong>25–31</strong></div>
-              <div data-quarter="Q3"><span>Q3</span><strong>28–31</strong></div>
-              <div class="current" data-quarter="Q4"><span>Q4</span><strong>24–22</strong></div>
+              <div data-quarter="Q1"><span>Q1</span><strong data-quarter-score="Q1">27–24</strong></div>
+              <div data-quarter="Q2"><span>Q2</span><strong data-quarter-score="Q2">25–31</strong></div>
+              <div data-quarter="Q3"><span>Q3</span><strong data-quarter-score="Q3">28–31</strong></div>
+              <div class="current" data-quarter="Q4"><span>Q4</span><strong data-quarter-score="Q4">24–22</strong></div>
             </div>
-            <div class="possession-row"><span><span class="possession-dot bos-pos" aria-hidden="true"></span> 最后控球：BOS</span><span>节奏 98.4</span></div>
+            <div class="possession-row"><span><span class="possession-dot bos-pos" aria-hidden="true"></span> <span id="hud-possession">最后控球：BOS</span></span><span id="hud-pace">节奏 98.4</span></div>
           </section>
 
           <section class="pbp-card panel-card" aria-labelledby="pbp-title">
@@ -231,6 +239,7 @@
 
       <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
     </div>
+    <script src="./api-client.js" defer></script>
     <script src="./app.js" defer></script>
   </body>
 </html>

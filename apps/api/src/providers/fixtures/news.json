@@ -1,0 +1,39 @@
+{
+  "version": "fixture.v1",
+  "news": [
+    {
+      "news_id": "news:finals-g4-recap",
+      "title": "总决赛 G4 赛后：凯尔特人守住主场",
+      "published_utc": "2026-06-12T04:05:00Z",
+      "subject_refs": [
+        {"kind": "GAME", "canonical_id": "2026-finals-g4", "display_name": "2025-26 总决赛 G4", "aliases": ["G4"], "confidence": 1.0},
+        {"kind": "TEAM", "canonical_id": "bos", "display_name": "凯尔特人", "aliases": ["BOS"], "confidence": 1.0},
+        {"kind": "TEAM", "canonical_id": "okc", "display_name": "雷霆", "aliases": ["OKC"], "confidence": 1.0}
+      ],
+      "summary": "末节防守轮转和篮板保护成为赛后讨论的重点。",
+      "evidence_id": "fixture:news:finals-g4-recap"
+    },
+    {
+      "news_id": "news:finals-series-context",
+      "title": "总决赛系列赛背景：双方继续调整轮换",
+      "published_utc": "2026-06-11T16:30:00Z",
+      "subject_refs": [
+        {"kind": "TEAM", "canonical_id": "bos", "display_name": "凯尔特人", "aliases": ["BOS"], "confidence": 1.0},
+        {"kind": "TEAM", "canonical_id": "okc", "display_name": "雷霆", "aliases": ["OKC"], "confidence": 1.0}
+      ],
+      "summary": "教练组在攻防转换和侧翼对位上继续寻找稳定方案。",
+      "evidence_id": "fixture:news:finals-series-context"
+    },
+    {
+      "news_id": "news:brown-form",
+      "title": "杰伦·布朗近期状态受到关注",
+      "published_utc": "2026-06-10T12:00:00Z",
+      "subject_refs": [
+        {"kind": "PLAYER", "canonical_id": "jaylen-brown", "display_name": "杰伦·布朗", "aliases": ["布朗"], "confidence": 1.0},
+        {"kind": "TEAM", "canonical_id": "bos", "display_name": "凯尔特人", "aliases": ["BOS"], "confidence": 1.0}
+      ],
+      "summary": "球队表示会继续围绕他的持球和无球衔接安排进攻。",
+      "evidence_id": "fixture:news:brown-form"
+    }
+  ]
+}
