@@ -1,4 +1,4 @@
-.PHONY: install test lint api demo eval docker-build docker-up docker-down deploy deploy-status
+.PHONY: install test lint api demo eval docker-build docker-up docker-up-silicon docker-down deploy deploy-status
 
 install:
 	python -m pip install -e '.[dev]'
@@ -23,6 +23,10 @@ docker-build:
 
 docker-up:
 	docker compose up --build
+
+docker-up-silicon:
+	test -s secrets/siliconflow_api_key
+	docker compose -f docker-compose.yml -f docker-compose.siliconflow.yml up --build
 
 docker-down:
 	docker compose down

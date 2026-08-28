@@ -125,6 +125,9 @@ def test_output_guard_accepts_traced_number_and_rejects_untraced_number() -> Non
     with pytest.raises(OutputGuardError):
         OutputGuard.validate(unsafe, facts)
 
+    ordered = dict(safe, markdown="1）先看轮转\n2）再看沟通")
+    assert OutputGuard.validate(ordered, facts).markdown.startswith("1）")
+
 
 def test_output_guard_rejects_provider_leakage() -> None:
     with pytest.raises(OutputGuardError):

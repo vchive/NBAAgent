@@ -1,0 +1,23 @@
+# Opt-in direct SiliconFlow BYOK profile.
+# The base docker-compose.yml remains fixture/mock/offline. This override is
+# intentionally separate so a normal `docker compose up` never requires a key.
+# This override inherits PUBLIC_DATA_MODE=fixture: it enables only model wording,
+# not live NBA data. Put it behind authentication/rate limiting before exposing it.
+services:
+  nba-agent:
+    environment:
+      LLM_MODE: live
+      RUNTIME_PROFILE: hybrid
+      HERMES_LITE_MODE: embedded_spike
+      # The live model gets a longer wall-clock budget than the local mock;
+      # the request deadline still caps the effective timeout per call.
+      HERMES_LITE_TIMEOUT_MS: 8000
+      SILICONFLOW_API_KEY_FILE: /run/secrets/siliconflow_api_key
+      SILICONFLOW_BASE_URL: https://api.siliconflow.cn/v1
+      SILICONFLOW_MODEL: deepseek-ai/DeepSeek-V4-Flash
+    secrets:
+      - siliconflow_api_key
+
+secrets:
+  siliconflow_api_key:
+    file: ./secrets/siliconflow_api_key

@@ -339,7 +339,10 @@ class OutputGuard:
 
     _LEAK_PATTERNS = _compile(
         r"https?://|www\.",
-        r"(?:source_ref|evidence_id|evidence_ids|canonical_id|provider_call|raw_json|raw_response|trace_id|request_id|session_id)",
+        r"(?:source_ref|source_id|evidence_id|evidence_ids|canonical_id|canonical_ids|fact_id|fact_ids|"
+        r"provider_url|provider_call|raw_json|raw_payload|raw_response|opaque_session_id|trace_id|"
+        r"request_id|session_id|verified_facts|contract_version|used_fact_ids|"
+        r"finish_reason|error_code|siliconflow|deepseek)",
         r"(?:\bespn\b|nba[_ -]?api|sportsradar|basketball[- ]reference)",
         r"(?:api[_ -]?key|authorization|bearer\s+[a-z0-9._-]+|sk-[a-z0-9]{8,})",
         r"(?:system\s+prompt|developer\s+message|ignore\s+(?:all\s+)?previous\s+instructions|tool\s*call|filesystem|shell\s+command)",
@@ -542,6 +545,26 @@ class OutputGuard:
             bare = normal.rstrip("%")
             if cls._DATE_TOKEN_RE.match(bare):
                 continue
+            # Ordered-list markers are presentation structure, not factual
+            # claims.  Only accept them at the beginning of a line (or after
+            # a Markdown bullet) and keep the ordinal range deliberately
+            # small so a real score followed by a parenthesis is still checked.
+            line_start = text.rfind("\n", 0, match.start()) + 1
+            line_prefix = text[line_start : match.start()].strip()
+            if (
+                not normal.endswith("%")
+                and line_prefix in {"", "-", "*", "+"}
+                and after[:1] in {")",
+                    "）",
+                    "、",
+                    ".",
+                }
+            ):
+                try:
+                    if 1 <= int(bare) <= 20:
+                        continue
+                except ValueError:
+                    pass
             # Clock/date portions in an as-of phrase (e.g. 21:30) and season ranges.
             clock_prefix = before.endswith((":", "："))
             clock_suffix = after[:1] in {"", " ", "\n"}

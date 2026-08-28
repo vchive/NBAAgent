@@ -3,6 +3,7 @@ __pycache__/
 .venv/
 venv/
 .env
+secrets/
 .DS_Store
 dist/
 build/

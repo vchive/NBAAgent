@@ -127,7 +127,12 @@ async def readyz(request: Request):
     else:
         self_test = getattr(hermes_runtime, "capability_self_test", None)
         hermes_status = "ok" if self_test is None or bool(self_test()) else "degraded"
-    status = "ok" if store_ok and cache_ok else "not_ready"
+    # When a live composer is explicitly enabled, its local capability/key
+    # check is part of readiness.  We do not perform a paid remote probe; a
+    # missing key or malformed adapter simply keeps the instance out of the
+    # ready pool while conversational requests can still be served by an
+    # explicit template-only profile.
+    status = "ok" if store_ok and cache_ok and hermes_status in {"ok", "disabled"} else "not_ready"
     payload = {
         "status": status,
         "version": "v1",

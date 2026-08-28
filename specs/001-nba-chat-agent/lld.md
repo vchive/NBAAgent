@@ -404,10 +404,13 @@ Provider 健康检查只验证允许的端点，不把上游 URL 发送给用户
    `VERIFIED` 或显式标记为 `PARTIAL` 的事实；未核验数字不得进入输入。
 2. `ToolPolicy` 与启动时锁定的策略完全相等（`tools=[]`、network/filesystem/shell/MCP/
    skills/memory/subagents 全部关闭、`max_turns=1`）。策略差异不能通过用户配置覆盖。
-3. `remaining_ms` 大于最小调用预算；向 sidecar 只发送 `sanitized_question`、意图、事实
-   和风格规则，不发送 Provider URL、原始新闻/PBP 文本、凭据或完整 session ID。
+3. `remaining_ms` 大于最小调用预算；向 Runtime 只发送 `sanitized_question`、意图、事实
+   和风格规则，不发送 Provider URL、原始新闻/PBP 文本、凭据或完整 session ID。当前
+   direct SiliconFlow 实现使用固定 HTTPS allow-list、`Authorization: Bearer`、`stream=false`、
+   `enable_thinking=false` 和 bounded `max_tokens`；`choices[0].message.content` 及
+   `finish_reason=stop|eos` 才可进入 Output Guard。
 4. sidecar（生产）使用非 root、只读文件系统、无入站端口和模型 egress allow-list；
-   `EMBEDDED_SPIKE` 仅允许在 fixture 模式，不能作为线上默认值。
+   当前 `EMBEDDED_SPIKE` direct adapter 仅用于本地/演示，生产不得把它当作隔离 sidecar。
 
 响应中的 `used_fact_ids` 只作为候选引用，OutputGuard 会重新根据草稿中的数字、球队/球员
 名称和结论匹配 `FactAssertion`，模型声称使用的 ID 不构成信任依据。状态处理如下：
@@ -418,7 +421,9 @@ Provider 健康检查只验证允许的端点，不把上游 URL 发送给用户
 | `TIMEOUT`/`UNAVAILABLE` | 模板回退 | 返回已核实事实摘要 + `COMPOSER_UNAVAILABLE` | 记录原因和剩余预算 |
 | `UNSAFE` | 模板回退或安全错误 | 安全错误，不重试模型 | `output_guard_block` |
 
-适配器不保存 Hermes memory；会话摘要仍由 `ContextPort` 以当前 `session_id` 管理。
+适配器不保存 Hermes memory；会话摘要仍由 `ContextPort` 以当前 `session_id` 管理。没有
+`SILICONFLOW_API_KEY` 或 secret 文件、上游超时/429、无效 JSON、截断或不安全输出时，
+适配器返回 `UNAVAILABLE/TIMEOUT`，由用例保留确定性模板答案，不猜测或补数字。
 
 ## 5. Parsing, time and entity resolution
 
@@ -642,13 +647,19 @@ CACHE_MAX_ENTRIES=10000
 CACHE_MAX_BYTES=67108864
 LLM_MODE=mock|live
 LLM_TIMEOUT_SECONDS=8
+SILICONFLOW_API_KEY=                # local only; never commit
+SILICONFLOW_API_KEY_FILE=           # mounted secret path, preferred for deployment
+SILICONFLOW_BASE_URL=https://api.siliconflow.cn/v1
+SILICONFLOW_MODEL=deepseek-ai/DeepSeek-V4-Flash
+SILICONFLOW_MAX_TOKENS=800
+SILICONFLOW_MAX_RESPONSE_BYTES=262144
 ALLOWED_ORIGINS=...
 LOG_LEVEL=INFO
 RUNTIME_PROFILE=hybrid
 HERMES_LITE_MODE=off|embedded_spike|sidecar
 HERMES_LITE_ENDPOINT=...
 HERMES_LITE_MAX_TOKENS=800
-HERMES_LITE_TIMEOUT_MS=2500
+HERMES_LITE_TIMEOUT_MS=2500       # live SiliconFlow profile uses 8000
 HERMES_LITE_MAX_INFLIGHT=4
 MAX_REQUEST_BYTES=32768
 MAX_EVENT_BYTES=16384

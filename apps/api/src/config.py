@@ -6,8 +6,10 @@ inject a deterministic fixture profile without importing provider or model imple
 
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
 
 def _int(name: str, default: int) -> int:
@@ -61,6 +63,12 @@ class Settings:
     cache_max_entries: int = 10_000
     llm_mode: str = "mock"
     llm_timeout_seconds: float = 8.0
+    siliconflow_api_key: str = field(default="", repr=False)
+    siliconflow_api_key_file: str = field(default="", repr=False)
+    siliconflow_base_url: str = "https://api.siliconflow.cn/v1"
+    siliconflow_model: str = "deepseek-ai/DeepSeek-V4-Flash"
+    siliconflow_max_tokens: int = 800
+    siliconflow_max_response_bytes: int = 262_144
     # Permit the documented local static demo origins by default.  Production
     # deployments should provide an explicit allow-list; wildcard origins are
     # rejected below.
@@ -93,7 +101,7 @@ class Settings:
     @classmethod
     def from_env(cls) -> Settings:
         settings = cls(
-            app_env=os.getenv("APP_ENV", "local"),
+            app_env=os.getenv("APP_ENV", "local").lower(),
             public_data_mode=os.getenv("PUBLIC_DATA_MODE", "fixture").lower(),
             provider_timeout_seconds=_float("PROVIDER_TIMEOUT_SECONDS", 8.0),
             provider_max_retries=_int("PROVIDER_MAX_RETRIES", 2),
@@ -118,6 +126,18 @@ class Settings:
             cache_max_entries=_int("CACHE_MAX_ENTRIES", 10_000),
             llm_mode=os.getenv("LLM_MODE", "mock").lower(),
             llm_timeout_seconds=_float("LLM_TIMEOUT_SECONDS", 8.0),
+            siliconflow_api_key=os.getenv("SILICONFLOW_API_KEY", "").strip(),
+            siliconflow_api_key_file=os.getenv("SILICONFLOW_API_KEY_FILE", "").strip(),
+            siliconflow_base_url=os.getenv(
+                "SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1"
+            ).strip(),
+            siliconflow_model=os.getenv(
+                "SILICONFLOW_MODEL", "deepseek-ai/DeepSeek-V4-Flash"
+            ).strip(),
+            siliconflow_max_tokens=_int("SILICONFLOW_MAX_TOKENS", 800),
+            siliconflow_max_response_bytes=_int(
+                "SILICONFLOW_MAX_RESPONSE_BYTES", 262_144
+            ),
             allowed_origins=_csv(
                 "ALLOWED_ORIGINS",
                 (
@@ -146,15 +166,24 @@ class Settings:
         return settings
 
     def validate(self) -> None:
-        if self.public_data_mode not in {"fixture", "live", "hybrid"}:
+        app_env = str(self.app_env).lower()
+        public_data_mode = str(self.public_data_mode).lower()
+        llm_mode = str(self.llm_mode).lower()
+        runtime_profile = str(self.runtime_profile).lower()
+        hermes_lite_mode = str(self.hermes_lite_mode).lower()
+        if public_data_mode not in {"fixture", "live", "hybrid"}:
             raise ValueError("PUBLIC_DATA_MODE must be fixture, live, or hybrid")
-        if self.llm_mode not in {"mock", "live"}:
+        if llm_mode not in {"mock", "live"}:
             raise ValueError("LLM_MODE must be mock or live")
-        if self.runtime_profile not in {"template", "hermes", "hybrid"}:
+        if runtime_profile not in {"template", "hermes", "hybrid"}:
             raise ValueError("RUNTIME_PROFILE must be template, hermes, or hybrid")
-        if self.hermes_lite_mode not in {"off", "embedded_spike", "sidecar"}:
+        if hermes_lite_mode not in {"off", "embedded_spike", "sidecar"}:
             raise ValueError("HERMES_LITE_MODE must be off, embedded_spike, or sidecar")
-        if self.app_env == "production" and "*" in self.allowed_origins:
+        if llm_mode == "live" and hermes_lite_mode == "off":
+            raise ValueError("live LLM calls require HERMES_LITE_MODE to be enabled")
+        if llm_mode == "live" and runtime_profile not in {"hermes", "hybrid"}:
+            raise ValueError("live LLM calls require RUNTIME_PROFILE=hermes or hybrid")
+        if app_env == "production" and "*" in self.allowed_origins:
             raise ValueError("wildcard CORS origin is forbidden in production")
         for origin in self.allowed_origins:
             if origin == "*":
@@ -163,7 +192,12 @@ class Settings:
                 raise ValueError("ALLOWED_ORIGINS must contain absolute http(s) origins")
         if self.provider_max_retries < 0:
             raise ValueError("provider_max_retries must be non-negative")
-        if self.provider_timeout_seconds <= 0 or self.llm_timeout_seconds <= 0:
+        if (
+            not math.isfinite(self.provider_timeout_seconds)
+            or not math.isfinite(self.llm_timeout_seconds)
+            or self.provider_timeout_seconds <= 0
+            or self.llm_timeout_seconds <= 0
+        ):
             raise ValueError("timeouts must be positive")
         if (
             self.cache_ttl_live_seconds < 0
@@ -171,10 +205,11 @@ class Settings:
             or self.cache_ttl_history_seconds < 0
         ):
             raise ValueError("cache TTL values must be non-negative")
-        if self.app_env == "production" and self.hermes_lite_mode == "embedded_spike":
+        if app_env == "production" and hermes_lite_mode == "embedded_spike":
             raise ValueError("embedded Hermes spike is forbidden in production")
         positive = {
             "provider_timeout_seconds": self.provider_timeout_seconds,
+            "llm_timeout_seconds": self.llm_timeout_seconds,
             "provider_max_response_bytes": self.provider_max_response_bytes,
             "request_deadline_ms": self.request_deadline_ms,
             "max_provider_operations": self.max_provider_operations,
@@ -188,6 +223,10 @@ class Settings:
             "max_sse_connections": self.max_sse_connections,
             "max_inflight_requests": self.max_inflight_requests,
             "queue_max_depth": self.queue_max_depth,
+            "siliconflow_max_tokens": self.siliconflow_max_tokens,
+            "siliconflow_max_response_bytes": self.siliconflow_max_response_bytes,
+            "hermes_lite_max_tokens": self.hermes_lite_max_tokens,
+            "hermes_lite_timeout_ms": self.hermes_lite_timeout_ms,
         }
         invalid = [name for name, value in positive.items() if value <= 0]
         if invalid:
@@ -196,6 +235,54 @@ class Settings:
             raise ValueError("ESPN_BASE_URL must not be empty")
         if not self.espn_allowed_hosts:
             raise ValueError("ESPN_ALLOWED_HOSTS must not be empty")
+        if not isinstance(self.siliconflow_base_url, str):
+            raise ValueError("SILICONFLOW_BASE_URL must be a string")
+        if not isinstance(self.siliconflow_model, str):
+            raise ValueError("SILICONFLOW_MODEL must be a string")
+        if not isinstance(self.siliconflow_api_key, str):
+            raise ValueError("SILICONFLOW_API_KEY must be a string")
+        if not isinstance(self.siliconflow_api_key_file, str):
+            raise ValueError("SILICONFLOW_API_KEY_FILE must be a string")
+        direct_model_enabled = llm_mode == "live" and hermes_lite_mode == "embedded_spike"
+        # The fixed SiliconFlow allow-list applies only to the in-process
+        # embedded spike.  A future isolated sidecar owns its own endpoint;
+        # keeping that setting opaque here avoids coupling sidecar startup to
+        # direct-provider configuration.
+        if direct_model_enabled:
+            parsed_siliconflow = urlparse(self.siliconflow_base_url)
+            try:
+                siliconflow_port = parsed_siliconflow.port
+            except ValueError:
+                siliconflow_port = -1
+            if (
+                parsed_siliconflow.scheme != "https"
+                or (parsed_siliconflow.hostname or "").lower() != "api.siliconflow.cn"
+                or siliconflow_port is not None
+                or parsed_siliconflow.username
+                or parsed_siliconflow.password
+                or parsed_siliconflow.query
+                or parsed_siliconflow.fragment
+                or parsed_siliconflow.path.rstrip("/") != "/v1"
+            ):
+                raise ValueError("SILICONFLOW_BASE_URL must be https://api.siliconflow.cn/v1")
+        if not 1 <= len(self.siliconflow_model) <= 200:
+            raise ValueError("SILICONFLOW_MODEL must contain 1..200 characters")
+        if any(ord(char) < 32 or ord(char) == 127 for char in self.siliconflow_model):
+            raise ValueError("SILICONFLOW_MODEL contains control characters")
+        if self.siliconflow_api_key and (
+            len(self.siliconflow_api_key) > 512
+            or any(ord(char) < 32 or ord(char) == 127 for char in self.siliconflow_api_key)
+            or any(char.isspace() for char in self.siliconflow_api_key)
+        ):
+            raise ValueError("SILICONFLOW_API_KEY must be a single token")
+        if self.siliconflow_api_key_file and any(
+            ord(char) < 32 or ord(char) == 127 for char in self.siliconflow_api_key_file
+        ):
+            raise ValueError("SILICONFLOW_API_KEY_FILE contains control characters")
+        if self.siliconflow_max_tokens > 4096:
+            raise ValueError("SILICONFLOW_MAX_TOKENS must be <= 4096")
+        if self.siliconflow_max_response_bytes > 1_048_576:
+            raise ValueError("SILICONFLOW_MAX_RESPONSE_BYTES must be <= 1048576")
 
 
 settings = Settings.from_env()

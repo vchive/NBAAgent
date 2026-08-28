@@ -99,6 +99,25 @@
 
 **Rationale**: 同时满足可核验性、可观测性和 PDF 2.1 的“不暴露内部技术细节”。
 
+## Decision 7: Opt-in SiliconFlow composer behind the runtime seam
+
+**Decision**: 为 F/G 分析增加一个可关闭的 SiliconFlow OpenAI-compatible composer。固定
+使用 `https://api.siliconflow.cn/v1/chat/completions`、Bearer 鉴权、非流式响应和默认模型
+`deepseek-ai/DeepSeek-V4-Flash`（[Chat Completions API 文档](https://api-docs.siliconflow.cn/docs/api/chat-completions-post)）。只有显式 `LLM_MODE=live`、分析 runtime profile 和
+启用的 Hermes-lite mode 才会发起请求；默认 fixture/mock/template 路径完全离线。
+
+**Rationale**:
+
+- 用户已指定 SiliconFlow API 和模型，OpenAI-compatible 契约可复用现有 runtime port。
+- 模型只负责把已核验事实组织成战术/复盘文字；确定性事实、算术、PBP 选择和 Output
+  Guard 仍由本地代码负责。
+- 缺 key、超时、限流、无效响应或不安全输出时保留模板答案，避免模型成为单点依赖。
+
+**Security boundary**: API 仅发送清理后的问题、意图、风格策略和经白名单过滤的
+`VERIFIED/PARTIAL` 事实投影；不发送原始 Provider JSON、URL、证据/会话 ID、凭据、工具
+调用或思维链。当前实现是 API 进程内 direct BYOK adapter；正式生产 sidecar 仍需独立
+部署与审计，不能把 `embedded_spike` 当作隔离边界。
+
 ## Resolved unknowns and remaining risks
 
 | Topic | Resolution for design | Remaining risk / mitigation |

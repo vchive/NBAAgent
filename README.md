@@ -11,11 +11,18 @@ fixture/mock 模式的 FastAPI Agent：同步聊天、POST SSE、会话隔离、
 在仓库包含 Web Demo 时会从同一端口托管 UI，因此可以直接通过一个 `IP:端口` 访问完整演示。
 ESPN 与 Hermes-lite 保留为可替换适配器，默认关闭，不需要任何凭据。
 
-> **Hermes / BYOK 状态**：当前部署不是完整 Hermes Agent 运行实例，而是 fixture-first 的
-> `template` 模式；`HERMES_LITE_MODE=off`、`LLM_MODE=mock`，因此没有读取或配置模型 API Key。
-> `HermesRuntimeAdapter` 目前是受限 seam/mock fallback，设置一个 Key 本身不会把它变成真实
-> 模型调用。后续接入真实 Hermes sidecar 时，模型供应商、模型名、Base URL 和 API Key 需要
-> 单独配置；Key 应只放在 sidecar 的 secret/environment 中，不能提交到仓库或贴在聊天里。
+> **SiliconFlow BYOK 状态**：默认仍是完全离线的 `template`/`mock` 模式（不会读取或发送
+> 模型请求）。显式设置 `LLM_MODE=live`、`RUNTIME_PROFILE=hybrid`（或 `hermes`）以及
+> `HERMES_LITE_MODE=embedded_spike` 后，F/G 战术与复盘问题才会调用受限的 SiliconFlow
+> OpenAI-compatible Chat Completions（[API 文档](https://api-docs.siliconflow.cn/docs/api/chat-completions-post)）；默认模型为 `deepseek-ai/DeepSeek-V4-Flash`。
+> 这是当前 API 进程内的 direct BYOK adapter，不是已部署的独立 Hermes sidecar；生产环境
+> 应改用隔离 sidecar。Key 仅通过 `SILICONFLOW_API_KEY`（本地）或
+> `SILICONFLOW_API_KEY_FILE`（挂载 secret）注入，绝不能提交到仓库、镜像、前端、日志或聊天。
+> `HERMES_LITE_MODE=sidecar` 目前是保守的未实现占位，会保持 not-ready/模板回退，不会
+> 偷换成进程内直连。
+> `LLM_MODE=live` 只切换分析措辞模型，和 `PUBLIC_DATA_MODE` 相互独立；Compose 示例仍使用
+> 本地 fixture 事实。若把 live profile 暴露到公网，任何可访问者都可能消耗 BYOK 额度，必须
+> 放在认证反代/VPN/受限安全组后，并配置供应商预算与限额。
 
 启动 API：
 
@@ -54,6 +61,22 @@ docker compose up --build
 
 Compose 默认将完整应用暴露在 `http://<服务器IP>:8000/`。
 后台部署可使用 `make deploy`，查看状态用 `make deploy-status`。
+
+启用 SiliconFlow（仅在你已准备好自己的 key 时）：
+
+```bash
+mkdir -p secrets
+chmod 700 secrets
+printf '%s\n' "$SILICONFLOW_API_KEY" > secrets/siliconflow_api_key
+chmod 600 secrets/siliconflow_api_key
+docker compose -f docker-compose.yml -f docker-compose.siliconflow.yml up -d --build
+```
+
+上述 override 会把 key 作为 Docker secret 文件挂载，不会写入镜像层或环境变量。没有
+授权 key 时不要切换 live；服务会保持模板回退并在 `/healthz`/`/readyz` 标为 degraded。
+该 profile 的 `PUBLIC_DATA_MODE` 仍为 `fixture`，只验证模型措辞链路；要访问 ESPN 公开数据，
+另行显式设置 `PUBLIC_DATA_MODE=live` 或 `hybrid`，并先审核数据源条款。live profile 不应直接
+暴露未认证的 `8000` 端口。
 
 在云主机上还需要同时放行两层网络策略：本机执行
 `ufw allow 8000/tcp`，并在云厂商安全组添加一条入站 TCP 8000 规则（演示阶段可先限制为
@@ -105,5 +128,5 @@ SpecKit 项目治理原则位于 [.specify/memory/constitution.md](.specify/memo
 ## 下一步
 
 后续按 [`specs/001-nba-chat-agent/tasks.md`](specs/001-nba-chat-agent/tasks.md) 继续补齐
-live provider、受限 Hermes sidecar、Playwright、公网部署验收和方案 PDF；fixture 模式始终
-是本地可复现的默认路径。
+正式隔离 Hermes sidecar、Playwright、公网部署验收和方案 PDF；fixture 模式始终是本地可复现
+的默认路径。

@@ -147,7 +147,7 @@ flowchart LR
     D --> F[Verified FactBundle]
     F --> R{RuntimeProfile}
     R -->|template| T[Deterministic Renderer]
-    R -->|hermes| H[HermesRuntimeAdapter\n仅接收 FactBundle]
+    R -->|hermes/hybrid| H[受限 Runtime\nSiliconFlow/Hermes adapter\n仅接收 FactBundle]
     H --> G[Output Guard]
     T --> G
     G --> A[Answer Envelope]
@@ -166,14 +166,23 @@ Hermes 的能力边界固定如下；任何未列出的能力默认关闭：
 | 已核验事实的解释与战术/复盘措辞 | 允许 | 输入只能是服务端生成的 `FactBundle` 和风格策略 |
 
 路由策略是 `hybrid`：A–E 等客观问题优先使用确定性模板；F/G 分析问题在事实核验完成
-后可使用 Hermes；Hermes 超时、不可用或输出不合规时回退模板。Hermes 不参与 I 类安全
+后可使用受限 Runtime（当前默认实现为 SiliconFlow OpenAI-compatible adapter）；Runtime
+超时、不可用或输出不合规时回退模板。Runtime 不参与 I 类安全
 请求，也永远不会收到被拦截的原始文本。
+
+当前 v1 的 `embedded_spike` 是 API 进程内 direct BYOK 实现：仅允许向固定的
+`https://api.siliconflow.cn/v1/chat/completions` 发起非流式请求，默认模型为
+`deepseek-ai/DeepSeek-V4-Flash`。请求只携带清理后的分析任务、风格策略和
+`VERIFIED/PARTIAL` 事实投影，不携带证据/会话 ID、Provider 原文、URL、工具或凭据；完整
+草稿返回后才经过本地 Output Guard，再向前端分片。`sidecar` 是后续生产隔离形态：API
+只连接本地受限进程，由 sidecar 持有 key 和模型出站权限；当前仓库不把 direct adapter
+描述为已完成的 sidecar。
 
 生产环境的 Hermes 只允许 `SIDECAR` 模式：独立非 root UID、只读 rootfs、drop capabilities、
 无公网入站端口，仅通过 loopback/Unix socket 接收 API 请求，出站仅允许 LLM egress gateway。
 Provider、SessionStore、Cache 的凭据和网络地址不注入 sidecar。启动时校验固定的
-`policy_hash`/工具清单；策略或版本漂移时禁用 Hermes 并回退模板。`EMBEDDED_SPIKE` 仅限
-本地 fixture 验证，不得用于在线演示或生产。
+`policy_hash`/工具清单；策略或版本漂移时禁用 Hermes 并回退模板。`EMBEDDED_SPIKE` 可用于
+受控本地或临时演示，但不得作为生产隔离边界或承载真实用户流量。
 
 ### 5.2 Trust zones and dependency rules
 

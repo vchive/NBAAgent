@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import re
 import time
+import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -48,6 +50,8 @@ from apps.api.src.domain.models import (
     HistoryRecord,
     IntentName,
     NewsItem,
+    SafetyCategory,
+    SafetyDecision,
     SafetyOutcome,
     Standing,
     VerificationState,
@@ -61,7 +65,11 @@ from apps.api.src.domain.verifier import (
     verify_stat_lines,
 )
 from apps.api.src.infrastructure.admission import AdmissionController
-from apps.api.src.infrastructure.hermes_runtime import HermesRuntimeAdapter, TemplateRuntime
+from apps.api.src.infrastructure.hermes_runtime import (
+    HermesRuntimeAdapter,
+    TemplateRuntime,
+    is_unsafe_runtime_text,
+)
 from apps.api.src.infrastructure.session_store import InMemorySessionStore
 from apps.api.src.infrastructure.telemetry import QueryTelemetry, TelemetrySink, hash_text
 
@@ -143,6 +151,7 @@ class ChatUseCase:
         telemetry: TelemetrySink | None = None,
         runtime: Any | None = None,
         hermes_runtime: Any | None = None,
+        siliconflow_client: Any | None = None,
         gateway: Any | None = None,
         admission: AdmissionController | None = None,
     ) -> None:
@@ -183,6 +192,22 @@ class ChatUseCase:
             mode=getattr(settings, "hermes_lite_mode", "off"),
             timeout_ms=getattr(settings, "hermes_lite_timeout_ms", 2500),
             endpoint=getattr(settings, "hermes_lite_endpoint", ""),
+            llm_mode=getattr(settings, "llm_mode", "mock"),
+            siliconflow_api_key=getattr(settings, "siliconflow_api_key", ""),
+            siliconflow_api_key_file=getattr(settings, "siliconflow_api_key_file", ""),
+            siliconflow_base_url=getattr(
+                settings, "siliconflow_base_url", "https://api.siliconflow.cn/v1"
+            ),
+            siliconflow_model=getattr(
+                settings, "siliconflow_model", "deepseek-ai/DeepSeek-V4-Flash"
+            ),
+            siliconflow_max_tokens=getattr(settings, "siliconflow_max_tokens", 800),
+            siliconflow_timeout_seconds=getattr(settings, "llm_timeout_seconds", 8.0),
+            siliconflow_max_response_bytes=getattr(
+                settings, "siliconflow_max_response_bytes", 262_144
+            ),
+            siliconflow_max_request_bytes=getattr(settings, "max_request_bytes", 32_768),
+            siliconflow_client=siliconflow_client,
         )
         self.runtime_selector = RuntimeSelector(
             template_runtime=self.runtime,
@@ -351,6 +376,18 @@ class ChatUseCase:
             telemetry.transition("RECEIVED")
             token.raise_if_cancelled()
             safety = await self._classify(req.message)
+            # Prompt-injection/control material is not a basketball fact.  Treat
+            # it as an out-of-scope request before context, cache, admission or
+            # provider access; the model boundary also performs an independent
+            # check for callers that bypass this use case.
+            if safety.outcome is SafetyOutcome.ALLOW and is_unsafe_runtime_text(req.message):
+                telemetry.fallback_reason = "unsanitized_question"
+                safety = SafetyDecision(
+                    outcome=SafetyOutcome.OUT_OF_SCOPE,
+                    category=SafetyCategory.OUT_OF_SCOPE,
+                    confidence=0.99,
+                    refusal_template_id="out_of_scope",
+                )
             telemetry.safety_category = safety.category.value
             telemetry.transition("SAFETY_CHECKED", safety=safety.outcome.value)
             if safety.outcome is not SafetyOutcome.ALLOW:
@@ -645,6 +682,7 @@ class ChatUseCase:
                 budget=budget,
                 token=token,
                 telemetry=telemetry,
+                user_message=req.message,
             )
             try:
                 guarded = self.output_guard.validate(draft, facts)
@@ -793,6 +831,7 @@ class ChatUseCase:
         budget: RequestBudget,
         token: CancelToken,
         telemetry: QueryTelemetry,
+        user_message: str | None = None,
     ) -> DraftAnswer:
         """Select Hermes only for analysis intents, with a deterministic fallback.
 
@@ -814,6 +853,15 @@ class ChatUseCase:
         if selected is self.runtime:
             return base
 
+        # Keep prompt-injection and transport/provenance material entirely on
+        # the deterministic path.  Sanitising a few words is not enough: the
+        # safest response to a control attempt is to skip model egress and use
+        # the already-verified local answer.
+        if user_message is not None and is_unsafe_runtime_text(user_message):
+            telemetry.hermes_status = "unavailable"
+            telemetry.fallback_reason = "unsanitized_question"
+            return base
+
         telemetry.hermes_mode = getattr(
             self.hermes_runtime,
             "mode",
@@ -824,7 +872,7 @@ class ChatUseCase:
             opaque_session_id=InMemorySessionStore.hash_session(session_id),
             deadline_at_utc=budget.deadline_at_utc,
             remaining_ms=budget.remaining_ms(),
-            sanitized_question=self._runtime_question(parsed),
+            sanitized_question=self._runtime_question(parsed, user_message),
             intent=parsed.intent,
             fact_bundle=facts,
             style_policy=StylePolicy(),
@@ -848,46 +896,109 @@ class ChatUseCase:
 
         status = getattr(runtime_result.status, "value", runtime_result.status)
         telemetry.hermes_status = str(status).lower()
-        telemetry.fallback_reason = getattr(self.hermes_runtime, "fallback_reason", None)
         if status == RuntimeStatus.UNSAFE.value:
             raise OutputBlockedError()
         if status != RuntimeStatus.OK.value or not runtime_result.draft_markdown:
-            telemetry.fallback_reason = telemetry.fallback_reason or str(
-                runtime_result.finish_reason or "runtime_unavailable"
+            # Prefer the immutable per-call result over the adapter's shared
+            # diagnostic field; concurrent analysis requests must not inherit
+            # one another's fallback reason.
+            telemetry.fallback_reason = str(
+                runtime_result.finish_reason
+                or getattr(self.hermes_runtime, "fallback_reason", None)
+                or "runtime_unavailable"
             )
             return base
 
-        # The local Hermes-off/embedded spike currently delegates to the
-        # deterministic renderer. Keep the richer base draft in that case while
-        # still exercising and observing the capability boundary.
+        # The local mock delegates to the deterministic renderer. Keep the
+        # richer base draft in that case while still exercising and observing
+        # the capability boundary.
         if runtime_result.finish_reason == "template":
             return base
 
-        blocks = list(runtime_result.blocks)
-        if not blocks:
-            blocks = [
-                AnswerBlock(type=AnswerBlockType.ANALYSIS, content=runtime_result.draft_markdown)
-            ]
-        freshness = f"数据截至北京时间 {format_beijing(retrieved_at)}，已核验。"
-        markdown = runtime_result.draft_markdown.strip()
-        if "数据截至北京时间" not in markdown:
-            markdown = f"{markdown}\n\n{freshness}"
-            blocks.append(AnswerBlock(type=AnswerBlockType.TEXT, content=freshness))
-        return DraftAnswer(
-            markdown=markdown,
-            blocks=blocks,
-            evidence_state=facts.evidence_state,
-            corrections=base.corrections,
-            follow_up=base.follow_up,
-        )
+        # Treat model text as an untrusted analysis supplement.  The
+        # deterministic base remains responsible for every factual block and
+        # freshness marker, so a terse/partial model answer cannot erase a
+        # verified score or correction.  Validate the candidate here as well
+        # as at the outer boundary; invalid model text then degrades cleanly to
+        # the local answer instead of turning a transient model issue into a
+        # user-visible 500.
+        # Leave room for the deterministic answer and avoid a validation
+        # exception if a provider returns its full output budget.
+        model_text = runtime_result.draft_markdown.strip()[:6000]
+        if not model_text:
+            telemetry.fallback_reason = telemetry.fallback_reason or "empty_model_output"
+            return base
+        try:
+            # ``DraftAnswer.markdown`` has a 20k bound.  Trim the model text
+            # further when the deterministic section is already large.
+            room = max(1, 19_500 - len(base.markdown))
+            model_text = model_text[:room]
+            candidate = DraftAnswer(
+                markdown=f"{base.markdown}\n\n{model_text}",
+                blocks=[
+                    *base.blocks,
+                    AnswerBlock(type=AnswerBlockType.ANALYSIS, content=model_text),
+                ],
+                evidence_state=base.evidence_state,
+                corrections=base.corrections,
+                follow_up=base.follow_up,
+            )
+            guarded_candidate = self.output_guard.validate(candidate, facts)
+        except (OutputGuardError, ValueError, TypeError):
+            telemetry.fallback_reason = "model_output_guard"
+            return base
+        return guarded_candidate
 
     @staticmethod
-    def _runtime_question(parsed: ParseResult) -> str:
-        """Build a provider-free, injection-free semantic question for Hermes."""
+    def _runtime_question(parsed: ParseResult, raw_text: str | None = None) -> str:
+        """Build a bounded semantic question without forwarding raw instructions/URLs."""
+
+        # Preserve the user's actual analytical goal (for example, “如何限制挡拆？”)
+        # while stripping transport/control and prompt-injection material.  The
+        # structured intent/entities below remain the authoritative task context.
+        question = ""
+        if raw_text:
+            question = unicodedata.normalize("NFKC", str(raw_text))
+            question = "".join(
+                " " if unicodedata.category(char) == "Cf" else char for char in question
+            )
+            question = re.sub(r"[\x00-\x1f\x7f]", " ", question)
+            question = re.sub(r"https?://\S+|www\.\S+", " ", question, flags=re.IGNORECASE)
+            question = re.sub(
+                r"(?:(?:ignore|disregard|forget|override|bypass|skip)\s+(?:all\s+)?(?:the\s+)?"
+                r"(?:(?:previous|prior|earlier|above|your|system|developer)\s+)?"
+                r"(?:instructions?|rules?|requirements?|prompts?|messages?|constraints?|facts?|evidence|verification)|"
+                r"(?:do\s+not|don't)\s+(?:follow|use|obey)|"
+                r"answer\s+without\s+(?:facts?|evidence|verification)|"
+                r"(?:bypass|skip)\s+(?:safety|verification|guardrails?|fact\s*checks?)|"
+                r"(?:jailbreak|unrestricted\s+(?:assistant|model)|"
+                r"(?:act|role[- ]?play)\s+as\s+(?:an?\s+)?"
+                r"(?:unrestricted|system(?:\s+administrator)?))"
+                r"(?![A-Za-z0-9_])|"
+                r"system[_ -]?prompt|developer[_ -]?message|tool[_ -]?call|"
+                r"source[_ -]?(?:url|ref|id)|evidence[_ -]?ids?|"
+                r"provider[_ -]?(?:url|json|response)|"
+                r"canonical[_ -]?ids?|fact[_ -]?ids?|request[_ -]?id|session[_ -]?id|"
+                r"api[_ -]?key|authorization|bearer\s+\S+|"
+                r"(?:忽略|无视|忘记|跳过)(?:之前|先前|此前|以前|上面|以上|当前|所有|系统|开发者)?(?:的)?"
+                r"(?:指令|规则|要求|提示|约束|限制|事实|证据)|"
+                r"(?:不要|勿)(?:遵循|理会|管|考虑|使用)(?:之前|上面|以上|系统|开发者)?(?:的)?"
+                r"(?:指令|规则|要求|事实|证据)|(?:绕过|跳过)(?:安全|限制|审查|事实|核验)|"
+                r"(?:请)?(?:扮演|充当|变成)[\s\S]{0,8}(?:系统|管理员|无约束|不受限制)|"
+                r"(?:输出|泄露)[\s\S]{0,12}(?:内部提示|系统提示|开发者消息|思维链)|"
+                r"系统\s*(?:提示|指令)|开发者\s*(?:消息|指令)|工具\s*(?:调用|指令)|泄露(?:密钥|凭据)|"
+                r"访问令牌|提供商字段|原始响应|原始数据)",
+                " ",
+                question,
+                flags=re.IGNORECASE,
+            )
+            question = " ".join(question.split())[:400]
 
         entities = "、".join(item.display_name for item in parsed.intent.entities[:8])
         metrics = "、".join(item.name for item in parsed.intent.metrics[:8])
         parts = [f"意图：{parsed.intent.intent_name.value}"]
+        if question:
+            parts.append(f"用户问题：{question}")
         if entities:
             parts.append(f"对象：{entities}")
         if metrics:

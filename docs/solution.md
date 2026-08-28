@@ -24,10 +24,17 @@ fixture/mock/template；将
 `PUBLIC_DATA_MODE` 改为 `live` 或 `hybrid` 可启用 allow-list ESPN 适配器（详见
 [quickstart](../specs/001-nba-chat-agent/quickstart.md)）。
 
-Hermes / BYOK 需要单独说明：当前交付使用 `HERMES_LITE_MODE=off`、`LLM_MODE=mock`，
-`HermesRuntimeAdapter` 仅作为受限 seam 和模板回退，并没有真实模型出站调用。因此本次
-部署没有模型 Key；后续接入真实 Hermes sidecar 时，Key 应只注入 sidecar secret，API
-进程只连接受限的 loopback/Unix socket，不能把 Key 放进仓库、镜像或日志。
+SiliconFlow / BYOK 需要单独说明：默认交付仍使用 `HERMES_LITE_MODE=off`、`LLM_MODE=mock`，
+完全离线且不需要模型 Key。显式切换 `LLM_MODE=live`、`RUNTIME_PROFILE=hybrid`（或
+`hermes`）和启用的 Hermes-lite mode 后，F/G 分析才会进入受限 SiliconFlow
+OpenAI-compatible adapter，默认模型为 `deepseek-ai/DeepSeek-V4-Flash`。当前实现是 API
+进程内 direct BYOK 出站，`sidecar` 隔离部署尚未交付；生产应迁移到独立、无工具的 sidecar。
+Key 只能通过 secret 文件或受控环境注入，不能进入仓库、镜像、前端、telemetry 或日志。
+在隔离实现交付前，`HERMES_LITE_MODE=sidecar` 会保持 not-ready/模板回退，不会绕过边界改走
+进程内直连。
+`LLM_MODE=live` 与 `PUBLIC_DATA_MODE` 独立：当前 SiliconFlow Compose profile 仍使用 fixture
+事实，只把 F/G 的措辞交给模型。若启用真实 key，服务必须置于认证反代/VPN/受限安全组之后，
+并设置供应商额度/限流；未认证的公网端口会带来额度消耗风险。
 
 需要单独调试静态页面时，仍可运行 `python3 -m http.server 4173 --directory apps/web-demo`；
 此时 API 必须额外运行在 8000，并配置相应的 `ALLOWED_ORIGINS`。
@@ -58,7 +65,7 @@ flowchart LR
   PG --> NORM[归一化]
   NORM --> VERIFY[事实核验]
   VERIFY --> DERIVE[确定性聚合/PBP]
-  DERIVE --> SELECT[模板或 Hermes-lite]
+  DERIVE --> SELECT[模板或 SiliconFlow/Hermes-lite]
   SELECT --> COMPOSE[回答编排与输出守卫]
   COMPOSE --> API
   API --> UI
@@ -80,8 +87,8 @@ Provider Gateway 是唯一的公开互联网访问边界。首版以 ESPN Web AP
    Normalizer 将结果映射到统一领域模型并保留缺失值。
 5. Verifier 检查证据可信度、新鲜度、实体/时间一致性和用户前提。系列赛累计、连胜和
    最后 5 秒等结果由确定性 Derivation 从真实比赛/PBP 记录计算，模型不负责算术或选球。
-6. 客观题优先由确定性模板渲染；战术/复盘等分析题在事实核验完成后才可选用 Hermes-lite
-   进行措辞组织。Hermes 不拥有 Provider、缓存、安全判定、算术或 PBP 选择，且关闭
+6. 客观题优先由确定性模板渲染；战术/复盘等分析题在事实核验完成后才可选用受限
+   SiliconFlow/Hermes-lite 进行措辞组织。运行时不拥有 Provider、缓存、安全判定、算术或 PBP 选择，且关闭
    shell、MCP、浏览器、memory、skills 和子代理。其输入只含结构化 FactBundle、规范化问题
    和风格策略；Output Guard 再检查无证据数字、敏感内容和内部字段泄露。Hermes 不可用时
    客观题回退模板，分析题只返回已核实事实摘要。
@@ -123,11 +130,11 @@ Safety Guard 在任何外部检索前运行；一条消息同时包含正常篮�
 - FastAPI 同步聊天、POST SSE、健康检查和日期范围 highlights 接口；
 - 中文意图/实体/赛季解析、事实核验、系列赛与最后 5 秒 PBP 确定性推导；
 - 会话隔离、幂等重放、取消传播、TTL 缓存、重试/fallback、检索前安全短路和脱敏 telemetry；
-- 受限 Hermes-lite runtime seam（默认关闭）与模板回退；
+- 受限 SiliconFlow/Hermes-lite runtime seam（默认关闭）与模板回退；
 - 赛事转播风格静态 UI，支持“今日赛事 / 历史回顾”日期切换，并在 API 不可用时离线演示。
 
 仍待完成的交付项包括：补齐更完整的集成/E2E 覆盖、正式公网探活、正式 Hermes sidecar
-接入，以及将本说明导出为 `solution.pdf`。本地 Docker/ASGI profile 已提供，当前黄金集
+隔离接入，以及将本说明导出为 `solution.pdf`。本地 Docker/ASGI profile 已提供，当前黄金集
 也已达到至少十条客观题的目标；这些后续项目不会改变
 当前 fixture 模式的可复现路径。
 

@@ -10,6 +10,7 @@ build/
 dist/
 coverage/
 .env
+secrets/
 *.log
 tests/
 specs/

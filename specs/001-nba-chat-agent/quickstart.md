@@ -36,12 +36,19 @@ set -a; . ./.env; set +a    # Settings 读取进程环境变量，不会自动�
 默认配置是 `PUBLIC_DATA_MODE=fixture`、`LLM_MODE=mock`、`RUNTIME_PROFILE=template` 和
 `HERMES_LITE_MODE=off`，所有本地示例均可离线完成。
 
-> **BYOK 说明**：这份部署配置没有模型 Key。当前仓库的 `HermesRuntimeAdapter` 是受限
-> seam/mock fallback，尚未实现真实 Hermes sidecar 的模型请求；因此仅设置某个 API Key
-> 不会启用真实模型。接入时需要先确定模型供应商（例如 OpenAI-compatible、DeepSeek 或
-> OpenRouter）、模型名和 Base URL，再把 Key 注入 Hermes sidecar 的 secret/environment。
-> 不要把 Key 写入 `.env.example`、Docker 镜像、Git 或聊天消息。生产 API 只应持有受限的
-> `HERMES_LITE_ENDPOINT`，模型供应商凭据留在 sidecar 内。
+> **BYOK 说明**：默认 profile 不读取或发送模型请求。要启用当前实现的受限 SiliconFlow
+> adapter，必须显式设置 `LLM_MODE=live`、`RUNTIME_PROFILE=hybrid`（或 `hermes`）和
+> `HERMES_LITE_MODE=embedded_spike`（仅本地/演示）；模型默认是
+> `deepseek-ai/DeepSeek-V4-Flash`，接口为 SiliconFlow 的 OpenAI-compatible Chat
+> Completions（参见 [SiliconFlow Chat Completions API 文档](https://api-docs.siliconflow.cn/docs/api/chat-completions-post)）。当前 adapter 在 API 进程内直连 SiliconFlow，并非正式隔离 Hermes sidecar；
+> 生产应迁移到 sidecar。Key 可用 `SILICONFLOW_API_KEY`（本地临时）或
+> `SILICONFLOW_API_KEY_FILE`（Docker/Kubernetes secret 文件）注入。不要把 Key 写入
+> `.env.example`、Dockerfile、镜像、Git、前端、日志或聊天消息。
+> `HERMES_LITE_MODE=sidecar` 目前仅是未实现占位，会标记为 not-ready 并模板回退，避免误把
+> 进程内直连当成隔离边界。
+> `LLM_MODE=live` 只影响 F/G 分析措辞，和 `PUBLIC_DATA_MODE` 独立；下面的 Compose override
+> 仍使用 fixture 事实。公网启用前必须置于认证反代/VPN/受限安全组后，并设置 SiliconFlow
+> 账户预算与限额，避免匿名请求消耗 BYOK 额度。
 
 ## 3. Start the single-port app (fixture mode)
 
@@ -190,20 +197,30 @@ uvicorn apps.api.src.main:app --host 0.0.0.0 --port 8000
 fixture fallback；权威空结果不会被旧 fixture 覆盖。
 
 `HermesRuntimeAdapter` 目前是受限 runtime seam 和本地 fallback，`embedded_spike` 只适合
-fixture 验证；正式 sidecar、部署、容量和外部 URL 探活均未完成，不能把 `sidecar` 配置当作
-已上线模型服务。
+fixture 验证；当前 `LLM_MODE=live` 会使用受限 direct SiliconFlow adapter，正式 sidecar、
+容量和外部 URL 探活仍未完成。没有 key 时 adapter 不发请求并回退模板，`/healthz`/`/readyz`
+会反映配置未就绪。
 
-启用真实 BYOK 前的最小配置清单（示意，不会被当前 MVP 自动读取）：
+本地 direct BYOK 示例（不要把真实 key 写进 shell 历史或提交文件）：
 
-```text
-模型供应商 / OpenAI-compatible Base URL
-模型名称
-Hermes sidecar 的 API Key secret
-API → sidecar 的 loopback/Unix socket 地址
+```bash
+export LLM_MODE=live
+export RUNTIME_PROFILE=hybrid
+export HERMES_LITE_MODE=embedded_spike
+export HERMES_LITE_TIMEOUT_MS=8000
+export SILICONFLOW_API_KEY='<your-token>'
+export SILICONFLOW_BASE_URL=https://api.siliconflow.cn/v1
+export SILICONFLOW_MODEL=deepseek-ai/DeepSeek-V4-Flash
+uvicorn apps.api.src.main:app --host 0.0.0.0 --port 8000
 ```
 
-完成 sidecar 实现后，才将 API 的 `RUNTIME_PROFILE` 切换为 `hybrid`/`hermes`，并先验证
-`/readyz`、超时回退和 Key 不出现在日志中的约束。
+容器部署建议使用可选的 `docker-compose.siliconflow.yml`，将单独的
+`secrets/siliconflow_api_key` 挂载到 `SILICONFLOW_API_KEY_FILE`；不要用 `env_file` 把整份
+`.env` 传入容器。启用前验证模型账户可用性、额度、`/readyz`、429/超时/撤 key 回退和
+日志中没有 `Authorization`/token。向第三方发送的内容仅包括清理后的问题、已核验事实投影
+和风格策略，不包括 Provider URL、原始 JSON、证据/会话 ID 或工具调用。
+该 override 默认不切换 `PUBLIC_DATA_MODE`；如需公开 ESPN 数据，必须另行设置 `live`/`hybrid`
+并审核条款。未配置认证时不要把 live profile 直接暴露给公网用户。
 
 ## 10. Delivery checklist
 

@@ -5,9 +5,10 @@
 **Prerequisites**: `spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/`,
 `quickstart.md`, and the project constitution.
 
-**Implementation stance**: fixture-first vertical slice.  The first runnable milestone uses a
-deterministic local provider and template composer; live public-data and Hermes adapters are
-strictly behind ports and can be enabled after the contract tests pass.
+**Implementation stance**: fixture-first vertical slice. The default runnable milestone uses a
+deterministic local provider and template composer. An opt-in, constrained SiliconFlow
+OpenAI-compatible composer is now available for F/G analysis after its contract tests pass;
+formal isolated Hermes sidecar deployment remains a separate hardening item.
 
 **Status snapshot (2026-08-27)**: `[X]` means the implementation and a local check are present in
 the current workspace. `[ ]` is intentionally retained for work that is missing, only partially
@@ -142,6 +143,20 @@ without conflating it with the chat `HISTORY` intent.
 - [ ] T054 [P] Add Playwright chat E2E coverage for streaming, keyboard input, responsive layout, retry, and PBP replay in `tests/e2e/test_chat.spec.ts`.
 - [ ] T055 Run the clean-environment quickstart, all test layers, and update `README.md`, `docs/solution.md`, and `specs/001-nba-chat-agent/quickstart.md` with verified commands and deployment notes (documentation is being refreshed; clean-environment, E2E and deployment evidence remain).
 
+## Phase 10: SiliconFlow BYOK composer (opt-in)
+
+- [X] T056 Add typed SiliconFlow settings with the fixed HTTPS endpoint, default
+  `deepseek-ai/DeepSeek-V4-Flash` model, bounded tokens/response size, and optional secret-file
+  loading in `apps/api/src/config.py`.
+- [X] T057 Implement the constrained non-streaming SiliconFlow runtime, fact projection, prompt
+  boundary, error mapping, cancellation and deterministic fallback in
+  `apps/api/src/infrastructure/hermes_runtime.py` and wire it through `ChatUseCase`.
+- [X] T058 Add MockTransport contract coverage for request shape, provenance/key redaction,
+  missing-key/HTTP/timeout/schema/unsafe output handling, secret files and cancellation in
+  `tests/contract/test_siliconflow_runtime.py`.
+- [X] T059 Update health/readiness, environment templates, deployment docs and optional Compose
+  secret override so default fixture mode remains offline and explicit live mode is auditable.
+
 ## Dependencies & Execution Order
 
 ### Phase dependencies
@@ -169,7 +184,8 @@ without conflating it with the chat `HISTORY` intent.
 2. Deliver US1 with fixture provider, sync API, and SSE as the first runnable MVP.
 3. Add deterministic PBP/series/correction behavior and safety/failure paths before enabling any
    generative runtime.
-4. Add Hermes-lite only behind the runtime port, then multi-turn and live-provider adapters.
+4. Add the constrained SiliconFlow composer behind the runtime port, then formalize an isolated
+   Hermes sidecar before production use.
 5. Add the date-scoped highlights projection and UI switch after the chat contract is stable.
 6. Run evaluation and clean-environment checks before deployment or PDF export.
 

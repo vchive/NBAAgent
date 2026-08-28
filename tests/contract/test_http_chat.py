@@ -4,8 +4,10 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from fastapi.testclient import TestClient
 
 from apps.api.src.application.chat_use_case import ChatResult
+from apps.api.src.config import Settings
 from apps.api.src.main import create_app
 
 
@@ -41,6 +43,25 @@ async def test_red_line_short_circuits_provider_and_cache() -> None:
     assert result.status == "blocked"
     assert usecase.provider.calls == 0
     assert usecase.gateway.counters()["cache_read_count"] == 0
+
+
+def test_live_profile_without_key_is_degraded_and_not_ready() -> None:
+    app = create_app(
+        settings=Settings(
+            llm_mode="live",
+            runtime_profile="hybrid",
+            hermes_lite_mode="embedded_spike",
+        )
+    )
+    with TestClient(app) as client:
+        health = client.get("/healthz")
+        ready = client.get("/readyz")
+
+    assert health.status_code == 200
+    assert health.json()["status"] == "degraded"
+    assert health.json()["dependencies"]["hermes"] == "degraded"
+    assert ready.status_code == 503
+    assert ready.json()["status"] == "not_ready"
 
 
 @pytest.mark.asyncio
