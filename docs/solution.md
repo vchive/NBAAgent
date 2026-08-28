@@ -3,8 +3,8 @@
 **对应需求**：[spec.md](../specs/001-nba-chat-agent/spec.md)
 **详细设计**：[HLD](../specs/001-nba-chat-agent/hld.md) · [LLD](../specs/001-nba-chat-agent/lld.md)
 **状态**：fixture MVP gate 已通过；fixture-first Agent 垂直切片、API、离线/在线自适应 UI
-Demo、契约与单元测试均可在本地运行。最终交付 gates 仍待完成，包括 Playwright、正式
-公网部署和方案 PDF；本地 Docker/Compose profile 已提供。
+Demo、契约与单元测试均可在本地运行。当前已提供单端口 Docker/Compose 部署；正式公网
+探活仍取决于云安全组/EIP 入站规则、Playwright 和方案 PDF 尚待完成。
 
 可运行的赛事转播风格 UI 位于 [`apps/web-demo`](../apps/web-demo/)。页面启动时会探测
 FastAPI：服务可用时消费真实 POST-SSE 和 highlights 接口；服务不可用时自动回退到内置
@@ -13,7 +13,7 @@ fixture，因此交互演示不依赖外网或凭据。当前回放是文字 PBP
 单端口启动方式（部署机和局域网访问推荐）：
 
 ```bash
-cp .env.example .env  # 4173 Web Demo 跨源调用 API 时启用本地 CORS；不要提交 .env
+cp .env.example .env  # 单端口部署可选；独立 4173 页面跨源调用 API 时需要它；不要提交 .env
 set -a; . ./.env; set +a  # Settings 读取进程环境变量，不会自动解析 .env 文件
 python3 -m pip install -e '.[dev]'
 uvicorn apps.api.src.main:app --host 0.0.0.0 --port 8000

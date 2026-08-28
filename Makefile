@@ -1,4 +1,4 @@
-.PHONY: install test lint api demo eval docker-build docker-up docker-down
+.PHONY: install test lint api demo eval docker-build docker-up docker-down deploy deploy-status
 
 install:
 	python -m pip install -e '.[dev]'
@@ -26,3 +26,9 @@ docker-up:
 
 docker-down:
 	docker compose down
+
+deploy:
+	docker compose up -d --build
+
+deploy-status:
+	docker compose ps

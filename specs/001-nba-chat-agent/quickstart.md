@@ -85,6 +85,22 @@ Compose 会以非 root 用户启动 fixture API 和同源 Web Demo，映射
 停止服务：`docker compose down`。联网数据和 Hermes sidecar 仍需显式配置，不会被镜像
 默认值悄悄启用。
 
+### 5.1 云主机 IP + 端口访问
+
+如果部署在带 EIP/NAT 的云主机上，除了 Compose 的端口映射，还必须在主机防火墙和云安全组
+同时放行 TCP 8000。例如：
+
+```bash
+sudo ufw allow 8000/tcp comment 'NBAAgent web and API'
+docker compose up -d --build
+docker compose ps
+curl -fsS http://127.0.0.1:8000/healthz
+```
+
+随后访问 `http://<EIP>:8000/`。安全组规则建议先将来源限制为你的公网 IP；如果本机探活
+正常但外部仍超时，说明云安全组、EIP 端口映射或上游网络策略尚未放行，需在云控制台补充
+入站 TCP 8000 规则。
+
 ## 6. API smoke checks
 
 ```bash

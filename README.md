@@ -47,6 +47,12 @@ docker compose up --build
 ```
 
 Compose 默认将完整应用暴露在 `http://<服务器IP>:8000/`。
+后台部署可使用 `make deploy`，查看状态用 `make deploy-status`。
+
+在云主机上还需要同时放行两层网络策略：本机执行
+`ufw allow 8000/tcp`，并在云厂商安全组添加一条入站 TCP 8000 规则（演示阶段可先限制为
+你的公网 IP）。完成后使用 `http://<EIP>:8000/` 访问；若只能在本机访问，通常是云安全组
+或 EIP/NAT 尚未做端口映射。
 
 评测 CLI：
 
