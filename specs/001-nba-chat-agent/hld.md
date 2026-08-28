@@ -121,7 +121,7 @@ Hermes。
 |---|---|---|
 | Web Chat UI | 输入、会话展示、增量文本、赛事焦点日期切换、PBP 文字回放、状态和错误呈现 | 事实判断、敏感策略、直接访问外网 |
 | Chat API | 鉴权边界（如启用）、请求校验、同步/SSE 协议和版本 | 业务推理和供应商格式解析 |
-| Highlights API | 按请求时区投影日期赛事、拒绝未来日期、返回空集合 | 聊天意图、会话上下文和 PBP 事实推导 |
+| Highlights API | 按请求时区投影日期赛事、拒绝未来日期、返回空集合；提供最多 31 天的 `available/empty/unknown` 日期可用性以置灰无赛日 | 聊天意图、会话上下文和 PBP 事实推导 |
 | Safety Guard | 识别红线、生成 1–2 句拒答、在检索前短路 | 对敏感请求进行搜索或辩论 |
 | Conversation Manager | 会话隔离、活动实体、轮次和上下文压缩 | 跨会话共享用户内容 |
 | Intent/Time Parser | 题型、实体、槽位、赛季、日期和时区解析 | 代替事实数据源给答案 |
@@ -498,7 +498,7 @@ P50/P90/P95、超时/错误率、SSE 断开率、准入拒绝率和 fallback 率
 | FR-019–021 | Pre-retrieval Safety Guard、Refusal Templates | 安全红队测试、provider call=0 断言 |
 | FR-022–023 | Resilience、Observability、Session Store | 错误契约、超时/429/隔离测试 |
 | FR-024–026 | Evaluation Runner、报告和方案文档 | `contracts/evaluation.md`、黄金题回放 |
-| FR-027 | Highlights API、日期选择器、文字 PBP 投影 | `contracts/http-api.md`、日期/空状态 UI 验收 |
+| FR-027 | Highlights API、日期可用性投影、日期选择器、文字 PBP 投影 | `contracts/http-api.md`、日期/无赛日置灰/空状态 UI 验收 |
 | ARCH-HERMES-001 | Hermes-lite boundary/capability self-test | `SEC-HERMES-001`, `INT-HERMES-001` |
 | ARCH-CAPACITY-001 | Admission budget、bounded queue、backpressure | `CAP-ADMISSION-001`, `E2E-SSE-001` |
 | ARCH-FAILURE-001 | Failure/degradation matrix and cancellation | `CHAOS-UPSTREAM-001`, `INT-CANCEL-001` |

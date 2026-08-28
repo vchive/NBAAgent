@@ -174,6 +174,39 @@
     if (!response.ok) {
       const error = new Error(payload?.error?.message || "日期赛事暂时不可用。");
       error.publicPayload = payload;
+      error.status = response.status;
+      error.network = false;
+      throw error;
+    }
+    return payload;
+  }
+
+  async function highlightsAvailability(fromDate, toDate, timezone) {
+    if (!baseUrl) throw new Error("API base is not configured");
+    const query = new URLSearchParams({ timezone: timezone || "Asia/Shanghai" });
+    if (fromDate) query.set("from", fromDate);
+    if (toDate) query.set("to", toDate);
+    let response;
+    try {
+      response = await withTimeout(6000, (signal) => fetch(
+        endpoint(`/api/v1/highlights/availability?${query.toString()}`),
+        {
+          method: "GET",
+          headers: { Accept: "application/json" },
+          credentials: "omit",
+          signal,
+        },
+      ));
+    } catch (cause) {
+      const error = new Error("日期赛事连接暂时不可用。", { cause });
+      error.network = true;
+      throw error;
+    }
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      const error = new Error(payload?.error?.message || "日期赛事暂时不可用。");
+      error.publicPayload = payload;
+      error.status = response.status;
       error.network = false;
       throw error;
     }
@@ -185,6 +218,7 @@
     probe,
     streamChat,
     highlights,
+    highlightsAvailability,
     SSEParser,
   };
 })();

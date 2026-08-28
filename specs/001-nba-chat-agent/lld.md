@@ -556,6 +556,16 @@ is represented by `games: []`; the browser must clear the prior card before rend
 static demo uses `2026-06-12` as its explicit offline fixture date and labels the PBP panel as
 text-only; no third-party media URL is accepted by this contract.
 
+### 9.2 Date availability projection
+
+`GET /api/v1/highlights/availability?from=YYYY-MM-DD&to=YYYY-MM-DD&timezone=...` is a separate,
+bounded calendar projection for the history date picker. The inclusive range is capped at 31
+calendar days (omitted endpoints default to the current local month). Each day is returned with
+`status=available|empty|unknown`, an optional `game_count`, and `is_future`. Only a successful
+empty provider response yields `empty`; provider errors/partial responses remain `unknown`, and
+future days are not queried. The client may gray/disable confirmed empty and future days while
+keeping non-future unknown days retryable. This endpoint does not alter chat session context.
+
 ## 10. Error, retry and cache policy
 
 ### 10.1 Error taxonomy
@@ -686,5 +696,5 @@ traceability” 小节；该矩阵是实现和代码审查的唯一任务 ID 来
 | Provider / Normalizer | null/字段映射、重试策略 | provider fixtures、错误码 | live/fixture gateway | A/B/C/E 客观题 |
 | Verifier / Derivation | 前提纠偏、系列赛、PBP | FactBundle/Evidence schema | partial/conflict upstream | D/E 准确性题 |
 | Composer / API | 风格、结构、状态 | HTTP/SSE envelope | Web loading/stream/error | F/G 表达题 |
-| Highlights projection | 日期范围、未来校验、空集合 | `/api/v1/highlights` schema | 左栏今日/历史切换、旧卡片清除 | SC-011 日期验收 |
+| Highlights projection | 日期范围、未来校验、空集合、可用性三态 | `/api/v1/highlights` 与 `/api/v1/highlights/availability` schemas | 左栏今日/历史切换、无赛日置灰、旧卡片清除 | SC-011 日期验收 |
 | Telemetry / Evaluation Runner | 脱敏、权重计算 | report schema | repeated replay | 七维评分/时延 |

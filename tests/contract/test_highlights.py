@@ -3,7 +3,11 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from apps.api.src.application.chat_use_case import ChatUseCase
+from apps.api.src.infrastructure.cache import InMemoryTTLCache
 from apps.api.src.main import create_app
+from apps.api.src.providers.fixture_provider import FixtureProvider
+from apps.api.src.providers.gateway import ProviderGateway
 
 
 @pytest.mark.asyncio
@@ -19,3 +23,102 @@ async def test_highlights_contract_valid_empty_and_future_dates() -> None:
     assert good.json()["date"] == "2026-06-12"
     assert empty.status_code == 200 and empty.json()["games"] == []
     assert future.status_code == 400 and future.json()["error"]["code"] == "INVALID_PAYLOAD"
+
+
+@pytest.mark.asyncio
+async def test_highlights_availability_returns_tri_state_fixture_calendar() -> None:
+    app = create_app()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(
+            "/api/v1/highlights/availability",
+            params={
+                "from": "2026-06-06",
+                "to": "2026-06-13",
+                "timezone": "Asia/Shanghai",
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["from"] == "2026-06-06"
+    assert payload["to"] == "2026-06-13"
+    assert [day["status"] for day in payload["days"]] == [
+        "available",
+        "empty",
+        "available",
+        "empty",
+        "available",
+        "empty",
+        "available",
+        "empty",
+    ]
+    assert payload["days"][0]["game_count"] == 1
+    assert payload["days"][1]["game_count"] == 0
+    assert all(day["is_future"] is False for day in payload["days"])
+
+
+@pytest.mark.asyncio
+async def test_highlights_availability_marks_future_days_unknown_without_querying_them() -> None:
+    app = create_app()
+    provider = app.state.provider
+    before = provider.calls
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(
+            "/api/v1/highlights/availability",
+            params={
+                "from": "2999-01-01",
+                "to": "2999-01-03",
+                "timezone": "Asia/Shanghai",
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [day["status"] for day in payload["days"]] == ["unknown"] * 3
+    assert all(day["is_future"] is True for day in payload["days"])
+    assert provider.calls == before
+
+
+@pytest.mark.asyncio
+async def test_highlights_availability_does_not_turn_upstream_failure_into_empty() -> None:
+    provider = FixtureProvider(scenario="timeout")
+    gateway = ProviderGateway(provider, cache=InMemoryTTLCache())
+    usecase = ChatUseCase(provider, gateway=gateway)
+    app = create_app(usecase=usecase)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(
+            "/api/v1/highlights/availability",
+            params={"from": "2026-06-06", "to": "2026-06-07"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [day["status"] for day in payload["days"]] == ["unknown", "unknown"]
+    assert payload["evidence_state"] == "none"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"from": "2026-06-01", "to": "2026-07-02"},
+        {"from": "2026-06-08"},
+        {"from": "2026-06-09", "to": "2026-06-08"},
+        {"from": "2026-02-30", "to": "2026-03-01"},
+    ],
+)
+async def test_highlights_availability_rejects_invalid_ranges(params: dict[str, str]) -> None:
+    app = create_app()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get("/api/v1/highlights/availability", params=params)
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_PAYLOAD"

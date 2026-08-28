@@ -7,7 +7,8 @@
 `http://<服务器IP>:8000/` 即可同时使用 UI 和 Agent API。
 
 - API 可用时，`api-client.js` 探测 `/healthz`，聊天走 `POST /api/v1/chat/stream`，左栏
-  赛事焦点走 `GET /api/v1/highlights`；
+  赛事焦点走 `GET /api/v1/highlights`，历史日期可用性走
+  `GET /api/v1/highlights/availability`；
 - API 不可用时，自动切换到内置 fixture，仍可完整演示交互，不需要 Node、构建工具、外网
   或 API 凭据。
 
@@ -62,8 +63,10 @@ highlights 响应。API 返回的技术错误会保留在错误卡片中，网�
 左栏保留两个互斥模式：
 
 - “今日赛事”：请求当前 `Asia/Shanghai` 日历日；
-- “历史回顾”：显示日期选择器，可查询今天以前的日期。未来日期由 API 返回 400，页面
-  会清空旧卡片并提示“不能选择未来日期”；没有比赛时清空旧卡片并显示空状态。
+- “历史回顾”：显示按月日历。已核验没有比赛的日期会置灰并不可选；API 尚未核验或
+  上游异常的日期显示为“待核验”并保持禁用，不会被误判为空；再次打开日历会触发核验
+  重试。未来日期也不可选。选择有比赛日期后才请求该日 scoreboard；离线 fixture 会
+  直接标记内置快照中的比赛日。
 
 这个切换只影响 scoreboard/highlights 投影，不会把聊天中的 `HISTORY` 意图误当成同一件事。
 API 模式按服务端时钟返回“今天”；离线 Demo 为保证视觉可复现，将“今天”固定到 fixture

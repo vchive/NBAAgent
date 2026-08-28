@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Any, Literal
 from uuid import UUID
@@ -549,6 +549,95 @@ class HighlightsResponse(_WireBase):
             raise ValueError("timezone must be an IANA timezone") from exc
 
 
+class HighlightAvailabilityDay(_WireBase):
+    """Public, tri-state availability for one local calendar day.
+
+    ``available`` means at least one normalized game was returned and ``empty`` means the
+    provider completed successfully with no games for that day.  ``unknown``
+    is deliberately separate: a timeout, partial upstream response, or a
+    future day must never be presented as a confirmed no-game date.
+    """
+
+    date: str
+    status: Literal["available", "empty", "unknown"]
+    game_count: int | None = Field(default=None, ge=0)
+    is_future: bool = False
+
+    @field_validator("date")
+    @classmethod
+    def _strict_date(cls, value: str) -> str:
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            raise ValueError("date must use YYYY-MM-DD")
+        try:
+            datetime.strptime(value, "%Y-%m-%d")
+        except ValueError as exc:
+            raise ValueError("date is not valid") from exc
+        return value
+
+
+class HighlightsAvailabilityResponse(_WireBase):
+    """Bounded calendar projection used to disable dates without games."""
+
+    timezone: str
+    from_date: str = Field(alias="from")
+    to_date: str = Field(alias="to")
+    days: list[HighlightAvailabilityDay] = Field(default_factory=list, max_length=31)
+    as_of_beijing: str | None = None
+    evidence_state: EvidenceState
+
+    @field_validator("from_date", "to_date")
+    @classmethod
+    def _strict_range_date(cls, value: str) -> str:
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            raise ValueError("date must use YYYY-MM-DD")
+        try:
+            datetime.strptime(value, "%Y-%m-%d")
+        except ValueError as exc:
+            raise ValueError("date is not valid") from exc
+        return value
+
+    @model_validator(mode="after")
+    def _range_is_ordered(self) -> HighlightsAvailabilityResponse:
+        start = datetime.strptime(self.from_date, "%Y-%m-%d").date()
+        end = datetime.strptime(self.to_date, "%Y-%m-%d").date()
+        if end < start:
+            raise ValueError("availability range must be ordered")
+        if (end - start).days + 1 > 31:
+            raise ValueError("availability range is limited to 31 days")
+        if len(self.days) != (end - start).days + 1:
+            raise ValueError("days must cover the requested range")
+        expected = [
+            (start + timedelta(days=index)).isoformat()
+            for index in range((end - start).days + 1)
+        ]
+        if [item.date for item in self.days] != expected:
+            raise ValueError("days must be ordered and contiguous")
+        return self
+
+    @field_validator("as_of_beijing")
+    @classmethod
+    def _as_of_format(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not _AS_OF_RE.fullmatch(value):
+            raise ValueError("as_of_beijing must use YYYY-MM-DD HH:mm")
+        try:
+            datetime.strptime(value, "%Y-%m-%d %H:%M")
+        except ValueError as exc:
+            raise ValueError("as_of_beijing is not a valid date/time") from exc
+        return value
+
+    @field_validator("timezone")
+    @classmethod
+    def _iana_timezone(cls, value: str) -> str:
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+        try:
+            return ZoneInfo(value.strip()).key
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError("timezone must be an IANA timezone") from exc
+
+
 class RunStartedPayload(_WireBase):
     request_id: UUID
     session_id: UUID
@@ -642,6 +731,8 @@ __all__ = [
     "EvidenceState",
     "HealthDependencies",
     "HealthResponse",
+    "HighlightAvailabilityDay",
+    "HighlightsAvailabilityResponse",
     "HighlightGame",
     "HighlightsResponse",
     "JsonScalar",

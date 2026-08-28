@@ -132,7 +132,13 @@ without conflating it with the chat `HISTORY` intent.
 - [X] T046 [US1] Add cache freshness, fallback selection, and public-data mode configuration in `apps/api/src/providers/gateway.py` and `apps/api/src/config.py`.
 - [X] T047 [P] [US1] Add `GET /api/v1/highlights?date=YYYY-MM-DD&timezone=Asia/Shanghai` schema, fixture projection, and no-future-date validation in `apps/api/src/api/highlights_routes.py` and `apps/api/src/application/highlights.py`.
 - [X] T048 [US1] Update the web demo left rail to a compact “赛事焦点 / 历史回顾” mode and date selector, clearing stale games on empty/failed dates in `apps/web-demo/index.html`, `apps/web-demo/app.js`, and `apps/web-demo/styles.css`.
-- [ ] T049 [US1] Add highlights/date-range contract and UI smoke tests in `tests/contract/test_highlights.py` and `tests/e2e/test_highlights.spec.ts` (a basic highlights assertion is embedded in `test_http_chat.py`; dedicated contract/E2E files are pending).
+- [ ] T049 [US1] Complete highlights/date-range contract and UI smoke coverage in
+  `tests/contract/test_highlights.py` and `tests/e2e/test_highlights.spec.ts` (dedicated contract
+  coverage is present; Playwright calendar/chat E2E remains pending).
+- [X] T060 [US1] Add the bounded `GET /api/v1/highlights/availability` calendar projection with
+  tri-state (`available` / `empty` / `unknown`) days, future-day handling, fixture coverage, and
+  contract tests in `apps/api/src/api/highlights_routes.py`, `apps/api/src/application/highlights.py`,
+  `apps/api/src/api/schemas.py`, and `tests/contract/test_highlights.py`.
 
 ## Phase 9: Evaluation, operations, and delivery
 

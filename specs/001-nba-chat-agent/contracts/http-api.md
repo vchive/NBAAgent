@@ -150,6 +150,39 @@ Every `message.completed` payload MUST equal the §3 conversational response env
 same-width `rows`. Unknown block fields are ignored on rendering and must not be used to smuggle
 provider metadata.
 
+## 4.1 Date availability projection
+
+`GET /api/v1/highlights/availability?from=YYYY-MM-DD&to=YYYY-MM-DD&timezone=...` returns a
+bounded calendar projection for the history date picker. `from` and `to` are inclusive local
+calendar dates; the range is limited to 31 days. When both are omitted, the current month in the
+requested timezone is used. Supplying only one endpoint, an invalid/reversed range, or a range
+longer than 31 days returns the technical `400 INVALID_PAYLOAD` envelope described below.
+
+The response is provider-free and preserves a tri-state distinction so an outage is never shown
+as a confirmed no-game day:
+
+```json
+{
+  "timezone": "Asia/Shanghai",
+  "from": "2026-06-06",
+  "to": "2026-06-09",
+  "days": [
+    {"date": "2026-06-06", "status": "available", "game_count": 1, "is_future": false},
+    {"date": "2026-06-07", "status": "empty", "game_count": 0, "is_future": false},
+    {"date": "2026-06-08", "status": "available", "game_count": 1, "is_future": false},
+    {"date": "2026-06-09", "status": "unknown", "game_count": null, "is_future": false}
+  ],
+  "as_of_beijing": "2026-08-28 15:50",
+  "evidence_state": "verified|partial|none"
+}
+```
+
+`status=available` means at least one normalized game was returned; `status=empty` means the
+requested day completed successfully with no games; `status=unknown` means the day could not be
+confirmed (for example, an upstream timeout/partial response or a future day). Clients MAY gray
+and disable `empty` days and all `is_future=true` days. They SHOULD leave non-future `unknown`
+days retryable rather than presenting them as no-game dates.
+
 ## 5. Technical error envelope
 
 ```json

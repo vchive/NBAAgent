@@ -68,6 +68,8 @@ API 提供：
 - `POST /api/v1/chat`：同步聊天；
 - `POST /api/v1/chat/stream`：使用 `fetch` + `ReadableStream` 的 POST-SSE；
 - `GET /api/v1/highlights?date=YYYY-MM-DD&timezone=Asia/Shanghai`：左栏赛事焦点投影。
+- `GET /api/v1/highlights/availability?from=YYYY-MM-DD&to=YYYY-MM-DD&timezone=Asia/Shanghai`：
+  最多 31 天的日期可用性（`available` / `empty` / `unknown`），供历史回顾日历置灰。
 
 ## 4. Optional standalone Web Demo
 
@@ -132,6 +134,7 @@ curl -N -X POST http://127.0.0.1:8000/api/v1/chat/stream \
 
 curl -fsS 'http://127.0.0.1:8000/api/v1/highlights?date=2026-06-12&timezone=Asia/Shanghai'
 curl -fsS 'http://127.0.0.1:8000/api/v1/highlights?date=2026-06-13&timezone=Asia/Shanghai'
+curl -fsS 'http://127.0.0.1:8000/api/v1/highlights/availability?from=2026-06-06&to=2026-06-13&timezone=Asia/Shanghai'
 curl -i 'http://127.0.0.1:8000/api/v1/highlights?date=2099-01-01&timezone=Asia/Shanghai'
 ```
 
@@ -152,7 +155,7 @@ message.completed`；澄清、安全短路和技术错误分别使用对应的�
 | Follow-up | 同一 session 连续问“那场/最后那个球” | 上下文可解析；新 session 不串线 |
 | Safety | 提交博彩、隐私、犯罪/假球等红线 | 1–2 句礼貌拒答，检索与缓存计数为 0 |
 | Failure | 模拟 timeout/429/空/无效 JSON | 明确可重试或暂无数据，不展示旧/虚构数字 |
-| Highlights | 切换“今日赛事/历史回顾”和日期 | 空/未来日期均清除旧卡片；未来日期提示错误 |
+| Highlights | 切换“今日赛事/历史回顾”和日期 | 已确认无赛日置灰不可选；空/未来日期清除旧卡片并提示；待核验日期不误判为空 |
 | UI | 断网、断流、窄屏、键盘操作 | 加载/错误/重试清晰，PBP 明确标注“非视频” |
 
 左栏的“今日赛事 / 历史回顾”是 scoreboard/highlights 的日期投影，不是聊天中的

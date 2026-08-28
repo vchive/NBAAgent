@@ -147,7 +147,7 @@ docs/
 | FR-024 | HLD delivery；evaluation contract | `DOC-001` 方案 PDF 清单 |
 | FR-025 | Quickstart；evaluation contract | `DOC-002`, `EVAL-RUN-001` 可复现 |
 | FR-026 | Evaluation contract | `EVAL-REPORT-001` 七维汇总 |
-| FR-027 | HLD highlights projection；HTTP contract；Web Demo | `CONTRACT-HIGHLIGHTS-001`, `E2E-HIGHLIGHTS-001` 日期/空状态/隔离 |
+| FR-027 | HLD highlights projection；日期可用性三态接口；HTTP contract；Web Demo | `CONTRACT-HIGHLIGHTS-001`, `E2E-HIGHLIGHTS-001` 日期/无赛日置灰/空状态/隔离 |
 | SC-001 | HLD deployment；quickstart | `OPS-001` 公网 URL/HTTPS 探活 |
 | SC-002 | Evaluation contract | `EVAL-COVERAGE-001` A–I 覆盖报告 |
 | SC-003 | HLD multi-turn；LLD context | `EVAL-H-001` 三轮一致 |

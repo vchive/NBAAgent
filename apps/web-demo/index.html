@@ -56,8 +56,40 @@
           <div class="highlight-switcher" role="group" aria-label="赛事焦点时间范围">
             <button type="button" class="highlight-mode active" data-highlight-mode="today" aria-pressed="true">今日赛事</button>
             <button type="button" class="highlight-mode" data-highlight-mode="history" aria-pressed="false">历史回顾</button>
-            <label class="highlight-date-label" id="highlight-date-label" for="highlight-date" hidden>日期</label>
-            <input id="highlight-date" class="highlight-date" type="date" value="2026-06-12" aria-label="选择回顾日期" hidden />
+            <div class="highlight-date-picker" id="highlight-date-picker" hidden>
+              <label class="highlight-date-label" id="highlight-date-label" for="highlight-date-trigger">日期</label>
+              <button
+                class="highlight-date-trigger"
+                id="highlight-date-trigger"
+                type="button"
+                aria-label="选择有比赛的回顾日期"
+                aria-haspopup="dialog"
+                aria-controls="highlight-calendar"
+                aria-expanded="false"
+              >
+                <span id="highlight-date-value">2026/06/12</span>
+                <span class="date-trigger-chevron" aria-hidden="true">⌄</span>
+              </button>
+              <div class="highlight-calendar" id="highlight-calendar" role="dialog" aria-label="选择有比赛的回顾日期" hidden>
+                <div class="calendar-heading">
+                  <button class="calendar-nav" id="calendar-prev" type="button" aria-label="上一个月">‹</button>
+                  <strong id="calendar-month">2026 年 6 月</strong>
+                  <button class="calendar-nav" id="calendar-next" type="button" aria-label="下一个月">›</button>
+                </div>
+                <div class="calendar-weekdays" aria-hidden="true">
+                  <span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span>
+                </div>
+                <div class="calendar-grid" id="calendar-grid" role="grid" aria-label="月份日期"></div>
+                <div class="calendar-status" id="calendar-status" role="status" aria-live="polite">
+                  <span class="calendar-legend-dot has-games" aria-hidden="true"></span><span>有比赛</span>
+                  <span class="calendar-legend-dot no-games" aria-hidden="true"></span><span>无比赛 / 不可选</span>
+                  <span class="calendar-status-text" id="calendar-status-text">正在准备日期数据…</span>
+                </div>
+              </div>
+              <!-- Keep a native control as a no-script/accessibility fallback. The
+                   custom calendar owns the visible interaction when JS is ready. -->
+              <input id="highlight-date" class="highlight-date" type="date" value="2026-06-12" aria-label="选择回顾日期" hidden />
+            </div>
           </div>
 
           <button class="featured-game" id="featured-game" type="button" aria-label="查看凯尔特人与雷霆的比赛回放">

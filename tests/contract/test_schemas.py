@@ -10,6 +10,8 @@ from apps.api.src.api.schemas import (
     ChatRequest,
     ChatResponse,
     ErrorResponse,
+    HighlightAvailabilityDay,
+    HighlightsAvailabilityResponse,
     HighlightsResponse,
     MessageDeltaPayload,
     RunStatusPayload,
@@ -90,6 +92,31 @@ def test_technical_error_envelope_is_explicit() -> None:
             evidence_state="none",
             as_of_beijing="not-a-timestamp",
             latency_ms=1,
+        )
+
+
+def test_highlights_availability_schema_uses_aliases_and_contiguous_days() -> None:
+    response = HighlightsAvailabilityResponse(
+        timezone="Asia/Shanghai",
+        from_date="2026-06-06",
+        to_date="2026-06-07",
+        days=[
+            HighlightAvailabilityDay(date="2026-06-06", status="available", game_count=1),
+            HighlightAvailabilityDay(date="2026-06-07", status="empty", game_count=0),
+        ],
+        evidence_state="verified",
+    )
+    assert response.model_dump(mode="json", by_alias=True)["from"] == "2026-06-06"
+    with pytest.raises(ValidationError):
+        HighlightsAvailabilityResponse(
+            timezone="Asia/Shanghai",
+            from_date="2026-06-06",
+            to_date="2026-06-07",
+            days=[
+                HighlightAvailabilityDay(date="2026-06-06", status="empty", game_count=0),
+                HighlightAvailabilityDay(date="2026-06-08", status="empty", game_count=0),
+            ],
+            evidence_state="none",
         )
 
 

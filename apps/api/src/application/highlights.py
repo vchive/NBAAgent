@@ -5,9 +5,14 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from apps.api.src.api.schemas import HighlightGame, HighlightsResponse
+from apps.api.src.api.schemas import (
+    HighlightAvailabilityDay,
+    HighlightGame,
+    HighlightsAvailabilityResponse,
+    HighlightsResponse,
+)
 from apps.api.src.application.ports import RequestBudget
-from apps.api.src.domain.models import EvidenceState, Game, GameFilters
+from apps.api.src.domain.models import DateRange, EvidenceState, Game, GameFilters
 from apps.api.src.domain.time_policy import (
     format_beijing,
     local_date_range,
@@ -17,6 +22,13 @@ from apps.api.src.domain.time_policy import (
 
 class FutureHighlightsDateError(ValueError):
     """Requested calendar date is later than today in the caller's timezone."""
+
+
+class HighlightsAvailabilityRangeError(ValueError):
+    """Calendar availability requests must stay within a bounded date range."""
+
+
+MAX_AVAILABILITY_DAYS = 31
 
 
 class HighlightsProviderError(RuntimeError):
@@ -99,6 +111,178 @@ class HighlightsService:
             evidence_state=evidence_state.value.lower(),
         )
 
+    async def availability(
+        self,
+        start_day: date,
+        end_day: date,
+        *,
+        timezone_name: str = "Asia/Shanghai",
+    ) -> HighlightsAvailabilityResponse:
+        """Return a bounded, tri-state calendar projection.
+
+        A successful empty provider response is represented as ``empty``.  A
+        provider error or partial response is represented as ``unknown`` for
+        dates that cannot be proven empty.  Future dates are never queried and
+        remain ``unknown`` with ``is_future=true``; the browser can disable
+        them without making an unsupported claim about the schedule.
+
+        The fixture provider can answer the whole 31-day interval in one
+        operation.  Adapters that expose a smaller ``max_date_slices`` value
+        (the ESPN adapter currently uses seven) are queried in bounded chunks.
+        This keeps the endpoint useful for fixtures while remaining honest when
+        a live adapter cannot establish every date.
+        """
+
+        zone = validate_timezone(timezone_name)
+        timezone_name = zone.key
+        if not isinstance(start_day, date) or isinstance(start_day, datetime):
+            raise HighlightsAvailabilityRangeError("availability range requires calendar dates")
+        if not isinstance(end_day, date) or isinstance(end_day, datetime):
+            raise HighlightsAvailabilityRangeError("availability range requires calendar dates")
+        span = (end_day - start_day).days + 1
+        if span <= 0:
+            raise HighlightsAvailabilityRangeError("availability range must be ordered")
+        if span > MAX_AVAILABILITY_DAYS:
+            raise HighlightsAvailabilityRangeError(
+                f"availability range is limited to {MAX_AVAILABILITY_DAYS} days"
+            )
+
+        local_today = self._now().astimezone(zone).date()
+        requested_days = [start_day + timedelta(days=index) for index in range(span)]
+        future_days = {day for day in requested_days if day > local_today}
+        statuses: dict[date, tuple[str, int | None]] = {
+            day: ("unknown", None) for day in requested_days
+        }
+
+        # Do not ask a provider for future dates.  Besides avoiding needless
+        # calls, this preserves the existing highlights contract which rejects
+        # a future date as an invalid user selection.
+        past_days = [day for day in requested_days if day <= local_today]
+        retrieved: list[datetime] = []
+        had_success = False
+        had_unknown = bool(future_days)
+        if past_days:
+            # ``HighlightsService`` normally receives ``ProviderGateway``;
+            # accepting a direct adapter as well keeps the application seam
+            # easy to exercise in contract tests.
+            provider = getattr(self.gateway, "provider", self.gateway)
+            provider_limit = getattr(provider, "max_date_slices", None)
+            if provider_limit is None:
+                slice_limit = len(past_days)
+            else:
+                try:
+                    # A local calendar interval usually crosses one extra UTC
+                    # date at each endpoint (for example, Beijing midnight is
+                    # 16:00 UTC).  Leave one adapter slice of headroom so a
+                    # seven-slice ESPN limit can safely cover six local days.
+                    slice_limit = int(provider_limit) - 1
+                except (TypeError, ValueError):
+                    slice_limit = len(past_days)
+            slice_limit = max(1, min(slice_limit, MAX_AVAILABILITY_DAYS))
+            chunks = [
+                past_days[index : index + slice_limit]
+                for index in range(0, len(past_days), slice_limit)
+            ]
+
+            # One adapter-level operation is reserved per local day by the
+            # current ESPN implementation, while a gateway invocation also
+            # reserves its hand-off slot.  Disable retries here: an availability
+            # probe must not turn a calendar render into an unbounded retry fan-
+            # out.  Unknown days are safer than stale/guessed availability.
+            budget = RequestBudget(
+                self._now().replace(microsecond=0) + timedelta(seconds=8),
+                # Leave one gateway reservation for the primary and (in a
+                # hybrid profile) one deterministic fallback per chunk.  The
+                # adapter-level date slices are covered by the local-day count
+                # plus the two UTC boundary slices represented by each chunk.
+                max_provider_operations=max(4, len(past_days) + 2 * len(chunks) + 2),
+                max_retries_per_operation=0,
+                clock=self.clock,
+            )
+            for chunk in chunks:
+                chunk_start, chunk_end = chunk[0], chunk[-1]
+                first = local_date_range(chunk_start, timezone_name)
+                last = local_date_range(chunk_end, timezone_name)
+                date_range = DateRange(
+                    start_inclusive=first.start_inclusive,
+                    end_exclusive=last.end_exclusive,
+                )
+                try:
+                    result = await self.gateway.search_games(
+                        GameFilters(date_range=date_range),
+                        budget=budget,
+                    )
+                except Exception:
+                    # ProviderGateway normally converts adapter exceptions to a
+                    # typed ProviderResult.  Keep the projection defensive for
+                    # injected test providers and never expose exception text.
+                    had_unknown = True
+                    continue
+
+                error = getattr(result, "error", None)
+                raw_games = getattr(result, "data", None)
+                partial = bool(getattr(result, "partial", False))
+                if error is not None or not isinstance(raw_games, list):
+                    had_unknown = True
+                    continue
+
+                retrieved_at = getattr(result, "retrieved_at_utc", None)
+                if isinstance(retrieved_at, datetime):
+                    retrieved.append(retrieved_at)
+
+                had_success = True
+                valid_games = [game for game in raw_games if isinstance(game, Game)]
+                malformed_rows = len(valid_games) != len(raw_games)
+                games_by_day: dict[date, int] = {}
+                seen_game_ids: set[str] = set()
+                for game in valid_games:
+                    if game.game_id in seen_game_ids:
+                        continue
+                    seen_game_ids.add(game.game_id)
+                    game_day = game.start_utc.astimezone(zone).date()
+                    if game_day in chunk:
+                        games_by_day[game_day] = games_by_day.get(game_day, 0) + 1
+
+                # A known game is enough to mark a day available even when the
+                # chunk is partial.  Dates with no known game are only marked
+                # empty when the whole chunk completed successfully.
+                for day in chunk:
+                    if games_by_day.get(day, 0):
+                        statuses[day] = ("available", games_by_day[day])
+                    elif partial or malformed_rows:
+                        statuses[day] = ("unknown", None)
+                        had_unknown = True
+                    else:
+                        statuses[day] = ("empty", 0)
+
+        response_days = [
+            HighlightAvailabilityDay(
+                date=day.isoformat(),
+                status=statuses[day][0],
+                game_count=statuses[day][1],
+                is_future=day in future_days,
+            )
+            for day in requested_days
+        ]
+        if retrieved:
+            as_of = format_beijing(max(retrieved))
+        else:
+            as_of = None
+        if had_unknown:
+            evidence_state = EvidenceState.PARTIAL if had_success else EvidenceState.NONE
+        elif any(status == "available" for status, _count in statuses.values()):
+            evidence_state = EvidenceState.VERIFIED
+        else:
+            evidence_state = EvidenceState.NONE
+        return HighlightsAvailabilityResponse(
+            timezone=timezone_name,
+            from_date=start_day.isoformat(),
+            to_date=end_day.isoformat(),
+            days=response_days,
+            as_of_beijing=as_of,
+            evidence_state=evidence_state.value.lower(),
+        )
+
     @staticmethod
     def _public_game(game: Game) -> HighlightGame:
         return HighlightGame(
@@ -121,4 +305,10 @@ class HighlightsService:
         )
 
 
-__all__ = ["FutureHighlightsDateError", "HighlightsProviderError", "HighlightsService"]
+__all__ = [
+    "FutureHighlightsDateError",
+    "HighlightsAvailabilityRangeError",
+    "HighlightsProviderError",
+    "HighlightsService",
+    "MAX_AVAILABILITY_DAYS",
+]

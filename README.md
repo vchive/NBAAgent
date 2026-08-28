@@ -45,6 +45,7 @@ curl -fsS -X POST http://127.0.0.1:8000/api/v1/chat \
   -H 'content-type: application/json' \
   -d '{"message":"2025-26 总决赛 G4 谁得分最高？"}'
 curl -fsS 'http://127.0.0.1:8000/api/v1/highlights?date=2026-06-12&timezone=Asia/Shanghai'
+curl -fsS 'http://127.0.0.1:8000/api/v1/highlights/availability?from=2026-06-06&to=2026-06-13&timezone=Asia/Shanghai'
 ```
 
 运行测试：

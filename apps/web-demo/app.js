@@ -29,6 +29,16 @@
     highlightModes: $$("[data-highlight-mode]"),
     highlightDateLabel: $("#highlight-date-label"),
     highlightDate: $("#highlight-date"),
+    highlightDatePicker: $("#highlight-date-picker"),
+    highlightDateTrigger: $("#highlight-date-trigger"),
+    highlightDateValue: $("#highlight-date-value"),
+    highlightCalendar: $("#highlight-calendar"),
+    calendarPrev: $("#calendar-prev"),
+    calendarNext: $("#calendar-next"),
+    calendarMonth: $("#calendar-month"),
+    calendarGrid: $("#calendar-grid"),
+    calendarStatus: $("#calendar-status"),
+    calendarStatusText: $("#calendar-status-text"),
     highlightsEmpty: $("#highlights-empty"),
     promptList: $("#prompt-list"),
     chatLog: $("#chat-log"),
@@ -113,11 +123,21 @@
     retryCount: 0,
     highlightMode: "today",
     highlightDate: "2026-06-12",
+    historyDate: "2026-06-12",
     activeGame: null,
     activePbp: PBP,
     apiAvailable: false,
     apiProbeComplete: false,
     highlightRequest: 0,
+    // Availability is kept in the browser projection because the current
+    // highlights contract is intentionally date-scoped. Unknown API dates are
+    // never treated as empty; they remain disabled until verified.
+    highlightAvailability: new Map(),
+    calendarMonth: "2026-06",
+    calendarScanMonths: new Set(),
+    calendarScanRequests: new Map(),
+    calendarScanToken: 0,
+    calendarOpen: false,
   };
 
   // The static demo keeps one deterministic featured game offline.  The same
@@ -137,6 +157,53 @@
       status: "final",
       quarter_scores: { Q1: "27–24", Q2: "25–31", Q3: "28–31", Q4: "24–22" },
       pace: "98.4",
+    },
+    "2026-06-10": {
+      game_id: "2026-finals-g3",
+      date: "2026-06-10",
+      home_name: "雷霆",
+      home_abbreviation: "OKC",
+      away_name: "凯尔特人",
+      away_abbreviation: "BOS",
+      home_score: 101,
+      away_score: 112,
+      series_game_number: 3,
+      status: "final",
+    },
+    "2026-06-08": {
+      game_id: "2026-finals-g2",
+      date: "2026-06-08",
+      home_name: "雷霆",
+      home_abbreviation: "OKC",
+      away_name: "凯尔特人",
+      away_abbreviation: "BOS",
+      home_score: 107,
+      away_score: 99,
+      series_game_number: 2,
+      status: "final",
+    },
+    "2026-06-06": {
+      game_id: "2026-finals-g1",
+      date: "2026-06-06",
+      home_name: "凯尔特人",
+      home_abbreviation: "BOS",
+      away_name: "雷霆",
+      away_abbreviation: "OKC",
+      home_score: 118,
+      away_score: 110,
+      series_game_number: 1,
+      status: "final",
+    },
+    "2026-05-20": {
+      game_id: "2026-regular-bos-okc",
+      date: "2026-05-20",
+      home_name: "凯尔特人",
+      home_abbreviation: "BOS",
+      away_name: "雷霆",
+      away_abbreviation: "OKC",
+      home_score: 106,
+      away_score: 103,
+      status: "final",
     },
   };
 
@@ -381,6 +448,406 @@
     const values = Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
     return `${values.year}-${values.month}-${values.day}`;
   }
+
+  // -------------------------------------------------------------------------
+  // History date picker
+  // -------------------------------------------------------------------------
+  // Native <input type=date> controls cannot disable individual calendar days.
+  // The small calendar below keeps that input as a wire/accessibility fallback
+  // while rendering an explicit availability state for every visible day.
+  // Availability is conservative: an API date that has not been checked is
+  // shown as “待核验” and is disabled, never guessed to be an empty day.
+
+  const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+  function isIsoDate(value) {
+    if (!ISO_DATE_RE.test(String(value || ""))) return false;
+    const [year, month, day] = String(value).split("-").map(Number);
+    const parsed = new Date(Date.UTC(year, month - 1, day));
+    return parsed.getUTCFullYear() === year
+      && parsed.getUTCMonth() === month - 1
+      && parsed.getUTCDate() === day;
+  }
+
+  function monthKeyForDate(value) {
+    if (!isIsoDate(value)) return state.calendarMonth || "2026-06";
+    return String(value).slice(0, 7);
+  }
+
+  function monthParts(monthKey) {
+    const match = /^(\d{4})-(\d{2})$/.exec(String(monthKey || ""));
+    if (!match) return { year: 2026, month: 6 };
+    return { year: Number(match[1]), month: Number(match[2]) };
+  }
+
+  function normalizeMonthKey(monthKey) {
+    const { year, month } = monthParts(monthKey);
+    const normalized = new Date(Date.UTC(year, month - 1, 1));
+    return `${normalized.getUTCFullYear()}-${String(normalized.getUTCMonth() + 1).padStart(2, "0")}`;
+  }
+
+  function shiftMonth(monthKey, offset) {
+    const { year, month } = monthParts(monthKey);
+    const shifted = new Date(Date.UTC(year, month - 1 + Number(offset || 0), 1));
+    return `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, "0")}`;
+  }
+
+  function datesInMonth(monthKey) {
+    const { year, month } = monthParts(monthKey);
+    const first = new Date(Date.UTC(year, month - 1, 1));
+    const count = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    const leading = first.getUTCDay();
+    return [
+      ...Array.from({ length: leading }, () => null),
+      ...Array.from({ length: count }, (_item, index) => {
+        return `${year}-${String(month).padStart(2, "0")}-${String(index + 1).padStart(2, "0")}`;
+      }),
+    ];
+  }
+
+  function monthDateRange(monthKey) {
+    const { year, month } = monthParts(monthKey);
+    const from = `${year}-${String(month).padStart(2, "0")}-01`;
+    const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    const to = `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+    return { from, to };
+  }
+
+  function fixtureDateSet() {
+    return new Set(Object.keys(HIGHLIGHT_FIXTURES));
+  }
+
+  function seedFixtureAvailability() {
+    fixtureDateSet().forEach((dateValue) => {
+      state.highlightAvailability.set(dateValue, "available");
+    });
+  }
+
+  function availabilityForDate(dateValue) {
+    if (!isIsoDate(dateValue)) return "unknown";
+    if (dateValue > beijingDateString()) return "future";
+    const known = state.highlightAvailability.get(dateValue);
+    if (known) return known;
+    // The fixture snapshot is complete for offline mode. In API mode, leave
+    // unseen dates explicitly unknown until the calendar verifies them.
+    return state.apiAvailable ? "unknown" : "empty";
+  }
+
+  function recordHighlightAvailability(dateValue, hasGames, source = "api") {
+    if (!isIsoDate(dateValue)) return;
+    if (source === "fixture") {
+      state.highlightAvailability.set(dateValue, hasGames ? "available" : "empty");
+      return;
+    }
+    // API responses are authoritative, including an empty game list. Never
+    // turn transport/provider errors into an empty result.
+    state.highlightAvailability.set(dateValue, hasGames ? "available" : "empty");
+  }
+
+  function calendarStatusCopy() {
+    if (!state.apiAvailable) return "演示数据：灰色日期无比赛，不可选择";
+    const values = datesInMonth(state.calendarMonth)
+      .filter(Boolean)
+      .map((dateValue) => availabilityForDate(dateValue));
+    if (values.includes("loading")) return "正在核对本月赛事…";
+    if (values.includes("unknown") || values.includes("error")) {
+      return "尚未核验的日期暂不可选，核对完成后会自动开放";
+    }
+    return "灰色日期无比赛，不可选择";
+  }
+
+  function calendarDayLabel(dateValue, status) {
+    const [, month, day] = String(dateValue).split("-");
+    const suffix = {
+      available: "有比赛",
+      empty: "无比赛，不可选",
+      future: "未来日期，不可选",
+      loading: "正在核对",
+      unknown: "尚未核验",
+      error: "暂时无法核验",
+    }[status] || "不可选";
+    return `${Number(month)}月${Number(day)}日，${suffix}`;
+  }
+
+  function renderCalendar(monthKey = state.calendarMonth) {
+    if (!el.calendarGrid) return;
+    state.calendarMonth = normalizeMonthKey(monthKey);
+    const { year, month } = monthParts(state.calendarMonth);
+    if (el.calendarMonth) el.calendarMonth.textContent = `${year} 年 ${month} 月`;
+    el.calendarGrid.textContent = "";
+    const selected = state.highlightDate;
+    datesInMonth(state.calendarMonth).forEach((dateValue) => {
+      if (!dateValue) {
+        const spacer = document.createElement("span");
+        spacer.className = "calendar-day-spacer";
+        spacer.setAttribute("aria-hidden", "true");
+        el.calendarGrid.append(spacer);
+        return;
+      }
+      const day = document.createElement("button");
+      const status = availabilityForDate(dateValue);
+      day.type = "button";
+      day.className = `calendar-day calendar-day-${status}`;
+      day.dataset.date = dateValue;
+      day.dataset.availability = status;
+      day.setAttribute("role", "gridcell");
+      day.setAttribute("aria-label", calendarDayLabel(dateValue, status));
+      day.textContent = String(Number(dateValue.slice(-2)));
+      if (dateValue === selected) {
+        day.classList.add("selected");
+        day.setAttribute("aria-selected", "true");
+      } else {
+        day.setAttribute("aria-selected", "false");
+      }
+      if (dateValue === beijingDateString()) day.classList.add("today");
+      if (status !== "available") {
+        day.disabled = true;
+        day.setAttribute("aria-disabled", "true");
+      }
+      day.addEventListener("click", () => selectCalendarDate(dateValue));
+      el.calendarGrid.append(day);
+    });
+
+    const currentMonth = monthKeyForDate(beijingDateString());
+    if (el.calendarNext) {
+      const nextDisabled = state.calendarMonth >= currentMonth;
+      el.calendarNext.disabled = nextDisabled;
+      el.calendarNext.setAttribute("aria-disabled", nextDisabled ? "true" : "false");
+    }
+    if (el.calendarPrev) el.calendarPrev.disabled = false;
+    if (el.calendarStatusText) el.calendarStatusText.textContent = calendarStatusCopy();
+  }
+
+  function calendarScanIsCurrent(monthMarker, token) {
+    return state.calendarScanRequests.get(monthMarker) === token;
+  }
+
+  function renderCalendarIfVisible(monthMarker) {
+    if (state.calendarMonth === monthMarker) renderCalendar(monthMarker);
+  }
+
+  async function verifyCalendarDatesLegacy(monthMarker, candidates, token) {
+    if (typeof window.CourtsideApi?.highlights !== "function") return false;
+    let cursor = 0;
+    const verify = async () => {
+      while (cursor < candidates.length) {
+        const index = cursor;
+        cursor += 1;
+        try {
+          const payload = await window.CourtsideApi.highlights(candidates[index], "Asia/Shanghai");
+          if (!calendarScanIsCurrent(monthMarker, token)) return;
+          recordHighlightAvailability(candidates[index], Boolean(payload?.games?.length));
+        } catch (_error) {
+          if (!calendarScanIsCurrent(monthMarker, token)) return;
+          state.highlightAvailability.set(candidates[index], "error");
+        }
+        renderCalendarIfVisible(monthMarker);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(3, candidates.length) }, verify));
+    return true;
+  }
+
+  async function ensureCalendarAvailability(monthKey = state.calendarMonth, force = false) {
+    state.calendarMonth = normalizeMonthKey(monthKey);
+    const monthMarker = state.calendarMonth;
+    if (!state.apiAvailable || !window.CourtsideApi) {
+      datesInMonth(monthMarker).forEach((dateValue) => {
+        if (!dateValue) return;
+        if (!state.highlightAvailability.has(dateValue)) {
+          state.highlightAvailability.set(dateValue, fixtureDateSet().has(dateValue) ? "available" : "empty");
+        }
+      });
+      renderCalendar(monthMarker);
+      return;
+    }
+    if (!force && state.calendarScanMonths.has(monthMarker)) {
+      renderCalendarIfVisible(monthMarker);
+      return;
+    }
+    // Keep an in-flight request per month. Navigating to another month no
+    // longer invalidates this request, so returning to the month can reuse its
+    // result instead of getting stuck in a permanent loading state. A forced
+    // retry explicitly replaces the prior request for that month.
+    if (!force && state.calendarScanRequests.has(monthMarker)) {
+      renderCalendarIfVisible(monthMarker);
+      return;
+    }
+    if (force) {
+      state.calendarScanMonths.delete(monthMarker);
+      state.calendarScanRequests.delete(monthMarker);
+    }
+    const token = ++state.calendarScanToken;
+    state.calendarScanRequests.set(monthMarker, token);
+    const today = beijingDateString();
+    const visibleDates = datesInMonth(monthMarker).filter(Boolean);
+    const candidates = visibleDates.filter((dateValue) => {
+      if (dateValue > today) return false;
+      const status = state.highlightAvailability.get(dateValue);
+      return !status || status === "unknown" || status === "error" || (force && status === "loading");
+    });
+    if (!candidates.length) {
+      if (calendarScanIsCurrent(monthMarker, token)) {
+        state.calendarScanRequests.delete(monthMarker);
+        state.calendarScanMonths.add(monthMarker);
+        renderCalendarIfVisible(monthMarker);
+      }
+      return;
+    }
+    candidates.forEach((dateValue) => state.highlightAvailability.set(dateValue, "loading"));
+    renderCalendarIfVisible(monthMarker);
+    const range = monthDateRange(monthMarker);
+    let verified = false;
+    try {
+      // The bounded availability projection answers a whole calendar month in
+      // one provider pass. It also carries an explicit `unknown` state, so a
+      // timeout/partial response cannot be painted as a confirmed empty day.
+      if (typeof window.CourtsideApi.highlightsAvailability === "function") {
+        const payload = await window.CourtsideApi.highlightsAvailability(
+          range.from,
+          range.to,
+          "Asia/Shanghai",
+        );
+        if (!calendarScanIsCurrent(monthMarker, token)) return;
+        const returned = new Set();
+        (Array.isArray(payload?.days) ? payload.days : []).forEach((item) => {
+          if (!isIsoDate(item?.date) || !visibleDates.includes(item.date)) return;
+          returned.add(item.date);
+          if (item.is_future) {
+            state.highlightAvailability.set(item.date, "future");
+          } else if (["available", "empty", "unknown"].includes(item.status)) {
+            state.highlightAvailability.set(item.date, item.status);
+          } else {
+            state.highlightAvailability.set(item.date, "unknown");
+          }
+        });
+        // A malformed/incomplete successful response is not proof of no games.
+        candidates.forEach((dateValue) => {
+          if (!returned.has(dateValue) && dateValue <= today) {
+            state.highlightAvailability.set(dateValue, "unknown");
+          }
+        });
+        // Keep unknown days disabled, but allow a later calendar open to retry
+        // a partial provider response instead of caching uncertainty forever.
+        verified = !candidates.some((dateValue) => ["unknown", "error", "loading"]
+          .includes(state.highlightAvailability.get(dateValue)));
+      } else {
+        // Older API deployments may not have the range endpoint yet. Keep the
+        // conservative per-day fallback for compatibility, with a small
+        // concurrency cap to avoid a request storm.
+        await verifyCalendarDatesLegacy(monthMarker, candidates, token);
+        if (!calendarScanIsCurrent(monthMarker, token)) return;
+        verified = !candidates.some((dateValue) => ["unknown", "error", "loading"]
+          .includes(state.highlightAvailability.get(dateValue)));
+      }
+    } catch (error) {
+      if (!calendarScanIsCurrent(monthMarker, token)) return;
+      // A rolling deployment can serve the new static page from an older API
+      // image for a short period. If the range route is missing, retry through
+      // the established date-scoped endpoint; all other failures remain
+      // visibly distinct from a verified empty day.
+      if (error?.status === 404 && typeof window.CourtsideApi.highlights === "function") {
+        await verifyCalendarDatesLegacy(monthMarker, candidates, token);
+        if (!calendarScanIsCurrent(monthMarker, token)) return;
+        verified = !candidates.some((dateValue) => ["unknown", "error", "loading"]
+          .includes(state.highlightAvailability.get(dateValue)));
+      } else {
+        candidates.forEach((dateValue) => {
+          if (dateValue <= today) state.highlightAvailability.set(dateValue, "error");
+        });
+      }
+    }
+    if (!calendarScanIsCurrent(monthMarker, token)) return;
+    state.calendarScanRequests.delete(monthMarker);
+    if (verified) state.calendarScanMonths.add(monthMarker);
+    else state.calendarScanMonths.delete(monthMarker);
+    renderCalendarIfVisible(monthMarker);
+  }
+
+  function syncHighlightDatePicker(mode, dateValue) {
+    if (!el.highlightDatePicker) return;
+    const visible = mode === "history";
+    el.highlightDatePicker.hidden = !visible;
+    if (el.highlightDateLabel) el.highlightDateLabel.hidden = !visible;
+    if (mode === "history" && isIsoDate(dateValue)) state.historyDate = dateValue;
+    const safeDate = mode === "history"
+      ? (isIsoDate(dateValue) ? dateValue : state.historyDate)
+      : (state.historyDate || dateValue || state.highlightDate);
+    if (el.highlightDate) {
+      el.highlightDate.value = safeDate || "";
+      // The custom button is the visible control; retain the native input for
+      // browsers/users that disable script.
+      el.highlightDate.hidden = true;
+    }
+    if (el.highlightDateValue) el.highlightDateValue.textContent = formatShortDate(safeDate);
+    if (visible) {
+      state.calendarMonth = monthKeyForDate(safeDate);
+      renderCalendar(state.calendarMonth);
+      ensureCalendarAvailability(state.calendarMonth);
+    } else {
+      closeCalendar();
+    }
+  }
+
+  function openCalendar() {
+    if (!el.highlightCalendar || !el.highlightDateTrigger) return;
+    state.calendarOpen = true;
+    el.highlightCalendar.hidden = false;
+    el.highlightDateTrigger.setAttribute("aria-expanded", "true");
+    renderCalendar(state.calendarMonth);
+    // A partial or failed month remains non-selectable, but reopening the
+    // picker gives it an explicit retry path without re-fetching months that
+    // have already been verified as available/empty.
+    const needsRetry = datesInMonth(state.calendarMonth)
+      .filter(Boolean)
+      .some((dateValue) => ["unknown", "error"].includes(availabilityForDate(dateValue)));
+    ensureCalendarAvailability(state.calendarMonth, needsRetry);
+  }
+
+  function closeCalendar() {
+    state.calendarOpen = false;
+    if (el.highlightCalendar) el.highlightCalendar.hidden = true;
+    if (el.highlightDateTrigger) el.highlightDateTrigger.setAttribute("aria-expanded", "false");
+  }
+
+  function selectCalendarDate(dateValue) {
+    const status = availabilityForDate(dateValue);
+    if (status !== "available") {
+      showToast(status === "loading" || status === "unknown"
+        ? "正在核对该日期是否有比赛，请稍候"
+        : status === "error"
+          ? "该日期暂时无法核验，请稍后重试"
+          : status === "future"
+            ? "不能选择未来日期"
+            : "这一天没有比赛，暂不可选");
+      return;
+    }
+    selectHighlightDate(dateValue);
+    closeCalendar();
+  }
+
+  function bindCalendarDocumentEvents() {
+    document.addEventListener("click", (event) => {
+      if (!state.calendarOpen || !el.highlightDatePicker) return;
+      if (!el.highlightDatePicker.contains(event.target)) closeCalendar();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && state.calendarOpen) {
+        closeCalendar();
+        el.highlightDateTrigger?.focus();
+      }
+    });
+  }
+
+  // Small pure helpers are exposed for browser smoke tests and for future
+  // embedders that want to render the same calendar without the full chat UI.
+  window.CourtsideDateUtils = Object.freeze({
+    isIsoDate,
+    monthKeyForDate,
+    normalizeMonthKey,
+    shiftMonth,
+    datesInMonth,
+  });
 
   function createTextWithBold(text) {
     const fragment = document.createDocumentFragment();
@@ -1112,14 +1579,21 @@
       button.classList.toggle("active", active);
       button.setAttribute("aria-pressed", active ? "true" : "false");
     });
+    const todayButton = el.highlightModes.find((button) => button.dataset.highlightMode === "today");
+    const todayStatus = state.apiAvailable ? availabilityForDate(beijingDateString()) : "available";
+    if (todayButton) {
+      // Keep the mode switch reachable even on an off day: selecting “今日
+      // 赛事” should show the truthful empty state rather than trapping the
+      // user in history. Only individual calendar dates are non-selectable.
+      todayButton.disabled = false;
+      todayButton.classList.toggle("no-games", todayStatus === "empty");
+      todayButton.setAttribute("aria-disabled", "false");
+      if (todayStatus === "empty") todayButton.setAttribute("title", "今日没有比赛");
+      else if (["unknown", "loading", "error"].includes(todayStatus)) todayButton.setAttribute("title", "今日赛程尚未核验");
+      else todayButton.removeAttribute("title");
+    }
     const safeDate = dateValue || state.highlightDate || "";
-    if (el.highlightDate) {
-      el.highlightDate.value = safeDate;
-      el.highlightDate.hidden = mode !== "history";
-    }
-    if (el.highlightDateLabel) {
-      el.highlightDateLabel.hidden = mode !== "history";
-    }
+    syncHighlightDatePicker(mode, safeDate);
     if (el.highlightsTitle) {
       el.highlightsTitle.textContent = mode === "history" ? `历史回顾 · ${formatShortDate(safeDate)}` : "今日看点";
     }
@@ -1174,7 +1648,10 @@
     // Record the requested mode synchronously so an API probe finishing later
     // cannot overwrite a user's in-flight history selection.
     state.highlightMode = mode;
-    if (mode === "history" && selectedDate) state.highlightDate = selectedDate;
+    if (mode === "history" && selectedDate) {
+      state.highlightDate = selectedDate;
+      state.historyDate = selectedDate;
+    }
     if (state.apiAvailable && window.CourtsideApi) {
       try {
         const payload = await window.CourtsideApi.highlights(
@@ -1183,6 +1660,7 @@
         );
         if (requestNumber !== state.highlightRequest) return;
         const dateValue = payload?.date || selectedDate || beijingDateString();
+        recordHighlightAvailability(dateValue, Boolean(payload?.games?.length));
         renderHighlightProjection(payload?.games || [], mode, dateValue);
         if (!payload?.games?.length && mode === "history") showToast("该日期暂无比赛记录");
         return;
@@ -1196,6 +1674,12 @@
           // A future-date rejection must not leave the previously selected
           // game's card visible as if it belonged to the rejected/failed date.
           const message = publicError?.message || "日期赛事暂时不可用。";
+          if (mode === "history" && selectedDate) {
+            state.highlightAvailability.set(
+              selectedDate,
+              publicError?.code === "INVALID_PAYLOAD" ? "future" : "error",
+            );
+          }
           clearHighlightProjection(message);
           showToast(message);
           if (mode === "history" && el.highlightDate) {
@@ -1205,9 +1689,18 @@
         }
         setTransportLabel(false);
         state.apiAvailable = false;
+        // Drop in-flight/verified API availability when falling back to the
+        // deterministic preview. Otherwise a late live response could mix
+        // with fixture dates and make the calendar claim a stale state.
+        state.highlightAvailability.clear();
+        state.calendarScanMonths.clear();
+        state.calendarScanRequests.clear();
+        state.calendarScanToken += 1;
+        seedFixtureAvailability();
       }
     }
     const fixture = HIGHLIGHT_FIXTURES[fallbackDate];
+    recordHighlightAvailability(fallbackDate, Boolean(fixture), "fixture");
     renderHighlightProjection(fixture ? [fixture] : [], mode, fallbackDate);
     if (!fixture && mode === "history") showToast("该日期暂无比赛记录");
     if (state.apiProbeComplete && !state.apiAvailable) {
@@ -1218,12 +1711,12 @@
   function setHighlightsMode(mode) {
     const selectedDate = mode === "today"
       ? (state.apiAvailable ? beijingDateString() : "2026-06-12")
-      : (el.highlightDate?.value || state.highlightDate || "2026-06-12");
+      : (state.historyDate || el.highlightDate?.value || state.highlightDate || "2026-06-12");
     loadHighlights(mode, selectedDate);
   }
 
   function selectHighlightDate(value) {
-    if (!value) return;
+    if (!value || !isIsoDate(value)) return;
     const today = beijingDateString();
     if (value > today) {
       // Keep the prior date selected for a predictable retry, but clear the
@@ -1231,9 +1724,20 @@
       // Invalidate any older, still-pending highlights request so its response
       // cannot put the stale card back after this validation failure.
       state.highlightRequest += 1;
+      state.highlightAvailability.set(value, "future");
       clearHighlightProjection("未来日期不可查询。");
       showToast("不能选择未来日期");
       if (el.highlightDate) el.highlightDate.value = state.highlightDate;
+      renderCalendar(state.calendarMonth);
+      return;
+    }
+    const availability = availabilityForDate(value);
+    if (availability !== "available") {
+      showToast(availability === "unknown" || availability === "loading"
+        ? "正在核对该日期是否有比赛，请稍候"
+        : availability === "error"
+          ? "该日期暂时无法核验，请稍后重试"
+          : "这一天没有比赛，暂不可选");
       return;
     }
     loadHighlights("history", value);
@@ -1452,6 +1956,16 @@
     state.apiProbeComplete = true;
     setTransportLabel(available);
     if (available) {
+      // The offline preview may have marked unknown dates as empty. Once the
+      // API is reachable, discard every offline availability value (including
+      // fixture hints) and rebuild the visible month from authoritative API
+      // evidence; a fixture date must never suppress a live query.
+      state.highlightAvailability.clear();
+      state.calendarScanMonths.clear();
+      // Invalidate availability requests started by the offline/previous
+      // transport before rebuilding the calendar from the API response.
+      state.calendarScanRequests.clear();
+      state.calendarScanToken += 1;
       setConnection("ready", "API 就绪");
       // Replace the offline preview with the server's real local-day
       // projection as soon as the probe succeeds.  The fixture remains visible
@@ -1462,6 +1976,9 @@
       // the same race window.
       if (state.highlightMode === "today") {
         loadHighlights("today", beijingDateString());
+      } else {
+        loadHighlights("history", state.historyDate);
+        ensureCalendarAvailability(state.calendarMonth, true);
       }
     }
   }
@@ -1497,9 +2014,28 @@
     });
     el.newSession.addEventListener("click", newSession);
     el.highlightModes.forEach((button) => {
-      button.addEventListener("click", () => setHighlightsMode(button.dataset.highlightMode || "today"));
+      button.addEventListener("click", () => {
+        if (button.disabled) return;
+        setHighlightsMode(button.dataset.highlightMode || "today");
+      });
     });
     el.highlightDate?.addEventListener("change", () => selectHighlightDate(el.highlightDate.value));
+    el.highlightDateTrigger?.addEventListener("click", () => {
+      if (state.calendarOpen) closeCalendar();
+      else openCalendar();
+    });
+    el.calendarPrev?.addEventListener("click", () => {
+      state.calendarMonth = shiftMonth(state.calendarMonth, -1);
+      renderCalendar(state.calendarMonth);
+      ensureCalendarAvailability(state.calendarMonth);
+    });
+    el.calendarNext?.addEventListener("click", () => {
+      const next = shiftMonth(state.calendarMonth, 1);
+      if (next > monthKeyForDate(beijingDateString())) return;
+      state.calendarMonth = next;
+      renderCalendar(state.calendarMonth);
+      ensureCalendarAvailability(state.calendarMonth);
+    });
     el.featuredGame.addEventListener("click", () => {
       if (!state.activeGame) return;
       renderPbp("Q4");
@@ -1543,6 +2079,7 @@
     el.replayPlay.addEventListener("click", toggleReplay);
 
     window.addEventListener("beforeunload", () => stopReplay());
+    bindCalendarDocumentEvents();
   }
 
   function init() {
@@ -1550,7 +2087,12 @@
     window.setInterval(updateClock, 1000);
     updateCharCount();
     autoGrowInput();
-    if (el.highlightDate) el.highlightDate.max = beijingDateString();
+    if (el.highlightDate) {
+      el.highlightDate.max = beijingDateString();
+      el.highlightDate.hidden = true;
+    }
+    seedFixtureAvailability();
+    state.calendarMonth = monthKeyForDate(el.highlightDate?.value || state.highlightDate);
     renderPbp("Q4");
     setTransportLabel(false);
     renderHighlightProjection([HIGHLIGHT_FIXTURES["2026-06-12"]], "today", "2026-06-12");
