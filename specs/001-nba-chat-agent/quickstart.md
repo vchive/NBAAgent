@@ -36,13 +36,17 @@ set -a; . ./.env; set +a    # Settings 读取进程环境变量，不会自动�
 默认配置是 `PUBLIC_DATA_MODE=fixture`、`LLM_MODE=mock`、`RUNTIME_PROFILE=template` 和
 `HERMES_LITE_MODE=off`，所有本地示例均可离线完成。
 
-## 3. Start the API (fixture mode)
+## 3. Start the single-port app (fixture mode)
 
 在已激活虚拟环境的终端运行：
 
 ```bash
-uvicorn apps.api.src.main:app --reload --port 8000
+uvicorn apps.api.src.main:app --host 0.0.0.0 --port 8000
 ```
+
+仓库中的 FastAPI 应用会在同一端口托管 `apps/web-demo`。因此部署机上直接访问
+`http://<服务器IP>:8000/` 即可打开完整 UI；API 仍位于 `/api/...`。开发时若需要热重载，
+可自行加上 `--reload`，但公开访问应使用上面的非 reload 命令。
 
 API 提供：
 
@@ -51,9 +55,9 @@ API 提供：
 - `POST /api/v1/chat/stream`：使用 `fetch` + `ReadableStream` 的 POST-SSE；
 - `GET /api/v1/highlights?date=YYYY-MM-DD&timezone=Asia/Shanghai`：左栏赛事焦点投影。
 
-## 4. Start the Web Demo
+## 4. Optional standalone Web Demo
 
-另开终端（无需 Node 或 npm）：
+如需单独调试静态页面，仍可另开终端（无需 Node 或 npm）：
 
 ```bash
 python3 -m http.server 4173 --directory apps/web-demo
@@ -75,12 +79,8 @@ python3 -m http.server 4173 --directory apps/web-demo
 docker compose up --build
 ```
 
-Compose 会以非 root 用户启动 fixture API，映射 `http://127.0.0.1:8000`，并通过
-`/healthz` 做容器健康检查。另开终端启动静态 Demo：
-
-```bash
-python3 -m http.server 4173 --directory apps/web-demo
-```
+Compose 会以非 root 用户启动 fixture API 和同源 Web Demo，映射
+`http://<服务器IP>:8000/`，并通过 `/healthz` 做容器健康检查。
 
 停止服务：`docker compose down`。联网数据和 Hermes sidecar 仍需显式配置，不会被镜像
 默认值悄悄启用。

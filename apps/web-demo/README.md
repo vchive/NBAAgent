@@ -3,6 +3,9 @@
 这是一个零依赖的赛事转播风格前端（纯 HTML/CSS/JavaScript），包含比赛 HUD、聊天流式
 状态、事实卡片、表格和逐回合回放。它有两个传输模式：
 
+生产/演示部署时，FastAPI 会在 `:8000` 同源托管本目录；直接打开
+`http://<服务器IP>:8000/` 即可同时使用 UI 和 Agent API。
+
 - API 可用时，`api-client.js` 探测 `/healthz`，聊天走 `POST /api/v1/chat/stream`，左栏
   赛事焦点走 `GET /api/v1/highlights`；
 - API 不可用时，自动切换到内置 fixture，仍可完整演示交互，不需要 Node、构建工具、外网

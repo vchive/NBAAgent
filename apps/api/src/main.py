@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -9,6 +10,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from apps.api.src.api.highlights_routes import router as highlights_router
 from apps.api.src.api.http_routes import router as http_router
@@ -164,6 +166,16 @@ def create_app(*, settings: Settings | None = None, usecase: ChatUseCase | None 
         )
         _set_security_headers(response)
         return response
+
+    # Serve the zero-build web demo from the same origin when the repository
+    # contains it.  This gives a deployment a single ``IP:port`` entry point:
+    # API routes are registered above and therefore keep precedence, while
+    # ``StaticFiles(html=True)`` handles ``/`` and the demo's CSS/JS assets.
+    # The conditional keeps the API package usable when installed without the
+    # optional web-demo directory (for example, as a slim API-only wheel).
+    web_demo_dir = Path(__file__).resolve().parents[2] / "web-demo"
+    if web_demo_dir.is_dir():
+        app.mount("/", StaticFiles(directory=web_demo_dir, html=True), name="web-demo")
 
     return app
 

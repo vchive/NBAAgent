@@ -10,20 +10,22 @@ Demo、契约与单元测试均可在本地运行。最终交付 gates 仍待完
 FastAPI：服务可用时消费真实 POST-SSE 和 highlights 接口；服务不可用时自动回退到内置
 fixture，因此交互演示不依赖外网或凭据。当前回放是文字 PBP 定位，不是视频播放。
 
-本地最小启动方式：
+单端口启动方式（部署机和局域网访问推荐）：
 
 ```bash
 cp .env.example .env  # 4173 Web Demo 跨源调用 API 时启用本地 CORS；不要提交 .env
 set -a; . ./.env; set +a  # Settings 读取进程环境变量，不会自动解析 .env 文件
 python3 -m pip install -e '.[dev]'
-uvicorn apps.api.src.main:app --reload --port 8000
-# 另开终端
-python3 -m http.server 4173 --directory apps/web-demo
+uvicorn apps.api.src.main:app --host 0.0.0.0 --port 8000
 ```
 
-浏览器访问 `http://127.0.0.1:4173`。默认 API 使用 fixture/mock/template；将
+浏览器访问 `http://<服务器IP>:8000/`。FastAPI 会从同一端口托管 UI、聊天和 highlights，默认使用
+fixture/mock/template；将
 `PUBLIC_DATA_MODE` 改为 `live` 或 `hybrid` 可启用 allow-list ESPN 适配器（详见
 [quickstart](../specs/001-nba-chat-agent/quickstart.md)）。
+
+需要单独调试静态页面时，仍可运行 `python3 -m http.server 4173 --directory apps/web-demo`；
+此时 API 必须额外运行在 8000，并配置相应的 `ALLOWED_ORIGINS`。
 
 ## 1. 目标与边界
 

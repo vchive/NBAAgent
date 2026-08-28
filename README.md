@@ -7,9 +7,9 @@ Driven Development）流程推进。
 
 已完成需求规格、研究记录、HLD、LLD、数据模型、接口契约和验收指南，并打通了默认
 fixture/mock 模式的 FastAPI Agent：同步聊天、POST SSE、会话隔离、事实核验、PBP/系列赛
-确定性推导、安全短路、重试/缓存和“赛事焦点/历史回顾”日期投影均可离线运行。fixture
-MVP gate 已通过本地可运行检查；最终交付 gates 仍待完成（详见“下一步”）。ESPN 与
-Hermes-lite 保留为可替换适配器，默认关闭，不需要任何凭据。
+确定性推导、安全短路、重试/缓存和“赛事焦点/历史回顾”日期投影均可离线运行。FastAPI
+在仓库包含 Web Demo 时会从同一端口托管 UI，因此可以直接通过一个 `IP:端口` 访问完整演示。
+ESPN 与 Hermes-lite 保留为可替换适配器，默认关闭，不需要任何凭据。
 
 启动 API：
 
@@ -18,8 +18,11 @@ python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e '.[dev]'
 cp .env.example .env  # 可选；不要提交 .env
-uvicorn apps.api.src.main:app --reload --port 8000
+uvicorn apps.api.src.main:app --host 0.0.0.0 --port 8000
 ```
+
+启动后打开 `http://<服务器IP>:8000/` 即可看到 UI；API 和 UI 使用同源地址，不需要额外
+启动 4173 静态服务器。若只想单独预览静态文件，仍可使用下方的 Web Demo 命令。
 
 探活和示例请求：
 
@@ -42,6 +45,8 @@ python3 -m pytest -q
 ```bash
 docker compose up --build
 ```
+
+Compose 默认将完整应用暴露在 `http://<服务器IP>:8000/`。
 
 评测 CLI：
 
