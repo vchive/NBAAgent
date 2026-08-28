@@ -24,6 +24,11 @@ fixture/mock/template；将
 `PUBLIC_DATA_MODE` 改为 `live` 或 `hybrid` 可启用 allow-list ESPN 适配器（详见
 [quickstart](../specs/001-nba-chat-agent/quickstart.md)）。
 
+Hermes / BYOK 需要单独说明：当前交付使用 `HERMES_LITE_MODE=off`、`LLM_MODE=mock`，
+`HermesRuntimeAdapter` 仅作为受限 seam 和模板回退，并没有真实模型出站调用。因此本次
+部署没有模型 Key；后续接入真实 Hermes sidecar 时，Key 应只注入 sidecar secret，API
+进程只连接受限的 loopback/Unix socket，不能把 Key 放进仓库、镜像或日志。
+
 需要单独调试静态页面时，仍可运行 `python3 -m http.server 4173 --directory apps/web-demo`；
 此时 API 必须额外运行在 8000，并配置相应的 `ALLOWED_ORIGINS`。
 

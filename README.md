@@ -11,6 +11,12 @@ fixture/mock 模式的 FastAPI Agent：同步聊天、POST SSE、会话隔离、
 在仓库包含 Web Demo 时会从同一端口托管 UI，因此可以直接通过一个 `IP:端口` 访问完整演示。
 ESPN 与 Hermes-lite 保留为可替换适配器，默认关闭，不需要任何凭据。
 
+> **Hermes / BYOK 状态**：当前部署不是完整 Hermes Agent 运行实例，而是 fixture-first 的
+> `template` 模式；`HERMES_LITE_MODE=off`、`LLM_MODE=mock`，因此没有读取或配置模型 API Key。
+> `HermesRuntimeAdapter` 目前是受限 seam/mock fallback，设置一个 Key 本身不会把它变成真实
+> 模型调用。后续接入真实 Hermes sidecar 时，模型供应商、模型名、Base URL 和 API Key 需要
+> 单独配置；Key 应只放在 sidecar 的 secret/environment 中，不能提交到仓库或贴在聊天里。
+
 启动 API：
 
 ```bash

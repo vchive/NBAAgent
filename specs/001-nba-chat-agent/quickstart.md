@@ -36,6 +36,13 @@ set -a; . ./.env; set +a    # Settings 读取进程环境变量，不会自动�
 默认配置是 `PUBLIC_DATA_MODE=fixture`、`LLM_MODE=mock`、`RUNTIME_PROFILE=template` 和
 `HERMES_LITE_MODE=off`，所有本地示例均可离线完成。
 
+> **BYOK 说明**：这份部署配置没有模型 Key。当前仓库的 `HermesRuntimeAdapter` 是受限
+> seam/mock fallback，尚未实现真实 Hermes sidecar 的模型请求；因此仅设置某个 API Key
+> 不会启用真实模型。接入时需要先确定模型供应商（例如 OpenAI-compatible、DeepSeek 或
+> OpenRouter）、模型名和 Base URL，再把 Key 注入 Hermes sidecar 的 secret/environment。
+> 不要把 Key 写入 `.env.example`、Docker 镜像、Git 或聊天消息。生产 API 只应持有受限的
+> `HERMES_LITE_ENDPOINT`，模型供应商凭据留在 sidecar 内。
+
 ## 3. Start the single-port app (fixture mode)
 
 在已激活虚拟环境的终端运行：
@@ -185,6 +192,18 @@ fixture fallback；权威空结果不会被旧 fixture 覆盖。
 `HermesRuntimeAdapter` 目前是受限 runtime seam 和本地 fallback，`embedded_spike` 只适合
 fixture 验证；正式 sidecar、部署、容量和外部 URL 探活均未完成，不能把 `sidecar` 配置当作
 已上线模型服务。
+
+启用真实 BYOK 前的最小配置清单（示意，不会被当前 MVP 自动读取）：
+
+```text
+模型供应商 / OpenAI-compatible Base URL
+模型名称
+Hermes sidecar 的 API Key secret
+API → sidecar 的 loopback/Unix socket 地址
+```
+
+完成 sidecar 实现后，才将 API 的 `RUNTIME_PROFILE` 切换为 `hybrid`/`hermes`，并先验证
+`/readyz`、超时回退和 Key 不出现在日志中的约束。
 
 ## 10. Delivery checklist
 
