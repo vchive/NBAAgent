@@ -1,0 +1,18 @@
+# Public handoff profile: attempt current public data first and retain the
+# deterministic fixture only as a typed upstream-failure fallback.
+# Keep this override separate from the offline base so local development stays
+# reproducible and never contacts an external provider by accident.
+services:
+  nba-agent:
+    environment:
+      APP_ENV: public_demo
+      PUBLIC_DATA_MODE: hybrid
+      # Empty means the service clock drives today's Beijing projection.  The
+      # fixture-only base continues to use its fixed demo date.
+      HIGHLIGHTS_DEMO_DATE: ""
+      AUTH_REQUIRED: "true"
+      APP_PASSWORD_FILE: /run/secrets/app_password
+      AUTH_COOKIE_SECURE: "false"
+      # Same-origin access does not require CORS, but retaining the explicit
+      # allow-list makes a separately hosted review page safe as well.
+      ALLOWED_ORIGINS: http://115.190.174.39:8000

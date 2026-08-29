@@ -1052,33 +1052,16 @@ class ChatUseCase:
 
         try:
             guarded_candidate = self.output_guard.validate(make_candidate(model_text), facts)
-        except (OutputGuardError, ValueError, TypeError) as exc:
-            # Preserve a useful qualitative analysis when the only guard
-            # violation is an untraceable number.  The sanitizer removes just
-            # those tokens (dates, clocks and list markers retain their
-            # structural exceptions), then the complete guard runs again.
-            reasons = getattr(exc, "reasons", ())
-            if "untraceable_number" not in reasons:
-                telemetry.fallback_reason = "model_output_guard"
-                telemetry.composition_mode = "fallback"
-                telemetry.composition_status = "fallback"
-                return base
-            redacted_text = OutputGuard.redact_untraceable_numbers(model_text, facts)
-            if redacted_text == model_text:
-                telemetry.fallback_reason = "model_output_guard"
-                telemetry.composition_mode = "fallback"
-                telemetry.composition_status = "fallback"
-                return base
-            try:
-                guarded_candidate = self.output_guard.validate(
-                    make_candidate(redacted_text), facts
-                )
-                telemetry.fallback_reason = "model_numeric_redaction"
-            except (OutputGuardError, ValueError, TypeError):
-                telemetry.fallback_reason = "model_output_guard"
-                telemetry.composition_mode = "fallback"
-                telemetry.composition_status = "fallback"
-                return base
+        except (OutputGuardError, ValueError, TypeError):
+            # Never replace an untraceable value with a vague placeholder such
+            # as “若干”.  That still looks like a factual claim to a viewer and
+            # can hide a model hallucination.  The deterministic base already
+            # contains every verified fact, so any output-guard violation gets
+            # a clean, truthful fallback.
+            telemetry.fallback_reason = "model_output_guard"
+            telemetry.composition_mode = "fallback"
+            telemetry.composition_status = "fallback"
+            return base
         telemetry.composition_mode = "model"
         telemetry.composition_status = "used"
         return guarded_candidate

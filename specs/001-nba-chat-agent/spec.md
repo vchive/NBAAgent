@@ -2,7 +2,7 @@
 
 **Feature Branch**: `001-nba-chat-agent`
 **Created**: 2026-08-26
-**Status**: Fixture MVP implemented; final online delivery pending
+**Status**: 可交付版本已实现并完成公网 hybrid 验证
 **Input**: User description: “根据 PDF 把需求先明确拆分拆细”
 
 ## Overview and source of truth

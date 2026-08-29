@@ -2,7 +2,7 @@
 
 **Feature**: [spec.md](spec.md)
 **HLD**: [hld.md](hld.md)
-**Status**: Fixture MVP implemented; final online delivery pending
+**Status**: 可交付版本已实现并完成公网 hybrid 验证
 **Date**: 2026-08-26
 **Revision**: v0.2 — 增加 Hermes-lite 适配器、准入预算和可执行状态/失败契约
 

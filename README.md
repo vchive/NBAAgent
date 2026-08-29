@@ -3,7 +3,7 @@
 面向中文球迷的 NBA Chat Agent 笔试题项目，按 GitHub SpecKit 的 SDD（Specification-
 Driven Development）流程推进。
 
-## 当前阶段：fixture-first Agent 垂直切片（fixture MVP gate passed；final delivery gates pending）
+## 当前阶段：可交付 Agent（fixture 默认、public hybrid 可部署）
 
 已完成需求规格、研究记录、HLD、LLD、数据模型、接口契约和验收指南，并打通了默认
 fixture/mock 模式的 FastAPI Agent：同步聊天、POST SSE、会话隔离、事实核验、PBP/系列赛
@@ -52,6 +52,14 @@ curl -fsS 'http://127.0.0.1:8000/api/v1/highlights/availability?from=2026-06-06&
 
 ```bash
 python3 -m pytest -q
+```
+
+浏览器验收（Node.js 20+，首次运行需下载 Chromium）：
+
+```bash
+npm ci
+npx playwright install --with-deps chromium
+npm run e2e
 ```
 
 可选的容器启动（本地 fixture，不启用登录）：
@@ -125,6 +133,7 @@ python3 -m http.server 4173 --directory apps/web-demo
 - [本地验收指南](specs/001-nba-chat-agent/quickstart.md)
 - [SiliconFlow BYOK 配置指南](docs/byok.md)
 - [方案说明源文档](docs/solution.md)
+- [方案说明 PDF](docs/solution.pdf)
 
 ## 开发流程
 
@@ -135,8 +144,9 @@ constitution → specify → clarify（如需要）→ plan/HLD/LLD → tasks �
 SpecKit 项目治理原则位于 [.specify/memory/constitution.md](.specify/memory/constitution.md)。
 所有提交使用仓库主人 `vchive` 的 Git 身份。
 
-## 下一步
+## 交付 profile
 
-后续按 [`specs/001-nba-chat-agent/tasks.md`](specs/001-nba-chat-agent/tasks.md) 继续补齐
-正式隔离 Hermes sidecar、Playwright、公网部署验收和方案 PDF；fixture 模式始终是本地可复现
-的默认路径。
+方案说明 PDF 已生成在 [`docs/solution.pdf`](docs/solution.pdf)。本地默认仍是 fixture/mock，
+公网交付使用 `make deploy`（hybrid 公开数据 + 访问密码）；如需启用 SiliconFlow 分析，再使用
+`make deploy-live`。正式隔离 Hermes sidecar 仍是后续可替换部署形态，当前 embedded Spike 只用于
+面试演示和受限模型链路验证。

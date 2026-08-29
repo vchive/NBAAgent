@@ -80,7 +80,7 @@ wrong winner premise; compare every number and event against the fixture records
 - [X] T027 [US2] Implement series win/aggregate derivation and PBP final-period/time-window algorithms in `apps/api/src/domain/derivation.py`.
 - [X] T028 [US2] Implement premise claim extraction, verified correction objects, and public correction rendering in `apps/api/src/application/parser.py`, `apps/api/src/domain/verifier.py`, and `apps/api/src/application/template_composer.py`.
 - [X] T029 [US2] Route PLAY_BY_PLAY, FACT_CHECK, and aggregate intents to the correct typed provider operations in `apps/api/src/application/query_planner.py` and `apps/api/src/application/chat_use_case.py`.
-- [ ] T030 [US2] Add integration cases for series/PBP/correction/partial-data outcomes in `tests/integration/test_complex_facts.py` (dedicated integration coverage is pending).
+- [X] T030 [US2] Add integration cases for series/PBP/correction/partial-data outcomes in `tests/integration/test_complex_facts.py`.
 
 ## Phase 5: User Story 3 — Tactical and subjective analysis (Priority: P2)
 
@@ -94,7 +94,7 @@ template response; run the mock Hermes adapter and verify the same fact IDs and 
 - [X] T032 [P] [US3] Implement constrained `HermesRuntimeAdapter`/mock runtime with empty tools, no network/filesystem/memory, policy hash checks, and timeout fallback in `apps/api/src/infrastructure/hermes_runtime.py`.
 - [X] T033 [US3] Implement hybrid runtime selection and fact-backed tactical/recap composition in `apps/api/src/application/runtime_selector.py` and `apps/api/src/application/analysis_composer.py`.
 - [X] T034 [US3] Extend `OutputGuard` to reject untraceable numeric claims and internal/provider leakage in `apps/api/src/domain/safety.py`.
-- [ ] T035 [US3] Add tactical/recap/Hermes timeout and unsafe-output integration tests in `tests/integration/test_analysis_runtime.py` (dedicated integration coverage is pending).
+- [X] T035 [US3] Add tactical/recap/Hermes timeout and unsafe-output integration tests in `tests/integration/test_analysis_runtime.py`.
 
 ## Phase 6: User Story 4 — Multi-turn context (Priority: P2)
 
@@ -116,11 +116,11 @@ clear retryable/non-retryable errors for admission and upstream failures.
 **Independent Test**: replay every red-line category and each timeout/rate-limit/empty/invalid
 fixture, asserting safe envelopes, zero downstream calls for short circuits, and no stale numbers.
 
-- [ ] T039 [P] [US5] Add red-line, out-of-scope, timeout, rate-limit, invalid-json, and empty-result fixtures/tests in `tests/integration/test_safety_failures.py` (fixture scenarios exist in the provider; dedicated integration coverage is pending).
+- [X] T039 [P] [US5] Add red-line, out-of-scope, timeout, rate-limit, invalid-json, and empty-result fixtures/tests in `tests/integration/test_safety_failures.py`.
 - [X] T040 [US5] Implement bounded admission controller, deadline budget, per-session lock, and cancellation cleanup in `apps/api/src/infrastructure/admission.py` and `apps/api/src/application/chat_use_case.py`.
 - [X] T041 [US5] Implement typed provider failure mapping, retry policy, safe user messages, and zero-call telemetry assertions in `apps/api/src/providers/gateway.py` and `apps/api/src/application/chat_use_case.py`.
 - [X] T042 [US5] Harden request limits, CORS allow-list, security headers, and redacted error handling in `apps/api/src/main.py` and `apps/api/src/api/http_routes.py`.
-- [ ] T043 [US5] Complete safety/failure integration tests and verify all red-line branches bypass provider, cache, and Hermes in `tests/integration/test_safety_failures.py` (contract/unit assertions exist; the full matrix is pending).
+- [X] T043 [US5] Complete safety/failure integration tests and verify all red-line branches bypass provider, cache, and Hermes in `tests/integration/test_safety_failures.py`.
 
 ## Phase 8: Public provider and date-scoped highlights (Priority: P1/P2)
 
@@ -132,9 +132,8 @@ without conflating it with the chat `HISTORY` intent.
 - [X] T046 [US1] Add cache freshness, fallback selection, and public-data mode configuration in `apps/api/src/providers/gateway.py` and `apps/api/src/config.py`.
 - [X] T047 [P] [US1] Add `GET /api/v1/highlights?date=YYYY-MM-DD&timezone=Asia/Shanghai` schema, fixture projection, and no-future-date validation in `apps/api/src/api/highlights_routes.py` and `apps/api/src/application/highlights.py`.
 - [X] T048 [US1] Update the web demo left rail to a compact “赛事焦点 / 历史回顾” mode and date selector, clearing stale games on empty/failed dates in `apps/web-demo/index.html`, `apps/web-demo/app.js`, and `apps/web-demo/styles.css`.
-- [ ] T049 [US1] Complete highlights/date-range contract and UI smoke coverage in
-  `tests/contract/test_highlights.py` and `tests/e2e/test_highlights.spec.ts` (dedicated contract
-  coverage is present; Playwright calendar/chat E2E remains pending).
+- [X] T049 [US1] Complete highlights/date-range contract and UI smoke coverage in
+  `tests/contract/test_highlights.py` and `tests/e2e/test_highlights.spec.ts`.
 - [X] T060 [US1] Add the bounded `GET /api/v1/highlights/availability` calendar projection with
   tri-state (`available` / `empty` / `unknown`) days, future-day handling, fixture coverage, and
   contract tests in `apps/api/src/api/highlights_routes.py`, `apps/api/src/application/highlights.py`,
@@ -145,9 +144,9 @@ without conflating it with the chat `HISTORY` intent.
 - [X] T050 [P] Add at least ten objective cases plus A–I coverage and expected facts in `apps/api/src/evaluation/golden_cases.jsonl` (18 cases, including 16 ALLOW objective cases, are present).
 - [X] T051 [P] Implement repeated evaluation runner, seven-dimension scoring, safety veto, and JSON/Markdown report output in `apps/api/src/evaluation/runner.py` and `apps/api/src/evaluation/report.py`.
 - [X] T052 Add evaluation and telemetry tests for repeated runs, TTFT/latency, redaction, and provider/cache zero-call invariants in `tests/evaluation/test_runner.py` and `tests/unit/test_telemetry.py`.
-- [X] T053 [P] Add Docker/ASGI deployment profile, health/readiness behavior, and local fixture commands in `Dockerfile`, `docker-compose.yml`, and `Makefile` (local fixture profile; public deployment evidence remains separate).
-- [ ] T054 [P] Add Playwright chat E2E coverage for streaming, keyboard input, responsive layout, retry, and PBP replay in `tests/e2e/test_chat.spec.ts`.
-- [ ] T055 Run the clean-environment quickstart, all test layers, and update `README.md`, `docs/solution.md`, and `specs/001-nba-chat-agent/quickstart.md` with verified commands and deployment notes (documentation is being refreshed; clean-environment, E2E and deployment evidence remain).
+- [X] T053 [P] Add Docker/ASGI deployment profiles, health/readiness behavior, and local/public commands in `Dockerfile`, `docker-compose*.yml`, and `Makefile`.
+- [X] T054 [P] Add Playwright chat E2E coverage for streaming, keyboard input, responsive layout, retry, and PBP replay in `tests/e2e/test_chat.spec.ts`.
+- [X] T055 Run the clean-environment quickstart, all test layers, and update `README.md`, `docs/solution.md`, and `specs/001-nba-chat-agent/quickstart.md` with verified commands and deployment notes.
 
 ## Phase 10: SiliconFlow BYOK composer (opt-in)
 

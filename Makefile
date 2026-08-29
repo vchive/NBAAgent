@@ -1,13 +1,13 @@
-.PHONY: install test lint api demo eval docker-build docker-up configure-siliconflow-key configure-app-password docker-up-auth docker-up-silicon docker-down deploy deploy-status
+.PHONY: install test lint api demo eval solution-pdf docker-build docker-up configure-siliconflow-key configure-app-password docker-up-auth docker-up-silicon docker-down deploy deploy-live deploy-status
 
 install:
-	python -m pip install -e '.[dev]'
+	python3 -m pip install -e '.[dev]'
 
 test:
-	python -m pytest
+	python3 -m pytest
 
 lint:
-	python -m ruff check apps/api tests
+	python3 -m ruff check apps/api tests
 
 api:
 	uvicorn apps.api.src.main:app --reload --port 8000
@@ -16,7 +16,10 @@ demo:
 	python3 -m http.server 4173 --directory apps/web-demo
 
 eval:
-	python -m apps.api.src.evaluation.cli --repeat 3
+	python3 -m apps.api.src.evaluation.cli --repeat 3
+
+solution-pdf:
+	python3 scripts/build-solution-pdf.py
 
 docker-build:
 	docker build -t nba-agent:fixture .
@@ -44,7 +47,12 @@ docker-down:
 
 deploy:
 	@test -s secrets/app_password || { echo "缺少 secrets/app_password；先运行 make configure-app-password" >&2; exit 1; }
-	docker compose -f docker-compose.yml -f docker-compose.auth.yml up -d --build
+	docker compose -f docker-compose.yml -f docker-compose.public.yml -f docker-compose.auth.yml up -d --build --force-recreate
+
+deploy-live:
+	@test -s secrets/app_password || { echo "缺少 secrets/app_password；先运行 make configure-app-password" >&2; exit 1; }
+	@test -s secrets/siliconflow_api_key || { echo "缺少 secrets/siliconflow_api_key；先运行 make configure-siliconflow-key" >&2; exit 1; }
+	docker compose -f docker-compose.yml -f docker-compose.public.yml -f docker-compose.auth.yml -f docker-compose.siliconflow.yml up -d --build --force-recreate
 
 deploy-status:
-	docker compose -f docker-compose.yml -f docker-compose.auth.yml ps
+	docker compose -f docker-compose.yml -f docker-compose.public.yml -f docker-compose.auth.yml ps

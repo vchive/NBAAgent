@@ -2,9 +2,10 @@
 
 **对应需求**：[spec.md](../specs/001-nba-chat-agent/spec.md)
 **详细设计**：[HLD](../specs/001-nba-chat-agent/hld.md) · [LLD](../specs/001-nba-chat-agent/lld.md)
-**状态**：fixture MVP gate 已通过；fixture-first Agent 垂直切片、API、离线/在线自适应 UI
-Demo、契约与单元测试均可在本地运行。当前已提供单端口 Docker/Compose 部署；正式公网
-探活仍取决于云安全组/EIP 入站规则、Playwright 和方案 PDF 尚待完成。
+**导出 PDF**：[solution.pdf](solution.pdf)
+**状态**：可交付版本。fixture-first Agent 垂直切片、API、离线/在线自适应 UI Demo、
+契约/集成测试和方案 PDF 均已提交。公网 profile 使用 hybrid 公开数据并保留 fixture fallback；
+公网端口仍需由部署机配置云安全组/EIP 入站规则。
 
 可运行的赛事转播风格 UI 位于 [`apps/web-demo`](../apps/web-demo/)。页面启动时会探测
 FastAPI：服务可用时消费真实 POST-SSE 和 highlights 接口；服务不可用时自动回退到内置
@@ -24,7 +25,7 @@ fixture/mock/template；将
 `PUBLIC_DATA_MODE` 改为 `live` 或 `hybrid` 可启用 allow-list ESPN 适配器（详见
 [quickstart](../specs/001-nba-chat-agent/quickstart.md)）。
 
-公网演示通过 `docker-compose.auth.yml` 启用共享密码登录：静态入口和探活保持可用，聊天、
+公网演示通过 `docker-compose.public.yml` + `docker-compose.auth.yml` 启用 hybrid 公开数据和共享密码登录：静态入口和探活保持可用，聊天、
 赛事焦点和日期接口要求短期 HttpOnly Cookie 会话。密码只从 `secrets/app_password` 读取，
 不进入前端、响应或日志；缺失必需 secret 时服务 fail closed 并在 `/readyz` 标记认证依赖异常。
 
@@ -37,8 +38,9 @@ Key 只能通过 secret 文件或受控环境注入，不能进入仓库、镜�
 面试演示的隐藏输入步骤见 [`docs/byok.md`](byok.md)。
 在隔离实现交付前，`HERMES_LITE_MODE=sidecar` 会保持 not-ready/模板回退，不会绕过边界改走
 进程内直连。
-`LLM_MODE=live` 与 `PUBLIC_DATA_MODE` 独立：当前 SiliconFlow Compose profile 仍使用 fixture
-事实，只把 F/G 的措辞交给模型。若启用真实 key，服务必须置于认证反代/VPN/受限安全组之后，
+`LLM_MODE=live` 与 `PUBLIC_DATA_MODE` 独立：仅使用 `docker-compose.siliconflow.yml` 时事实仍为
+fixture；公开交付的 `make deploy-live` 会叠加 public profile，先尝试 hybrid 公开数据，再把
+F/G 的措辞交给模型。若启用真实 key，服务必须置于认证反代/VPN/受限安全组之后，
 并设置供应商额度/限流；未认证的公网端口会带来额度消耗风险。
 
 需要单独调试静态页面时，仍可运行 `python3 -m http.server 4173 --directory apps/web-demo`；
@@ -143,10 +145,9 @@ Safety Guard 在任何外部检索前运行；一条消息同时包含正常篮�
 - 受限 SiliconFlow/Hermes-lite runtime seam（默认关闭）与模板回退；
 - 赛事转播风格静态 UI，支持“今日赛事 / 历史回顾”日期切换，并在 API 不可用时离线演示。
 
-仍待完成的交付项包括：补齐更完整的集成/E2E 覆盖、正式公网探活、正式 Hermes sidecar
-隔离接入，以及将本说明导出为 `solution.pdf`。本地 Docker/ASGI profile 已提供，当前黄金集
-也已达到至少十条客观题的目标；这些后续项目不会改变
-当前 fixture 模式的可复现路径。
+当前代码包含事实、模型、安全、日期和认证测试；浏览器 E2E 作为独立 npm profile 提供，
+部署验收使用 `make deploy` / `make deploy-live`。正式 Hermes sidecar 仍可在不改变
+`AgentRuntimePort` 的前提下替换，当前 embedded Spike 不声称是生产 sidecar。
 
 ## 7. 设计取舍与未决项
 

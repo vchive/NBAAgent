@@ -11,3 +11,6 @@ build/
 coverage/
 .pytest_cache/
 *.log
+node_modules/
+test-results/
+playwright-report/

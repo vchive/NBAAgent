@@ -13,6 +13,7 @@
   const el = {
     time: $("#beijing-time"),
     modeLabel: $("#mode-label"),
+    welcomeMessage: $(".welcome-message"),
     onlineLabel: $("#online-label"),
     onlineLabelText: $("#online-label-text"),
     dayDivider: $("#day-divider"),
@@ -140,6 +141,7 @@
     selectedGameId: null,
     apiAvailable: false,
     apiProbeComplete: false,
+    apiDataMode: "fixture",
     highlightRequest: 0,
     // Availability is kept in the browser projection because the current
     // highlights contract is intentionally date-scoped. Unknown API dates are
@@ -461,13 +463,21 @@
     }
   }
 
-  function setTransportLabel(available) {
+  function setTransportLabel(available, dataMode = "fixture") {
     const live = Boolean(available);
+    const normalizedMode = String(dataMode || "fixture").toLowerCase();
+    const modeText = normalizedMode === "live"
+      ? "LIVE DATA"
+      : normalizedMode === "hybrid"
+        ? "HYBRID DATA"
+        : "FIXTURE MODE";
     if (el.modeLabel) {
-      el.modeLabel.textContent = live ? "LIVE API" : "FIXTURE MODE";
+      el.modeLabel.textContent = live ? modeText : "FIXTURE MODE";
       el.modeLabel.parentElement?.setAttribute(
         "title",
-        live ? "已连接 NBA Agent API" : "当前为本地 fixture 演示数据",
+        live
+          ? (normalizedMode === "fixture" ? "已连接 NBA Agent API，使用演示快照" : "已连接公开数据服务")
+          : "当前为本地 fixture 演示数据",
       );
     }
     if (el.onlineLabel) {
@@ -476,9 +486,26 @@
       }
       el.onlineLabel.parentElement?.setAttribute(
         "title",
-        live ? "已连接本地 NBA Agent API" : "当前使用内置 fixture 演示数据",
+        live ? "已连接 NBA Agent API" : "当前使用内置 fixture 演示数据",
       );
     }
+  }
+
+  function setWelcomeForTransport(dataMode) {
+    if (!el.welcomeMessage) return;
+    const normalized = String(dataMode || "fixture").toLowerCase();
+    if (normalized === "fixture") return;
+    // Do not present the fixed fixture scoreboard as today's live answer.
+    const label = $(".answer-label", el.welcomeMessage);
+    const title = $("h3", el.welcomeMessage);
+    const copy = $(".answer-lead p", el.welcomeMessage);
+    const grid = $(".fact-grid", el.welcomeMessage);
+    const foot = $(".answer-foot", el.welcomeMessage);
+    if (label) label.textContent = "服务已连接";
+    if (title) title.textContent = "已连接公开赛事数据服务";
+    if (copy) copy.textContent = "您可以询问赛程、赛果、球员数据、关键回合或战术复盘。";
+    if (grid) grid.hidden = true;
+    if (foot) foot.textContent = "数据将按北京时间核验 · 等待您的问题";
   }
 
   function setComposerBusy(busy) {
@@ -1944,7 +1971,10 @@
     if (el.featuredGameMeta) {
       const gameNumber = game.series_game_number ? `G${game.series_game_number}` : "GAME";
       const demoLabel = String(game.game_id || "").startsWith("2026-demo-") ? " · DEMO" : "";
-      el.featuredGameMeta.textContent = `NBA · ${gameNumber}${demoLabel} · ${String(game.game_id || "").toUpperCase()}`;
+      const replayLabel = gameHasPbp(game) ? "文字回放" : "比赛焦点";
+      // Provider/game identifiers are internal implementation details. Keep
+      // the card useful to a viewer without leaking opaque IDs.
+      el.featuredGameMeta.textContent = `NBA · ${gameNumber}${demoLabel} · ${replayLabel}`;
     }
     if (el.featuredGameState) el.featuredGameState.textContent = statusLabel(game.status);
     const scores = $$(".mini-scoreboard > strong", el.featuredGame);
@@ -2356,10 +2386,15 @@
 
   async function detectApi() {
     if (!window.CourtsideApi) return;
-    const available = await window.CourtsideApi.probe();
+    const health = typeof window.CourtsideApi.health === "function"
+      ? await window.CourtsideApi.health()
+      : null;
+    const available = Boolean(health);
     state.apiAvailable = available;
     state.apiProbeComplete = true;
-    setTransportLabel(available);
+    state.apiDataMode = String(health?.mode || "fixture").toLowerCase();
+    setTransportLabel(available, state.apiDataMode);
+    if (available) setWelcomeForTransport(state.apiDataMode);
     if (available) {
       // The offline preview may have marked unknown dates as empty. Once the
       // API is reachable, discard every offline availability value (including

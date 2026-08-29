@@ -3,15 +3,15 @@
 **Feature**: [spec.md](spec.md)<br>
 **Design**: [hld.md](hld.md), [lld.md](lld.md)
 
-本指南对应当前仓库中的 fixture-first 垂直切片。API 和零依赖 Web Demo 可以在没有外网、
-模型或数据源凭据的情况下运行；`live`/`hybrid` 是可选的公开数据探针。Docker/Compose
-profile 已提供；Playwright、正式公网部署和方案 PDF 尚未纳入本地最小路径。
+本指南对应当前仓库中的可交付版本。API 和零依赖 Web Demo 可以在没有外网、模型或数据源
+凭据的情况下运行；`live`/`hybrid` 是可选的公开数据 profile。Docker/Compose、Playwright
+和方案 PDF 均已提供；fixture 仍是本地最小路径。
 
 ## 1. Prerequisites
 
 - Linux/macOS/WSL，Python 3.12（必需）。
 - Git；联网 profile 需要能够访问 allow-list 中的公开 ESPN endpoint。
-- Node.js 20+ 仅用于可选的 JavaScript 语法检查，不参与 Web Demo 构建。
+- Node.js 20+ 用于可选的 Playwright 浏览器验收；Web Demo 本身无需构建。
 - Docker/Compose 可选；仓库提供 fixture 默认的镜像和 compose profile。
 - 不需要提交或共享 API key；本地凭据（如未来接入模型）通过 `.env` 注入，`.env` 不得提交。
 
@@ -181,16 +181,17 @@ python -m pytest -q
 python -m compileall -q apps
 node --check apps/web-demo/app.js       # 可选：需要 Node.js
 python -m apps.api.src.evaluation.cli --repeat 1
+npm ci && npx playwright install --with-deps chromium && npm run e2e
 ```
 
 当前测试覆盖领域模型、时间/赛季/PBP 算法、安全守卫、Provider/HTTP/SSE 契约、会话/缓存
 边界、ESPN 适配器和评测安全映射。`make test`、`make api`、`make demo`、`make eval` 和
-`make docker-up` 是上述命令的快捷入口；`make lint` 可用于开发期检查，当前仍有历史代码
-风格告警，不改变运行时契约。
+`make docker-up` 是上述命令的快捷入口；`make lint` 可用于开发期检查，当前代码通过 Ruff
+检查。
 
 评测 runner、报告模块和独立 CLI 已存在于 `apps/api/src/evaluation/`，黄金集当前包含
-A–I 覆盖和 16 条允许的客观题；完整 A–I 集成回放和 Playwright E2E 仍列在
-[tasks.md](tasks.md) 的后续任务中。
+A–I 覆盖和 16 条允许的客观题；完整 A–I 集成回放和 Playwright E2E 可分别通过 pytest 和
+`npm run e2e` 验证。
 
 ## 9. Optional live/hybrid profile
 
@@ -237,13 +238,25 @@ uvicorn apps.api.src.main:app --host 0.0.0.0 --port 8000
 该 override 默认不切换 `PUBLIC_DATA_MODE`；如需公开 ESPN 数据，必须另行设置 `live`/`hybrid`
 并审核条款。未配置认证时不要把 live profile 直接暴露给公网用户。
 
+公开交付使用 `docker-compose.public.yml`：服务先请求 allow-list 的公开数据源，发生有类型的
+上游失败时才回退到 fixture；不会把固定演示日期当作当天。先配置访问密码：
+
+```bash
+make configure-app-password
+make deploy                 # hybrid 公开数据 + 共享密码
+make deploy-live            # 额外启用 SiliconFlow F/G 分析（需要模型 key）
+make deploy-status
+```
+
+面试官访问 `http://<EIP>:8000/` 后输入共享密码；`/healthz`、`/readyz`、`/livez` 保持公开。
+如只需本地离线复现，继续使用基础 `docker-compose.yml`，它不会访问外网。
+
 ## 10. Delivery checklist
 
-上线或提交评审前仍需：
+交付复核清单（当前仓库已完成实现；目标环境上线时按需复核）：
 
 1. 在干净环境重跑本指南和完整测试，并保存评测报告；
-2. 补齐 Playwright E2E、公网 HTTPS 探活和更完整的 deployment evidence（本地 Docker/ASGI profile 已提供）；
+2. 在目标主机执行 `make deploy` 或 `make deploy-live`，保存 `/healthz`、`/readyz` 和登录后的聊天验收证据；
 3. 持续扩充黄金题并在目标环境记录七维评分、TTFT、完整延迟和安全否决；
 4. 审核数据源/视频版权后再考虑媒体嵌入；
-5. 将 [`docs/solution.md`](../../docs/solution.md) 导出为 `solution.pdf`，不在用户答案中
-   暴露 Provider URL、原始字段、内部 trace 或凭据。
+5. 提交 [`docs/solution.pdf`](../../docs/solution.pdf)，不在用户答案中暴露 Provider URL、原始字段、内部 trace 或凭据。

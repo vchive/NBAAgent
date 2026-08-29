@@ -12,6 +12,9 @@ coverage/
 .env
 secrets/
 *.log
+node_modules/
+test-results/
+playwright-report/
 tests/
 specs/
 Dockerfile

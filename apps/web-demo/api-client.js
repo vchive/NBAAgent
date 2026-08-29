@@ -16,8 +16,9 @@
   function defaultBase() {
     if (window.COURTSIDE_API_BASE) return trimBase(window.COURTSIDE_API_BASE);
     // A same-origin API is convenient for a mounted deployment.  The local
-    // static demo is normally served on 4173 while uvicorn runs on 8000.
-    if (window.location.port === "8000") return window.location.origin;
+    // static demo is normally served on 4173 while uvicorn runs on 8000; any
+    // other port is also treated as a mounted API (the E2E profile uses 8765).
+    if (window.location.port && window.location.port !== "4173") return window.location.origin;
     if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
       return "http://127.0.0.1:8000";
     }
@@ -51,8 +52,8 @@
     }
   }
 
-  async function probe() {
-    if (!baseUrl) return false;
+  async function health() {
+    if (!baseUrl) return null;
     try {
       const response = await withTimeout(900, (signal) => fetch(endpoint("/healthz"), {
         method: "GET",
@@ -60,10 +61,15 @@
         signal,
         credentials: "omit",
       }));
-      return response.ok;
+      if (!response.ok) return null;
+      return await response.json().catch(() => null);
     } catch (_error) {
-      return false;
+      return null;
     }
+  }
+
+  async function probe() {
+    return Boolean(await health());
   }
 
   async function authStatus() {
@@ -338,6 +344,7 @@
 
   window.CourtsideApi = {
     baseUrl,
+    health,
     probe,
     authStatus,
     login,

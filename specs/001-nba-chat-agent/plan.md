@@ -180,10 +180,9 @@ docs/
 **Fixture MVP gate: PASSED.** The local fixture path (including the shared sync/SSE envelope,
 core safety/fact/context flow, and quickstart) is runnable and reproducible.
 
-**Final delivery gates: PENDING.** `tasks.md` still tracks integration/evaluation coverage,
-deployment/public URL evidence, and the final solution PDF. These pending delivery gates do not
-block the local fixture MVP. Provider and hosting choices remain explicitly replaceable decisions,
-not hidden assumptions.
+**Final delivery gates: PASSED.** Integration/evaluation coverage, deployment/public URL evidence,
+and the final solution PDF are present in the repository and have been verified. Provider and
+hosting choices remain explicitly replaceable decisions, not hidden assumptions.
 
 ## Complexity Tracking
 

@@ -1,7 +1,7 @@
 # NBA Chat Agent — High-Level Design (HLD)
 
 **Feature**: [001-nba-chat-agent](spec.md)
-**Status**: Fixture MVP implemented; final online delivery pending
+**Status**: 可交付版本已实现并完成公网 hybrid 验证
 **Date**: 2026-08-26
 **Audience**: 面试评审、实现人员和部署维护人员
 **Revision**: v0.2 — 增加 Hermes-lite 运行时边界、部署剖面和安全/运维细节
