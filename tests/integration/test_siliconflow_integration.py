@@ -49,6 +49,9 @@ async def test_live_analysis_is_wired_and_keeps_deterministic_facts() -> None:
     assert result.status == "completed"
     assert "108–104" in result.answer_markdown
     assert "轮转沟通是关键" in result.answer_markdown
+    assert result.composition["mode"] == "model"
+    assert result.composition["status"] == "used"
+    assert result.composition["latency_ms"] >= 0
     assert len(requests) == 1
     payload = requests[0]
     assert payload["model"] == "deepseek-ai/DeepSeek-V4-Flash"

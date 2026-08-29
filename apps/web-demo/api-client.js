@@ -32,7 +32,10 @@
   // bounded provider timeouts, so this is deliberately generous while still
   // guaranteeing that the UI eventually recovers to the offline demo/error
   // branch.
-  const STREAM_TIMEOUT_MS = 15_000;
+  // Live SiliconFlow generation can take 10–20 seconds on a cold request.
+  // Keep the client deadline above the server's 20s model budget so a valid
+  // model answer is not discarded just as it completes.
+  const STREAM_TIMEOUT_MS = 30_000;
 
   function endpoint(path) {
     return `${baseUrl}${path}`;

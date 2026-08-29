@@ -219,7 +219,9 @@ fixture 验证；当前 `LLM_MODE=live` 会使用受限 direct SiliconFlow adapt
 export LLM_MODE=live
 export RUNTIME_PROFILE=hybrid
 export HERMES_LITE_MODE=embedded_spike
-export HERMES_LITE_TIMEOUT_MS=8000
+export HERMES_LITE_TIMEOUT_MS=20000
+export LLM_TIMEOUT_SECONDS=20
+export REQUEST_DEADLINE_MS=25000
 ./scripts/configure-siliconflow-key.sh
 export SILICONFLOW_API_KEY_FILE="$PWD/secrets/siliconflow_api_key"
 export SILICONFLOW_BASE_URL=https://api.siliconflow.cn/v1

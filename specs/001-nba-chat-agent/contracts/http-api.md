@@ -102,9 +102,20 @@ or `no_data`). These are successful protocol responses, not transport failures:
     {"status":"corrected|unverified","message":"仅含用户可见的本地化纠偏说明"}
   ],
   "follow_up": null,
-  "latency_ms": 1234
+  "latency_ms": 1234,
+  "composition": {
+    "mode": "model",
+    "status": "used",
+    "latency_ms": 980
+  }
 }
 ```
+
+`composition` is a deliberately small, provider-neutral provenance marker for the demo UI:
+`mode=deterministic` means the objective fact renderer answered directly, `mode=model` means a
+constrained analysis pass was accepted, and `mode=fallback` means the analysis path returned to
+the deterministic evidence-first answer. `status` is `not_requested`, `used`, `fallback`, or
+`disabled`. It never contains a model/provider name, endpoint, prompt, key, or internal IDs.
 
 `status=failed` uses the technical error envelope in §5. A blocked response must have an internal
 `provider_call_count=0`; that field is intentionally not exposed to the client. A clarification
@@ -158,7 +169,8 @@ another session never reuses a result.
 
 Every `message.completed` payload MUST equal the §3 conversational response envelope (including
 `request_id`, `session_id`, `status`, `blocks`, `corrections`, `follow_up`, `evidence_state`,
-`as_of_beijing` and `latency_ms`); the example above is abbreviated only for readability.
+`as_of_beijing`, `latency_ms` and `composition`); the example above is abbreviated only for
+readability.
 
 `blocks` follows the canonical `AnswerBlock` union: `text`, `analysis` and `warning` require
 `content`; `fact` uses `label`/`value`/optional `unit`; `table` uses non-empty `columns` and

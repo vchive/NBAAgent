@@ -98,6 +98,11 @@ Provider Gateway 是唯一的公开互联网访问边界。首版以 ESPN Web AP
    和风格策略；Output Guard 再检查无证据数字、敏感内容和内部字段泄露。Hermes 不可用时
    客观题回退模板，分析题只返回已核实事实摘要。
 
+   同步和 SSE 的完成 envelope 还带有 provider-neutral 的 `composition` 标记：客观题为
+   `deterministic`，模型分析被接受时为 `model/used`，模型超时、不可用或未启用时为
+   `fallback`（页面显示“模型回退 · 已核验事实”）。这让评审者能直接确认某次回答是否
+   走过模型链路，同时不暴露模型密钥、端点、提示词或内部证据字段。
+
 同步 HTTP 和 POST SSE 共用同一个用例；SSE 只在核验完成后发送事实增量，完成事件与同步
 响应使用同一最终 envelope。断线会取消下游任务；重复 `client_message_id` 在同一会话
 内幂等返回已保存结果。

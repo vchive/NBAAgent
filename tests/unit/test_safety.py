@@ -103,6 +103,26 @@ def test_refusal_draft_has_no_evidence_or_sensitive_echo() -> None:
     assert draft.blocks[0].type is AnswerBlockType.WARNING
 
 
+def test_model_numeric_redaction_preserves_qualitative_analysis() -> None:
+    subject = EntityRef(kind=EntityKind.TEAM, canonical_id="bos", display_name="凯尔特人")
+    facts = FactBundle(
+        facts=[
+            FactAssertion(
+                fact_id="score",
+                subject=subject,
+                predicate="score",
+                value=108,
+                evidence_ids=["e1"],
+                verification=VerificationState.VERIFIED,
+            )
+        ],
+        evidence_state=EvidenceState.VERIFIED,
+    )
+    result = OutputGuard.redact_untraceable_numbers("轮转优势约为 37%，比分为 108。", facts)
+    assert "若干" in result
+    assert "108" in result
+
+
 def test_output_guard_accepts_traced_number_and_rejects_untraced_number() -> None:
     subject = EntityRef(kind=EntityKind.TEAM, canonical_id="team-1", display_name="示例队")
     fact = FactAssertion(

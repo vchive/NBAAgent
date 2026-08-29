@@ -575,6 +575,36 @@ class OutputGuard:
         return unknown
 
     @classmethod
+    def redact_untraceable_numbers(cls, text: str, facts: Any) -> str:
+        """Replace only untraceable numeric claims in model prose.
+
+        The deterministic answer remains responsible for factual numbers. A
+        model occasionally echoes a user-provided count or emits a list index
+        that is not present in the verified bundle; rejecting the entire
+        analysis makes the model appear disconnected. Replacing those tokens
+        with ``若干`` preserves the useful qualitative reasoning while the
+        subsequent guard still performs the complete safety/leakage check.
+        Date/clock spans and Markdown list markers use the same exceptions as
+        :meth:`_untraceable_numbers` and are therefore left untouched.
+        """
+
+        if not isinstance(text, str) or not text:
+            return text
+        known = cls._numeric_values(facts)
+        unknown = {
+            cls._normalise_number(token)
+            for token in cls._untraceable_numbers(text, known)
+        }
+        if not unknown:
+            return text
+
+        def replace(match: re.Match[str]) -> str:
+            token = match.group(0)
+            return "若干" if cls._normalise_number(token) in unknown else token
+
+        return cls._NUMBER_RE.sub(replace, text)
+
+    @classmethod
     def validate(
         cls,
         answer: DraftAnswer | Mapping[str, Any] | str,

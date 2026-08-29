@@ -63,7 +63,9 @@ fixture Compose 默认设置 `HIGHLIGHTS_DEMO_DATE=2026-06-12`，因此部署当
 export LLM_MODE=live
 export RUNTIME_PROFILE=hybrid
 export HERMES_LITE_MODE=embedded_spike
-export HERMES_LITE_TIMEOUT_MS=8000
+export HERMES_LITE_TIMEOUT_MS=20000
+export LLM_TIMEOUT_SECONDS=20
+export REQUEST_DEADLINE_MS=25000
 export SILICONFLOW_API_KEY_FILE="$PWD/secrets/siliconflow_api_key"
 uvicorn apps.api.src.main:app --host 0.0.0.0 --port 8000
 ```

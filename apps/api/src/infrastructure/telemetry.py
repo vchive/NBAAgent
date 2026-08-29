@@ -50,6 +50,13 @@ class QueryTelemetry:
     hermes_mode: str | None = None
     hermes_status: str | None = None
     fallback_reason: str | None = None
+    # Publicly projected by the application as a small, provider-neutral
+    # explanation of where the answer came from.  These fields remain
+    # internal telemetry here so exporters can correlate model/fallback
+    # behaviour without retaining prompts, keys, or raw provider payloads.
+    composition_mode: str = "deterministic"
+    composition_status: str = "not_requested"
+    composition_latency_ms: int = 0
     message_hash: str | None = None
     events: list[dict[str, Any]] = field(default_factory=list)
 
@@ -84,12 +91,17 @@ class TelemetrySink:
         if len(self.records) > self.max_records:
             del self.records[: len(self.records) - self.max_records]
         logger.info(
-            "query_complete request=%s outcome=%s intent=%s provider_calls=%d evidence=%s",
+            "query_complete request=%s outcome=%s intent=%s provider_calls=%d evidence=%s "
+            "composition=%s composition_status=%s composition_latency_ms=%d fallback=%s",
             telemetry.request_id,
             telemetry.outcome,
             telemetry.intent_name,
             telemetry.provider_call_count,
             telemetry.evidence_state,
+            telemetry.composition_mode,
+            telemetry.composition_status,
+            telemetry.composition_latency_ms,
+            telemetry.fallback_reason or "none",
         )
 
     def latest(self) -> QueryTelemetry | None:

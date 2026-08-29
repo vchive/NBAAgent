@@ -98,6 +98,16 @@ class ChatResult:
     follow_up: str | None = None
     latency_ms: int = 0
     error: dict[str, Any] | None = None
+    # Minimal provider-neutral provenance.  This is deliberately separate
+    # from internal telemetry: clients can tell whether the constrained model
+    # pass was used or fell back without seeing model names, prompts, or keys.
+    composition: dict[str, Any] = field(
+        default_factory=lambda: {
+            "mode": "deterministic",
+            "status": "not_requested",
+            "latency_ms": 0,
+        }
+    )
 
     def to_dict(self) -> dict[str, Any]:
         def dump(value: Any) -> Any:
@@ -122,6 +132,7 @@ class ChatResult:
             "corrections": dump(self.corrections),
             "follow_up": self.follow_up,
             "latency_ms": self.latency_ms,
+            "composition": dump(self.composition),
         }
         if self.error is not None:
             payload = {
@@ -365,6 +376,14 @@ class ChatUseCase:
                         follow_up=replay.get("follow_up"),
                         latency_ms=replay.get("latency_ms", 0),
                         error=replay.get("error"),
+                        composition=replay.get(
+                            "composition",
+                            {
+                                "mode": "deterministic",
+                                "status": "not_requested",
+                                "latency_ms": 0,
+                            },
+                        ),
                     )
                     await self._emit_replay(sink, replay_result)
                     return replay_result
@@ -725,6 +744,15 @@ class ChatUseCase:
                 corrections = []
             telemetry.transition("DERIVED")
             await _emit(sink, "run.status", {"stage": "composing", "text": "正在整理回答"})
+            # Make the expensive/observable model phase explicit in SSE.  This
+            # is a fixed progress label (no provider name or error detail),
+            # and it is emitted only when the selector actually chose the
+            # constrained analysis runtime.
+            if (
+                parsed.intent.intent_name in {IntentName.TACTICAL, IntentName.RECAP}
+                and self.runtime_selector.for_intent(parsed.intent.intent_name) is not self.runtime
+            ):
+                await _emit(sink, "run.status", {"stage": "model", "text": "正在生成智能分析"})
             token.raise_if_cancelled()
             draft = await self._compose(
                 request_id=request_id,
@@ -780,6 +808,7 @@ class ChatUseCase:
                 guarded,
                 started,
                 as_of=format_beijing(provider_result.retrieved_at_utc),
+                composition=self._composition_from_telemetry(telemetry),
             )
             telemetry.finish(outcome="completed", total_latency_ms=result.latency_ms)
             self.telemetry.record(telemetry)
@@ -906,6 +935,11 @@ class ChatUseCase:
             retrieved_at=retrieved_at,
             corrections=corrections,
         )
+        # Every request starts with the deterministic answer.  Only an
+        # explicitly selected analysis runtime can change this provenance.
+        telemetry.composition_mode = "deterministic"
+        telemetry.composition_status = "not_requested"
+        telemetry.composition_latency_ms = 0
         selected = self.runtime_selector.for_intent(parsed.intent.intent_name)
         if selected is self.runtime:
             return base
@@ -924,6 +958,8 @@ class ChatUseCase:
             "mode",
             getattr(self.settings, "hermes_lite_mode", "off"),
         )
+        telemetry.composition_mode = "fallback"
+        telemetry.composition_status = "fallback"
         composer_input = ComposerInput(
             request_id=request_id,
             opaque_session_id=InMemorySessionStore.hash_session(session_id),
@@ -936,6 +972,7 @@ class ChatUseCase:
             tool_policy=getattr(self.hermes_runtime, "tool_policy", ToolPolicy()),
         )
         try:
+            runtime_started = time.monotonic()
             runtime_value = await self._await_with_cancel(
                 selected.compose(composer_input, token), token
             )
@@ -943,6 +980,13 @@ class ChatUseCase:
                 runtime_value
                 if isinstance(runtime_value, RuntimeResult)
                 else RuntimeResult.model_validate(runtime_value)
+            )
+            telemetry.composition_latency_ms = max(
+                0,
+                int(
+                    getattr(runtime_result, "latency_ms", 0)
+                    or (time.monotonic() - runtime_started) * 1000
+                ),
             )
         except AgentError:
             raise
@@ -968,8 +1012,12 @@ class ChatUseCase:
 
         # The local mock delegates to the deterministic renderer. Keep the
         # richer base draft in that case while still exercising and observing
-        # the capability boundary.
+        # the capability boundary.  Mark it as disabled rather than claiming
+        # that a model was used: ``LLM_MODE=mock`` never makes an external call.
         if runtime_result.finish_reason == "template":
+            telemetry.composition_mode = "fallback"
+            telemetry.composition_status = "disabled"
+            telemetry.fallback_reason = telemetry.fallback_reason or "llm_mock"
             return base
 
         # Treat model text as an untrusted analysis supplement.  The
@@ -985,25 +1033,54 @@ class ChatUseCase:
         if not model_text:
             telemetry.fallback_reason = telemetry.fallback_reason or "empty_model_output"
             return base
-        try:
-            # ``DraftAnswer.markdown`` has a 20k bound.  Trim the model text
-            # further when the deterministic section is already large.
-            room = max(1, 19_500 - len(base.markdown))
-            model_text = model_text[:room]
-            candidate = DraftAnswer(
-                markdown=f"{base.markdown}\n\n{model_text}",
+        # ``DraftAnswer.markdown`` has a 20k bound.  Trim the model text
+        # further when the deterministic section is already large.
+        room = max(1, 19_500 - len(base.markdown))
+        model_text = model_text[:room]
+
+        def make_candidate(text: str) -> DraftAnswer:
+            return DraftAnswer(
+                markdown=f"{base.markdown}\n\n{text}",
                 blocks=[
                     *base.blocks,
-                    AnswerBlock(type=AnswerBlockType.ANALYSIS, content=model_text),
+                    AnswerBlock(type=AnswerBlockType.ANALYSIS, content=text),
                 ],
                 evidence_state=base.evidence_state,
                 corrections=base.corrections,
                 follow_up=base.follow_up,
             )
-            guarded_candidate = self.output_guard.validate(candidate, facts)
-        except (OutputGuardError, ValueError, TypeError):
-            telemetry.fallback_reason = "model_output_guard"
-            return base
+
+        try:
+            guarded_candidate = self.output_guard.validate(make_candidate(model_text), facts)
+        except (OutputGuardError, ValueError, TypeError) as exc:
+            # Preserve a useful qualitative analysis when the only guard
+            # violation is an untraceable number.  The sanitizer removes just
+            # those tokens (dates, clocks and list markers retain their
+            # structural exceptions), then the complete guard runs again.
+            reasons = getattr(exc, "reasons", ())
+            if "untraceable_number" not in reasons:
+                telemetry.fallback_reason = "model_output_guard"
+                telemetry.composition_mode = "fallback"
+                telemetry.composition_status = "fallback"
+                return base
+            redacted_text = OutputGuard.redact_untraceable_numbers(model_text, facts)
+            if redacted_text == model_text:
+                telemetry.fallback_reason = "model_output_guard"
+                telemetry.composition_mode = "fallback"
+                telemetry.composition_status = "fallback"
+                return base
+            try:
+                guarded_candidate = self.output_guard.validate(
+                    make_candidate(redacted_text), facts
+                )
+                telemetry.fallback_reason = "model_numeric_redaction"
+            except (OutputGuardError, ValueError, TypeError):
+                telemetry.fallback_reason = "model_output_guard"
+                telemetry.composition_mode = "fallback"
+                telemetry.composition_status = "fallback"
+                return base
+        telemetry.composition_mode = "model"
+        telemetry.composition_status = "used"
         return guarded_candidate
 
     @staticmethod
@@ -1386,6 +1463,7 @@ class ChatUseCase:
         started: float,
         *,
         as_of: str | None,
+        composition: Mapping[str, Any] | None = None,
     ) -> ChatResult:
         return ChatResult(
             request_id=request_id,
@@ -1400,7 +1478,25 @@ class ChatUseCase:
             corrections=draft.corrections,
             follow_up=draft.follow_up,
             latency_ms=max(0, int((time.monotonic() - started) * 1000)),
+            composition=dict(
+                composition
+                or {
+                    "mode": "deterministic",
+                    "status": "not_requested",
+                    "latency_ms": 0,
+                }
+            ),
         )
+
+    @staticmethod
+    def _composition_from_telemetry(telemetry: QueryTelemetry) -> dict[str, Any]:
+        """Project internal runtime telemetry into a tiny safe public object."""
+
+        return {
+            "mode": telemetry.composition_mode,
+            "status": telemetry.composition_status,
+            "latency_ms": max(0, int(telemetry.composition_latency_ms or 0)),
+        }
 
     async def _technical_failure(
         self,

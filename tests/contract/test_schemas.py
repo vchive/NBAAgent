@@ -53,6 +53,11 @@ def test_chat_response_has_contract_shape_and_lowercase_enums() -> None:
     assert payload["status"] == "completed"
     assert payload["evidence_state"] == "verified"
     assert payload["as_of_beijing"] == "2026-08-26 21:30"
+    assert payload["composition"] == {
+        "mode": "deterministic",
+        "status": "not_requested",
+        "latency_ms": 0,
+    }
 
 
 def test_highlights_response_validates_freshness_timestamp() -> None:

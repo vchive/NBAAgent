@@ -9,6 +9,7 @@ import pytest
 from apps.api.src.application.parser import IntentParser
 from apps.api.src.application.query_planner import QueryPlanner
 from apps.api.src.domain.models import (
+    Category,
     ConversationContext,
     EntityKind,
     HistoryRecordType,
@@ -225,6 +226,17 @@ def test_negated_betting_prediction_is_in_scope_and_bounded() -> None:
     assert parsed.intent.intent_name is IntentName.TACTICAL
     assert parsed.intent.metrics[0].name == "game_outcome_prediction"
     assert QueryPlanner().build(parsed.intent) is None
+
+
+def test_verified_data_tactical_wording_still_routes_to_model_analysis() -> None:
+    """Evidence qualifiers must not turn a tactical question into fact-check."""
+
+    parsed = IntentParser().parse(
+        "请基于总决赛 G4 的已核验数据，分析凯尔特人限制雷霆挡拆的原因。"
+    )
+
+    assert parsed.intent.intent_name is IntentName.TACTICAL
+    assert parsed.intent.category is Category.F
 
 
 def test_historical_finals_calendar_year_maps_to_ending_season() -> None:

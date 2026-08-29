@@ -130,6 +130,40 @@ class CorrectionStatus(StrEnum):
     UNVERIFIED = "unverified"
 
 
+class CompositionMode(StrEnum):
+    """Provider-neutral answer source shown to the demo UI.
+
+    ``model`` means a constrained generative pass was accepted and appended
+    as analysis.  ``fallback`` means the model path was selected but the
+    deterministic, evidence-first answer was returned instead.  Objective
+    facts use ``deterministic`` by design.
+    """
+
+    DETERMINISTIC = "deterministic"
+    MODEL = "model"
+    FALLBACK = "fallback"
+
+
+class CompositionStatus(StrEnum):
+    NOT_REQUESTED = "not_requested"
+    USED = "used"
+    FALLBACK = "fallback"
+    DISABLED = "disabled"
+
+
+class CompositionInfo(_WireBase):
+    """Safe, minimal generation provenance for a conversational answer.
+
+    It intentionally contains no model/provider name, endpoint, error text,
+    prompt, key, or internal request identifiers.  This lets the client make
+    a model fallback visible without widening the public trust boundary.
+    """
+
+    mode: CompositionMode = CompositionMode.DETERMINISTIC
+    status: CompositionStatus = CompositionStatus.NOT_REQUESTED
+    latency_ms: int = Field(default=0, ge=0)
+
+
 class TechnicalErrorCode(StrEnum):
     INVALID_PAYLOAD = "INVALID_PAYLOAD"
     SERVICE_BUSY = "SERVICE_BUSY"
@@ -313,6 +347,7 @@ class ChatResponse(_WireBase):
     corrections: list[PublicCorrection] = Field(default_factory=list, max_length=16)
     follow_up: str | None = Field(default=None, max_length=1000)
     latency_ms: int = Field(ge=0)
+    composition: CompositionInfo = Field(default_factory=CompositionInfo)
 
     @field_validator("status", mode="before")
     @classmethod
@@ -377,6 +412,9 @@ class ChatResponse(_WireBase):
                 PublicCorrection.from_domain(item) for item in payload.get("corrections", []) or []
             ]
             follow_up = payload.get("follow_up")
+            composition = payload.get("composition", CompositionInfo())
+        if isinstance(answer, DraftAnswer):
+            composition = CompositionInfo()
         return cls(
             request_id=request_id,
             session_id=session_id,
@@ -388,6 +426,7 @@ class ChatResponse(_WireBase):
             corrections=corrections,
             follow_up=follow_up,
             latency_ms=latency_ms,
+            composition=composition,
         )
 
 
@@ -649,6 +688,7 @@ _RUN_STATUS_TEXT_ALLOWLIST = frozenset(
         "正在查找相关比赛数据",
         "正在核对比赛数据",
         "正在整理回答",
+        "正在生成智能分析",
     }
 )
 
@@ -723,6 +763,9 @@ __all__ = [
     "ChatStatus",
     "ClarificationRequiredPayload",
     "CorrectionStatus",
+    "CompositionInfo",
+    "CompositionMode",
+    "CompositionStatus",
     "DependencyStatus",
     "ErrorDetail",
     "ErrorDetailSchema",

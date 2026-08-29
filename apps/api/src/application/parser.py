@@ -707,7 +707,13 @@ class IntentParser:
                 QueryMode.OBJECTIVE,
                 Operation.EXPLAIN,
             )
-        elif is_fact:
+        # An analytical request may include words such as “核验/已核验” to
+        # constrain the evidence source (for example “基于已核验数据分析
+        # 挡拆”).  Those words must not downgrade the request to FACT_CHECK:
+        # tactical/recap intent is what decides whether the constrained model
+        # composer is selected.  A pure “我记得…帮我核验” request still has
+        # no tactical/recap marker and therefore remains FACT_CHECK.
+        elif is_fact and not (is_tactical or is_recap):
             category, intent_name, mode, operation = (
                 Category.D,
                 IntentName.FACT_CHECK,

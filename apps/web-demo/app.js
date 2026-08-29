@@ -91,6 +91,7 @@
     retrieving: "正在核对比赛数据",
     verifying: "正在核验事实口径",
     composing: "正在整理回答",
+    model: "正在生成智能分析",
   };
 
   // Fixture events are deliberately small and deterministic: they make the
@@ -1125,6 +1126,24 @@
     return { text: "暂无数据", className: "none", icon: "—" };
   }
 
+  function compositionLabel(value) {
+    const mode = String(value?.mode || "deterministic").toLowerCase();
+    const status = String(value?.status || "not_requested").toLowerCase();
+    if (mode === "model" && status === "used") {
+      const latency = Number.isFinite(Number(value?.latency_ms)) && Number(value.latency_ms) > 0
+        ? ` · ${Math.round(Number(value.latency_ms) / 100) / 10}s`
+        : "";
+      return { text: `智能分析${latency}`, className: "model", title: "已完成受限模型分析" };
+    }
+    if (mode === "fallback" && status === "disabled") {
+      return { text: "确定性模板", className: "fallback", title: "模型未启用，使用已核验模板" };
+    }
+    if (mode === "fallback") {
+      return { text: "模型回退 · 已核验事实", className: "fallback", title: "模型未完成，已回退到已核验事实" };
+    }
+    return { text: "确定性事实", className: "deterministic", title: "客观事实由确定性核验链路生成" };
+  }
+
   function renderSimpleMarkdown(container, markdown) {
     const text = String(markdown || "").trim();
     if (!text) return;
@@ -1220,6 +1239,11 @@
 
     const foot = document.createElement("div");
     foot.className = "answer-foot";
+    const composition = compositionLabel(response.composition);
+    const source = document.createElement("span");
+    source.className = `composition-chip ${composition.className}`;
+    source.textContent = composition.text;
+    source.title = composition.title;
     const chip = document.createElement("span");
     chip.className = `evidence-chip ${evidence.className}`;
     chip.append(document.createTextNode(`${evidence.icon} ${evidence.text}`));
@@ -1227,7 +1251,7 @@
     asOf.textContent = response.as_of_beijing
       ? `公开资料 · 数据截至北京时间 ${response.as_of_beijing}`
       : "公开资料 · 当前没有可用的时间口径";
-    foot.append(chip, asOf);
+    foot.append(source, chip, asOf);
     card.append(foot);
     // `body` remains attached to the article while streaming.  Reusing the
     // same nodes keeps focus/scroll behaviour stable and avoids duplicate
@@ -1361,6 +1385,7 @@
       evidence_state: "verified",
       corrections: [],
       follow_up: null,
+      composition: { mode: "deterministic", status: "not_requested", latency_ms: 0 },
     };
 
     if (/(博彩|下注|盘口|赔率|赌球|假球|黑哨|政治|涉华|社会争议|场外|绯闻|隐私|法律|犯罪|司法|人身攻击|辱骂|侮辱|歧视|仇恨)/i.test(text)) {
