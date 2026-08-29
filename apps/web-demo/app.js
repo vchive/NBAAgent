@@ -50,6 +50,8 @@
     input: $("#message-input"),
     charCount: $("#char-count"),
     sendButton: $("#send-button"),
+    intelligenceMode: $("#intelligence-mode"),
+    intelligenceHelp: $("#intelligence-help"),
     streamStatus: $("#stream-status"),
     streamStage: $("#stream-stage"),
     stopStream: $("#stop-stream"),
@@ -155,6 +157,8 @@
     authEnabled: false,
     authenticated: false,
     authBootstrapped: false,
+    intelligenceMode: "hybrid",
+    fullIntelligenceEnabled: true,
   };
 
   // The static demo keeps a deterministic multi-game slate offline. The same
@@ -488,6 +492,19 @@
         "title",
         live ? "已连接 NBA Agent API" : "当前使用内置 fixture 演示数据",
       );
+    }
+  }
+
+  function setIntelligenceCapability(enabled) {
+    state.fullIntelligenceEnabled = Boolean(enabled);
+    if (!el.intelligenceMode) return;
+    el.intelligenceMode.disabled = Boolean(
+      state.apiProbeComplete && state.apiAvailable && !enabled
+    );
+    if (el.intelligenceHelp) {
+      el.intelligenceHelp.textContent = el.intelligenceMode.disabled
+        ? "服务端未开启"
+        : "让 Hermes 组织回答（实验）";
     }
   }
 
@@ -1328,7 +1345,11 @@
       else renderCompletedAnswer(run.placeholder, response);
       run.placeholder.article.querySelector(".streaming-bubble")?.classList.remove("streaming-bubble");
     }
-    state.lastRequest = { message: run.message, clientMessageId: run.clientMessageId };
+    state.lastRequest = {
+      message: run.message,
+      clientMessageId: run.clientMessageId,
+      intelligenceMode: run.intelligenceMode,
+    };
     if (response.status !== "failed") {
       state.contextRequest = { message: run.message, clientMessageId: run.clientMessageId };
     }
@@ -1546,6 +1567,7 @@
   function startDemoRun(message, options = {}) {
     if (state.streaming) return;
     const clientMessageId = options.clientMessageId || makeId("client");
+    const intelligenceMode = options.intelligenceMode || state.intelligenceMode;
     if (!options.reuseUser) appendUserMessage(message);
     const placeholder = createAssistantPlaceholder();
     const response = createDemoResponse(message, options);
@@ -1559,6 +1581,7 @@
       timers: [],
       started: false,
       branch: null,
+      intelligenceMode,
     };
     state.run = run;
     setComposerBusy(true);
@@ -1607,6 +1630,7 @@
   function startApiRun(message, options = {}) {
     if (state.streaming || !window.CourtsideApi) return false;
     const clientMessageId = options.clientMessageId || makeId("client");
+    const intelligenceMode = options.intelligenceMode || state.intelligenceMode;
     if (!options.reuseUser) appendUserMessage(message);
     const placeholder = createAssistantPlaceholder();
     const controller = new AbortController();
@@ -1621,6 +1645,7 @@
       branch: null,
       live: true,
       abortController: controller,
+      intelligenceMode,
     };
     state.run = run;
     setComposerBusy(true);
@@ -1640,6 +1665,7 @@
       message,
       sessionId: state.sessionId,
       clientMessageId,
+      intelligenceMode,
       signal: controller.signal,
       onEvent: (eventName, payload) => handleStreamEvent(eventName, payload),
     }).then(() => {
@@ -1738,6 +1764,7 @@
     startRequest(state.lastRequest.message, {
       reuseUser: true,
       clientMessageId: state.lastRequest.clientMessageId,
+      intelligenceMode: state.lastRequest.intelligenceMode || state.intelligenceMode,
       // Let the offline demo demonstrate a successful recovery while still
       // preserving the same idempotency key exposed by the real contract.
       forceSuccess: state.retryCount > 0,
@@ -1750,6 +1777,8 @@
     state.lastRequest = null;
     state.contextRequest = null;
     state.retryCount = 0;
+    state.intelligenceMode = "hybrid";
+    if (el.intelligenceMode) el.intelligenceMode.checked = false;
     try {
       window.sessionStorage.setItem(STORAGE_KEY, state.sessionId);
     } catch (_error) {
@@ -2393,6 +2422,9 @@
     state.apiAvailable = available;
     state.apiProbeComplete = true;
     state.apiDataMode = String(health?.mode || "fixture").toLowerCase();
+    setIntelligenceCapability(
+      health?.capabilities?.full_intelligence !== false
+    );
     setTransportLabel(available, state.apiDataMode);
     if (available) setWelcomeForTransport(state.apiDataMode);
     if (available) {
@@ -2464,6 +2496,14 @@
         event.preventDefault();
         cancelRun();
       }
+    });
+    el.intelligenceMode?.addEventListener("change", () => {
+      state.intelligenceMode = el.intelligenceMode.checked ? "full" : "hybrid";
+      showToast(
+        state.intelligenceMode === "full"
+          ? "已开启全智能分析（本会话）"
+          : "已切回混合模式（本会话）"
+      );
     });
     el.newSession.addEventListener("click", newSession);
     el.highlightModes.forEach((button) => {
@@ -2547,6 +2587,8 @@
     seedFixtureAvailability();
     state.calendarMonth = monthKeyForDate(el.highlightDate?.value || state.highlightDate);
     renderPbp("Q4");
+    if (el.intelligenceMode) el.intelligenceMode.checked = false;
+    setIntelligenceCapability(true);
     setTransportLabel(false);
     renderHighlightProjection(fixtureGamesForDate("2026-06-12"), "today", "2026-06-12");
     initSseParserDemo();

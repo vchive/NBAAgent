@@ -77,6 +77,16 @@ Adapters must send a descriptive User-Agent, enforce response-size and timeout l
 terms, robots and rate limits. Date queries should be split into bounded daily requests; month-wide
 responses may be too large for a single request.
 
+### Controlled web-search augmentation
+
+An optional DuckDuckGo adapter may implement only `search_news(NewsQuery)`. It uses the fixed
+`https://api.duckduckgo.com/` Instant Answer endpoint, accepts no URL from a request, returns at
+most five cleaned candidates, and enforces a three-second timeout plus a bounded response body.
+HTML/script/control characters, links and prompt-injection instructions are removed at the adapter
+boundary. Its evidence uses `source_class=SEARCH`, medium/low trust and unknown freshness; the
+result remains partial and cannot be the sole evidence for scores, standings, player statistics,
+series arithmetic or PBP. A search error must not replace an otherwise valid NBA provider result.
+
 ## 5. Reliability policy
 
 - Retry only idempotent GET requests; at most two exponential-backoff retries by default.

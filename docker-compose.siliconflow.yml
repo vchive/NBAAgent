@@ -9,6 +9,8 @@ services:
       LLM_MODE: live
       RUNTIME_PROFILE: hybrid
       HERMES_LITE_MODE: embedded_spike
+      FULL_INTELLIGENCE_ENABLED: "true"
+      DEFAULT_INTELLIGENCE_MODE: hybrid
       # The live model gets a longer wall-clock budget than the local mock;
       # the request deadline still caps the effective timeout per call.
       HERMES_LITE_TIMEOUT_MS: 20000

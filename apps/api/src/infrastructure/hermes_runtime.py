@@ -126,6 +126,8 @@ _ALLOWED_PREDICATES = frozenset(
         "last_shot_type",
         "losses",
         "margin",
+        "news",
+        "background",
         "points",
         "points_leader",
         "play",

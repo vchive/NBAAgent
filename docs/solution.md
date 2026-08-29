@@ -31,16 +31,18 @@ fixture/mock/template；将
 
 SiliconFlow / BYOK 需要单独说明：默认交付仍使用 `HERMES_LITE_MODE=off`、`LLM_MODE=mock`，
 完全离线且不需要模型 Key。显式切换 `LLM_MODE=live`、`RUNTIME_PROFILE=hybrid`（或
-`hermes`）和启用的 Hermes-lite mode 后，F/G 分析才会进入受限 SiliconFlow
-OpenAI-compatible adapter，默认模型为 `deepseek-ai/DeepSeek-V4-Flash`。当前实现是 API
+`hermes`）和启用的 Hermes-lite mode 后，F/G 分析会进入受限 SiliconFlow
+OpenAI-compatible adapter；当服务端开启 `FULL_INTELLIGENCE_ENABLED=true` 且用户打开
+“全智能分析”时，已有核验事实的其他允许题型也会由同一 runtime 组织语言。默认模型为
+`deepseek-ai/DeepSeek-V4-Flash`。当前实现是 API
 进程内 direct BYOK 出站，`sidecar` 隔离部署尚未交付；生产应迁移到独立、无工具的 sidecar。
 Key 只能通过 secret 文件或受控环境注入，不能进入仓库、镜像、前端、telemetry 或日志；
 面试演示的隐藏输入步骤见 [`docs/byok.md`](byok.md)。
 在隔离实现交付前，`HERMES_LITE_MODE=sidecar` 会保持 not-ready/模板回退，不会绕过边界改走
 进程内直连。
 `LLM_MODE=live` 与 `PUBLIC_DATA_MODE` 独立：仅使用 `docker-compose.siliconflow.yml` 时事实仍为
-fixture；公开交付的 `make deploy-live` 会叠加 public profile，先尝试 hybrid 公开数据，再把
-F/G 的措辞交给模型。若启用真实 key，服务必须置于认证反代/VPN/受限安全组之后，
+fixture；公开交付的 `make deploy-live` 会叠加 public profile，先尝试 hybrid 公开数据，再按
+hybrid/full 请求模式把措辞交给模型。若启用真实 key，服务必须置于认证反代/VPN/受限安全组之后，
 并设置供应商额度/限流；未认证的公网端口会带来额度消耗风险。
 
 需要单独调试静态页面时，仍可运行 `python3 -m http.server 4173 --directory apps/web-demo`；
@@ -69,7 +71,9 @@ flowchart LR
   PARSE --> ADM[准入/截止时间]
   ADM --> PLAN[查询规划]
   PLAN --> PG[Provider Gateway]
+  PLAN -. 新闻/背景 .-> SEARCH[受控 DuckDuckGo 搜索]
   PG --> NORM[归一化]
+  SEARCH --> NORM
   NORM --> VERIFY[事实核验]
   VERIFY --> DERIVE[确定性聚合/PBP]
   DERIVE --> SELECT[模板或 SiliconFlow/Hermes-lite]
@@ -83,6 +87,11 @@ Provider Gateway 是唯一的公开互联网访问边界。首版以 ESPN Web AP
 商名称、端点、原始字段、提示词和内部证据 URL 只保存在内部契约/脱敏日志中，不进入用户
 回答。
 
+DuckDuckGo 只作为新闻、背景和长尾问题的补充候选源。适配器固定 Instant Answer HTTPS
+端点，不接受用户 URL，限制 3 秒超时、最多 5 条结果和响应大小，并移除 HTML、脚本、
+控制字符、链接和提示注入。搜索证据保持 `SEARCH`/部分核验，不能单独把比分、排名、统计
+或 PBP 数字升级为已核验；搜索失败也不会影响 NBA 结构化事实链路。
+
 ## 3. 一次请求如何被处理
 
 1. API 校验消息长度、时区和幂等键，并生成 `request_id`/`session_id`。
@@ -94,11 +103,13 @@ Provider Gateway 是唯一的公开互联网访问边界。首版以 ESPN Web AP
    Normalizer 将结果映射到统一领域模型并保留缺失值。
 5. Verifier 检查证据可信度、新鲜度、实体/时间一致性和用户前提。系列赛累计、连胜和
    最后 5 秒等结果由确定性 Derivation 从真实比赛/PBP 记录计算，模型不负责算术或选球。
-6. 客观题优先由确定性模板渲染；战术/复盘等分析题在事实核验完成后才可选用受限
+6. 默认 hybrid 模式下客观题优先由确定性模板渲染；战术/复盘等分析题在事实核验完成后才可选用受限
    SiliconFlow/Hermes-lite 进行措辞组织。运行时不拥有 Provider、缓存、安全判定、算术或 PBP 选择，且关闭
    shell、MCP、浏览器、memory、skills 和子代理。其输入只含结构化 FactBundle、规范化问题
    和风格策略；Output Guard 再检查无证据数字、敏感内容和内部字段泄露。Hermes 不可用时
-   客观题回退模板，分析题只返回已核实事实摘要。
+   客观题回退模板，分析题只返回已核实事实摘要。可选 full 模式只扩大“组织语言”的路由
+   范围，不改变 SafetyGuard、Provider、Verifier、Derivation 或 Output Guard 的职责；红线、
+   澄清、无数据和技术错误始终零模型调用。
 
    同步和 SSE 的完成 envelope 还带有 provider-neutral 的 `composition` 标记：客观题为
    `deterministic`，模型分析被接受时为 `model/used`，模型超时、不可用或未启用时为
@@ -143,6 +154,7 @@ Safety Guard 在任何外部检索前运行；一条消息同时包含正常篮�
 - 中文意图/实体/赛季解析、事实核验、系列赛与最后 5 秒 PBP 确定性推导；
 - 会话隔离、幂等重放、取消传播、TTL 缓存、重试/fallback、检索前安全短路和脱敏 telemetry；
 - 受限 SiliconFlow/Hermes-lite runtime seam（默认关闭）与模板回退；
+- 受控 DuckDuckGo 新闻/背景搜索，以及会话级“全智能分析（实验）”开关；
 - 赛事转播风格静态 UI，支持“今日赛事 / 历史回顾”日期切换，并在 API 不可用时离线演示。
 
 当前代码包含事实、模型、安全、日期和认证测试；浏览器 E2E 作为独立 npm profile 提供，

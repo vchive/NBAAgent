@@ -25,6 +25,7 @@ class ProviderGateway:
         fallback_provider: ProviderPort | None = None,
         max_retries: int = 2,
         default_ttl_seconds: int = 300,
+        news_ttl_seconds: int | None = None,
     ) -> None:
         self.provider = provider
         if (
@@ -40,6 +41,9 @@ class ProviderGateway:
         self.cache = cache
         self.max_retries = max(0, max_retries)
         self.default_ttl_seconds = default_ttl_seconds
+        self.news_ttl_seconds = (
+            default_ttl_seconds if news_ttl_seconds is None else max(0, int(news_ttl_seconds))
+        )
         self.call_count = 0
         self.fallback_call_count = 0
         self.cache_read_count = 0
@@ -311,7 +315,9 @@ class ProviderGateway:
         return await self._invoke("get_history", query, budget=budget, ttl_seconds=86_400)
 
     async def search_news(self, query: Any, budget: RequestBudget) -> ProviderResult[Any]:
-        return await self._invoke("search_news", query, budget=budget, ttl_seconds=300)
+        return await self._invoke(
+            "search_news", query, budget=budget, ttl_seconds=self.news_ttl_seconds
+        )
 
     def counters(self) -> dict[str, int]:
         cache = self.cache.counters() if self.cache is not None else {}

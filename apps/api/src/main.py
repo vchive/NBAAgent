@@ -21,9 +21,11 @@ from apps.api.src.application.chat_use_case import ChatUseCase
 from apps.api.src.config import Settings
 from apps.api.src.infrastructure.auth import AuthManager
 from apps.api.src.infrastructure.cache import InMemoryTTLCache
+from apps.api.src.providers.ddg_adapter import DuckDuckGoAdapter
 from apps.api.src.providers.espn_adapter import ESPNAdapter
 from apps.api.src.providers.fixture_provider import FixtureProvider
 from apps.api.src.providers.gateway import ProviderGateway
+from apps.api.src.providers.search_augmented_provider import SearchAugmentedProvider
 
 
 def _provider_stack(config: Settings) -> tuple[Any, Any | None]:
@@ -46,7 +48,19 @@ def _provider_stack(config: Settings) -> tuple[Any, Any | None]:
         max_response_bytes=config.provider_max_response_bytes,
         allowed_hosts=config.espn_allowed_hosts,
     )
+    # DuckDuckGo is an optional, news/background-only candidate source. Never
+    # enable it for fixture mode: the default local profile must remain fully
+    # offline and deterministic.
+    if bool(getattr(config, "ddg_search_enabled", False)):
+        ddg = DuckDuckGoAdapter(
+            timeout_seconds=getattr(config, "ddg_timeout_seconds", 3.0),
+            max_results=getattr(config, "ddg_max_results", 5),
+            max_response_bytes=getattr(config, "ddg_max_response_bytes", 512_000),
+        )
+        live = SearchAugmentedProvider(live, ddg)
     if mode == "hybrid":
+        # Keep the fixture fallback as a separate ProviderPort. Search
+        # augmentation belongs only to the live primary path.
         return live, fixture
     return live, None
 
@@ -79,6 +93,7 @@ def create_app(*, settings: Settings | None = None, usecase: ChatUseCase | None 
             fallback=fallback,
             cache=InMemoryTTLCache(max_entries=config.cache_max_entries),
             max_retries=config.provider_max_retries,
+            news_ttl_seconds=getattr(config, "ddg_cache_ttl_seconds", 300),
         )
         usecase = ChatUseCase(provider, settings=config, gateway=gateway)
         app.state.provider = provider

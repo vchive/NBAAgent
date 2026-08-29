@@ -9,12 +9,14 @@ Driven Development）流程推进。
 fixture/mock 模式的 FastAPI Agent：同步聊天、POST SSE、会话隔离、事实核验、PBP/系列赛
 确定性推导、安全短路、重试/缓存和“赛事焦点/历史回顾”日期投影均可离线运行。FastAPI
 在仓库包含 Web Demo 时会从同一端口托管 UI，因此可以直接通过一个 `IP:端口` 访问完整演示。
-ESPN 与 Hermes-lite 保留为可替换适配器，默认关闭，不需要任何凭据。
+ESPN、受控 DuckDuckGo 搜索与 Hermes-lite 均为可替换适配器，默认关闭，不需要任何凭据。
 
 > **SiliconFlow BYOK 状态**：默认仍是完全离线的 `template`/`mock` 模式（不会读取或发送
 > 模型请求）。显式设置 `LLM_MODE=live`、`RUNTIME_PROFILE=hybrid`（或 `hermes`）以及
-> `HERMES_LITE_MODE=embedded_spike` 后，F/G 战术与复盘问题才会调用受限的 SiliconFlow
-> OpenAI-compatible Chat Completions（[API 文档](https://api-docs.siliconflow.cn/docs/api/chat-completions-post)）；默认模型为 `deepseek-ai/DeepSeek-V4-Flash`。
+> `HERMES_LITE_MODE=embedded_spike` 后，F/G 战术与复盘问题会调用受限的 SiliconFlow
+> OpenAI-compatible Chat Completions（[API 文档](https://api-docs.siliconflow.cn/docs/api/chat-completions-post)）；
+> `FULL_INTELLIGENCE_ENABLED=true` 时，页面可开启“全智能分析”，让已有核验事实的客观题
+> 也进入同一受限表达链路。默认模型为 `deepseek-ai/DeepSeek-V4-Flash`。
 > 这是当前 API 进程内的 direct BYOK adapter，不是已部署的独立 Hermes sidecar；生产环境
 > 应改用隔离 sidecar。Key 仅通过 `SILICONFLOW_API_KEY`（本地）或
 > `SILICONFLOW_API_KEY_FILE`（挂载 secret）注入，绝不能提交到仓库、镜像、前端、日志或聊天。
@@ -23,6 +25,10 @@ ESPN 与 Hermes-lite 保留为可替换适配器，默认关闭，不需要任�
 > `LLM_MODE=live` 只切换分析措辞模型，和 `PUBLIC_DATA_MODE` 相互独立；Compose 示例仍使用
 > 本地 fixture 事实。若把 live profile 暴露到公网，任何可访问者都可能消耗 BYOK 额度，必须
 > 放在认证反代/VPN/受限安全组后，并配置供应商预算与限额。
+
+> **DuckDuckGo 状态**：`DDG_SEARCH_ENABLED=true` 只在 live/hybrid profile 的新闻、背景题中
+> 访问固定 Instant Answer 端点，最多返回 5 条候选并清洗 HTML/脚本/控制字符/提示注入。
+> 搜索结果保持部分核验，不能单独证明比分、排名、统计或 PBP；搜索失败不影响 NBA 核心问答。
 
 启动 API：
 
@@ -43,7 +49,7 @@ uvicorn apps.api.src.main:app --host 0.0.0.0 --port 8000
 curl -fsS http://127.0.0.1:8000/healthz
 curl -fsS -X POST http://127.0.0.1:8000/api/v1/chat \
   -H 'content-type: application/json' \
-  -d '{"message":"2025-26 总决赛 G4 谁得分最高？"}'
+  -d '{"message":"2025-26 总决赛 G4 谁得分最高？","intelligence_mode":"full"}'
 curl -fsS 'http://127.0.0.1:8000/api/v1/highlights?date=2026-06-12&timezone=Asia/Shanghai'
 curl -fsS 'http://127.0.0.1:8000/api/v1/highlights/availability?from=2026-06-06&to=2026-06-13&timezone=Asia/Shanghai'
 ```
@@ -147,6 +153,6 @@ SpecKit 项目治理原则位于 [.specify/memory/constitution.md](.specify/memo
 ## 交付 profile
 
 方案说明 PDF 已生成在 [`docs/solution.pdf`](docs/solution.pdf)。本地默认仍是 fixture/mock，
-公网交付使用 `make deploy`（hybrid 公开数据 + 访问密码）；如需启用 SiliconFlow 分析，再使用
-`make deploy-live`。正式隔离 Hermes sidecar 仍是后续可替换部署形态，当前 embedded Spike 只用于
+公网交付使用 `make deploy`（hybrid 公开数据 + 受控搜索 + 访问密码）；如需启用 SiliconFlow
+以及页面的全智能模式，再使用 `make deploy-live`。正式隔离 Hermes sidecar 仍是后续可替换部署形态，当前 embedded Spike 只用于
 面试演示和受限模型链路验证。

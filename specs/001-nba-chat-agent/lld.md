@@ -23,8 +23,10 @@
 - 本地运行：`uvicorn` + Python 静态文件服务器；无凭据时使用 fixture/mock provider 和
   mock composer。Docker/Compose 是后续部署任务，不是当前 fixture MVP 的前置条件。
 
-运行时采用 `hybrid` 策略：客观问题使用模板/确定性 renderer；需要自然语言战术或复盘时，
-才在事实核验完成后调用 Hermes-lite。Hermes 可以以本地 mock、受限 embedded（仅 fixture
+运行时默认采用 `hybrid` 策略：客观问题使用模板/确定性 renderer；需要自然语言战术或复盘时，
+才在事实核验完成后调用 Hermes-lite。开启服务端 `FULL_INTELLIGENCE_ENABLED` 后，请求可
+通过 `intelligence_mode=full` 让所有已有核验事实的允许题型复用该受限 runtime；这只改变
+语言组织路由，不改变安全、检索、算术、PBP 或输出守卫职责。Hermes 可以以本地 mock、受限 embedded（仅 fixture
 Spike）或隔离 sidecar 运行；生产剖面禁止把 Hermes 作为可直接访问 Provider 的 in-process
 通用 Agent。
 
@@ -52,6 +54,8 @@ apps/api/src/
 │   └── derivation.py               # deterministic aggregations
 ├── providers/
 │   ├── espn_adapter.py             # public web adapter
+│   ├── ddg_adapter.py              # fixed-endpoint news/background search
+│   ├── search_augmented_provider.py# typed NBA + search composition
 │   ├── fallback_adapter.py         # optional secondary source
 │   ├── normalizer.py
 │   └── router.py
@@ -87,6 +91,7 @@ tests/{unit,contract,integration,e2e,evaluation}/
 ```text
 RuntimeProfile = TEMPLATE | HERMES | HYBRID
 HermesLiteMode = OFF | EMBEDDED_SPIKE | SIDECAR
+IntelligenceMode = HYBRID | FULL
 
 AgentRuntimePort.compose(input: ComposerInput, cancel: CancelToken) -> RuntimeResult
 
@@ -168,6 +173,10 @@ OutputGuard 追溯数字和结论的必要条件，不能由模型自行声明�
 安全类别；未知题型使用 `OUT_OF_SCOPE`。
 
 `category` 是评测标签，`intent_name` 是唯一的内部路由字段，固定映射如下：
+
+聊天请求可携带会话级语言组织偏好：`intelligence_mode` 取 `hybrid`、`full` 或省略（按
+服务端 `DEFAULT_INTELLIGENCE_MODE`）。`full` 只有在 `FULL_INTELLIGENCE_ENABLED=true` 时
+生效；否则按 `hybrid` 处理。
 
 | category | intent_name | 主要数据能力 |
 |---|---|---|
@@ -396,6 +405,15 @@ Normalizer 将不同来源映射到 canonical entities；不识别的字段丢�
 适配器必须带 `User-Agent`、超时和响应大小上限，保存 fixture 时去除凭据和不必要原始内容。
 Provider 健康检查只验证允许的端点，不把上游 URL 发送给用户。
 
+### 4.3.1 DuckDuckGo search adapter
+
+`DuckDuckGoAdapter` 只实现 `search_news(NewsQuery, RequestBudget)`，固定访问
+`https://api.duckduckgo.com/`，不接受用户提供的 URL。查询由 typed subject/keywords 生成，
+最多 5 条结果、3 秒超时和有界响应体；摘要会移除 HTML、脚本、链接、控制字符及提示注入。
+每条候选使用 `SourceClass.SEARCH`、中等信任和 `Freshness.UNKNOWN` 证据，并将结果标记为
+`partial=true`。`SearchAugmentedProvider` 先调用 NBA 结构化新闻源，再合并去重的 DDG 候选；
+搜索失败不会覆盖结构化结果，空结果保持空，不升级任何比分/统计/PBP 事实。
+
 ### 4.4 HermesRuntimeAdapter
 
 `HermesRuntimeAdapter` 只实现 `AgentRuntimePort`，不实现任何 Provider 方法。适配器在
@@ -425,6 +443,10 @@ Provider 健康检查只验证允许的端点，不把上游 URL 发送给用户
 适配器不保存 Hermes memory；会话摘要仍由 `ContextPort` 以当前 `session_id` 管理。没有
 `SILICONFLOW_API_KEY` 或 secret 文件、上游超时/429、无效 JSON、截断或不安全输出时，
 适配器返回 `UNAVAILABLE/TIMEOUT`，由用例保留确定性模板答案，不猜测或补数字。
+
+`RuntimeSelector` 接收 `intelligence_mode`：`hybrid` 只为 `TACTICAL/RECAP` 选择 Hermes，
+`full`（且服务端 feature flag 开启）为所有已核验且允许的 intent 选择同一 runtime。Safety、
+澄清、无数据和技术错误分支在 selector 之前结束，保证零模型/搜索调用。
 
 ## 5. Parsing, time and entity resolution
 

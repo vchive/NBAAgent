@@ -182,7 +182,7 @@
     }
   }
 
-  async function streamChat({ message, sessionId, clientMessageId, onEvent, signal }) {
+  async function streamChat({ message, sessionId, clientMessageId, intelligenceMode, onEvent, signal }) {
     if (!baseUrl) throw new Error("API base is not configured");
     const requestController = new AbortController();
     let timedOut = false;
@@ -206,6 +206,7 @@
           session_id: sessionId || undefined,
           client_message_id: clientMessageId || undefined,
           client_timezone: "Asia/Shanghai",
+          intelligence_mode: intelligenceMode || undefined,
         }),
         credentials: "include",
         signal: requestController.signal,

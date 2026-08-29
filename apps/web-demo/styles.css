@@ -1812,6 +1812,72 @@ p {
   font-size: 10px;
 }
 
+.intelligence-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  color: var(--ink-300);
+  cursor: pointer;
+  user-select: none;
+}
+
+.intelligence-toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.toggle-track {
+  width: 25px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border-radius: 999px;
+  background: rgba(157, 176, 202, 0.26);
+  transition: background 160ms ease;
+}
+
+.toggle-thumb {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--ink-500);
+  transition: transform 160ms ease, background 160ms ease;
+}
+
+.intelligence-toggle input:checked + .toggle-track {
+  background: rgba(95, 224, 172, 0.55);
+}
+
+.intelligence-toggle input:checked + .toggle-track .toggle-thumb {
+  background: var(--green);
+  transform: translateX(11px);
+}
+
+.intelligence-toggle input:focus-visible + .toggle-track {
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
+}
+
+.toggle-copy {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.toggle-copy strong {
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.toggle-copy small {
+  color: var(--ink-600);
+  font-size: 9px;
+}
+
 #char-count.near-limit {
   color: var(--amber);
 }

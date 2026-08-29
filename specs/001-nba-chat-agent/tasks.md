@@ -178,6 +178,14 @@ without conflating it with the chat `HISTORY` intent.
   `scripts/configure-app-password.sh`, `docker-compose.auth.yml`, `Makefile`, `docs/auth.md`,
   and `tests/contract/test_auth.py`.
 
+## Phase 12: Controlled search and full intelligence (opt-in)
+
+- [X] T065 Add typed intelligence-mode request/config support and full-mode runtime selection while preserving deterministic safety, verification, derivation, and fallback boundaries.
+- [X] T066 Add the fixed-endpoint DuckDuckGo adapter with bounded query/results/response size, HTML/control/injection cleaning, partial search evidence, and a provider composition wrapper.
+- [X] T067 Wire search and full-intelligence capabilities into the live composition root, health/readiness metadata, environment templates, and public Compose profile.
+- [X] T068 Add the session-level web-demo “全智能分析（实验）” switch and propagate the selected mode through sync/SSE requests with model/fallback provenance labels.
+- [X] T069 Add contract coverage for lowercase mode parsing, feature-flag enforcement, DDG sanitization, invalid JSON, and bounded search evidence.
+
 ## Dependencies & Execution Order
 
 ### Phase dependencies

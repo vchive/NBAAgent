@@ -10,7 +10,7 @@
 
 交付一个可在线访问的中文 NBA Chat Agent，并配套简要方案说明 PDF。系统采用分层、可
 替换的数据访问架构：Web 聊天入口 → 检索前安全门 → 意图/实体/赛季解析 → 准入预算 →
-公开数据适配器 → 归一化与事实核验 → 确定性聚合/PBP 推导 → 模板或受限
+NBA 结构化数据与可选 DuckDuckGo 搜索适配器 → 归一化与事实核验 → 确定性聚合/PBP 推导 → 模板或受限
 SiliconFlow/Hermes-lite 表达 → 输出守卫。HLD 与 LLD 分别记录系统边界和可实现契约；
 黄金题集负责验证 PDF 的事实、安全、多轮和性能评分维度。运行时是可关闭的
 Composer/Runtime 适配器，不拥有 Provider、缓存、安全决策或 NBA 领域事实。
@@ -20,20 +20,20 @@ Composer/Runtime 适配器，不拥有 Provider、缓存、安全决策或 NBA �
 **Language/Version**: Python 3.12 for API/domain/evaluation; dependency-free HTML/CSS/ES2022
 for the current Web Demo (a React/Next.js migration remains optional after the fixture MVP)
 **Primary Dependencies**: FastAPI/ASGI, Pydantic v2, httpx, browser `fetch`/ReadableStream for
-POST-SSE, pytest；可选 SiliconFlow OpenAI-compatible runtime（默认关闭，正式生产 sidecar 优先）
+POST-SSE, pytest；可选 DuckDuckGo 搜索适配器与 SiliconFlow OpenAI-compatible runtime（默认关闭，正式生产 sidecar 优先）
 **Storage**: 首版无 NBA 内部数据库；会话与 TTL 缓存采用可替换的轻量存储，评测 fixture 使用版本化 JSON
 **Testing**: pytest（单元/集成/契约）、Playwright（Web E2E）、黄金题回放与时延采集
 **Target Platform**: Linux 容器；公开 Web/API 服务，支持本地 fixture/mock 模式
 **Project Type**: Web application with API service and evaluation CLI
 **Performance Goals**: 项目目标为正常查询 90% 在 5 秒内完成；记录 TTFT 与完整响应时延。PDF 未规定数字阈值
-**Constraints**: 公开互联网取数、不得依赖内部 NBA DB；UTC+8 展示；敏感请求检索前短路；凭据不入库；数据源可替换；Runtime 仅接收结构化已核验事实，生产优先使用受限 sidecar
+**Constraints**: 公开互联网取数、不得依赖内部 NBA DB；UTC+8 展示；敏感请求检索前短路；凭据不入库；数据源可替换；搜索摘要不可信且不能单独证明 NBA 数字；Runtime 仅接收结构化已核验事实与清洗后的候选摘要，生产优先使用受限 sidecar
 **Scale/Scope**: 面试演示级 v1；单会话至少支持三轮同场追问；A–I 作为黄金评测覆盖建议，不把题型数量当 PDF 硬性规模约束
 
 ## Constitution Check — before design
 
 | Gate | Result | Evidence |
 |---|---|---|
-| Specification-first | PASS | `spec.md` defines scope, scenarios, FR-001–027 and SC-001–011 |
+| Specification-first | PASS | `spec.md` defines scope, scenarios, FR-001–030 and SC-001–014 |
 | Evidence-first facts | PASS | Provider → Normalizer → Verifier → Derivation chain in HLD/LLD |
 | Safety before retrieval | PASS | Safety Guard is the first orchestrator branch; no-retrieval test required |
 | Contract/test-first | PASS | API/provider/evaluation contracts and traceability matrix planned |
@@ -149,6 +149,8 @@ docs/
 | FR-026 | Evaluation contract | `EVAL-REPORT-001` 七维汇总 |
 | FR-027 | HLD highlights projection；日期可用性三态接口；HTTP contract；Web Demo | `CONTRACT-HIGHLIGHTS-001`, `E2E-HIGHLIGHTS-001` 日期/无赛日置灰/空状态/隔离 |
 | FR-028 | HLD public demo access control；Cookie session；Compose secret | `tests/contract/test_auth.py`, `DOC-AUTH-001` |
+| FR-029 | HLD web-search boundary；DuckDuckGo adapter；evidence ranking | `tests/contract/test_web_search.py`, `tests/integration/test_web_search.py` |
+| FR-030 | HLD full-intelligence routing；runtime selector；OutputGuard fallback | `tests/contract/test_intelligence_mode.py`, `tests/integration/test_full_intelligence.py`, `tests/e2e/test_chat.spec.ts` |
 | SC-001 | HLD deployment；quickstart | `OPS-001` 公网 URL/HTTPS 探活 |
 | SC-002 | Evaluation contract | `EVAL-COVERAGE-001` A–I 覆盖报告 |
 | SC-003 | HLD multi-turn；LLD context | `EVAL-H-001` 三轮一致 |
@@ -161,6 +163,8 @@ docs/
 | SC-010 | HLD observability；HTTP contract | `OPS-TELEM-002` 时间/状态可审计 |
 | SC-011 | HLD highlights projection；quickstart | `CONTRACT-HIGHLIGHTS-001`, `E2E-HIGHLIGHTS-001` |
 | SC-012 | HLD/LLD shared-password boundary；auth middleware and probes | `tests/contract/test_auth.py`, `OPS-AUTH-001` |
+| SC-013 | HLD web-search limits/injection handling；LLD SearchEvidence | `tests/contract/test_web_search.py`, `tests/integration/test_web_search.py` |
+| SC-014 | HLD full-intelligence mode；LLD routing and telemetry | `tests/contract/test_intelligence_mode.py`, `tests/integration/test_full_intelligence.py`, `tests/e2e/test_chat.spec.ts` |
 | ARCH-HERMES-001 | HLD §5.1；LLD §1.3/§4.4 runtime boundary | `SEC-HERMES-001`, `INT-HERMES-001` |
 | ARCH-CAPACITY-001 | HLD §9.2；LLD §3.1/§10 admission budget | `CAP-ADMISSION-001`, `E2E-SSE-001` |
 | ARCH-FAILURE-001 | HLD failure matrix；LLD §10 errors/cancellation | `CHAOS-UPSTREAM-001`, `INT-CANCEL-001` |
@@ -188,7 +192,8 @@ hosting choices remain explicitly replaceable decisions, not hidden assumptions.
 
 无 Constitution 违规项。Provider Gateway、确定性 Derivation 和 Evaluation Runner 是为
 PDF 的联网事实、逐回合核验、安全否决和重复评测要求所必需；每项均有独立契约和测试。
-SiliconFlow/Hermes-lite 是可关闭的可选表达运行时，增加 capability self-test、准入和
+SiliconFlow/Hermes-lite 是可关闭的可选表达运行时；DuckDuckGo 仅作为受控新闻/背景候选搜索，
+增加 capability self-test、准入和
 回退契约的理由是验证首版开发速度收益，同时防止通用 Agent 能力破坏安全/事实不变量；
 当前 direct embedded adapter 仅限本地/演示，生产应迁移到隔离 sidecar，且可随时回滚到
 `template` 而不改变领域层。

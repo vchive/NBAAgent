@@ -256,6 +256,19 @@ class RuntimeProfile(_UpperStrEnum):
     HYBRID = "HYBRID"
 
 
+class IntelligenceMode(_UpperStrEnum):
+    """Per-request language composition preference.
+
+    ``HYBRID`` keeps objective answers deterministic and reserves Hermes for
+    analysis intents. ``FULL`` asks the same constrained runtime to organise
+    any answer that has already passed local verification. It never changes
+    safety, retrieval, arithmetic, or PBP ownership.
+    """
+
+    HYBRID = "HYBRID"
+    FULL = "FULL"
+
+
 class HermesLiteMode(_UpperStrEnum):
     OFF = "OFF"
     EMBEDDED_SPIKE = "EMBEDDED_SPIKE"
@@ -643,6 +656,21 @@ class ChatRequest(CanonicalModel):
     message: str = Field(min_length=1, max_length=2000)
     client_timezone: str | None = None
     client_message_id: str | None = Field(default=None, max_length=128)
+    intelligence_mode: IntelligenceMode | None = None
+
+    @field_validator("intelligence_mode", mode="before")
+    @classmethod
+    def _intelligence_mode_value(cls, value: Any) -> Any:
+        if value is None or isinstance(value, IntelligenceMode):
+            return value
+        if isinstance(value, str):
+            if value.strip().lower() == "auto":
+                return None
+            try:
+                return IntelligenceMode(value.strip().upper())
+            except ValueError:
+                return value
+        return value
 
     @field_validator("message")
     @classmethod
@@ -1268,6 +1296,7 @@ __all__ = [
     "HistoryRecord",
     "HistoryRecordType",
     "IntentName",
+    "IntelligenceMode",
     "JsonScalar",
     "MetricRef",
     "NewsItem",

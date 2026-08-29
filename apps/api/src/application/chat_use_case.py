@@ -48,6 +48,7 @@ from apps.api.src.domain.models import (
     Game,
     GameBundle,
     HistoryRecord,
+    IntelligenceMode,
     IntentName,
     NewsItem,
     SafetyCategory,
@@ -202,6 +203,7 @@ class ChatUseCase:
                 cache=cache
                 or InMemoryTTLCache(max_entries=getattr(settings, "cache_max_entries", 10_000)),
                 max_retries=getattr(settings, "provider_max_retries", 2),
+                news_ttl_seconds=getattr(settings, "ddg_cache_ttl_seconds", 300),
             )
         self.gateway = gateway
         self.provider = provider
@@ -235,6 +237,8 @@ class ChatUseCase:
             template_runtime=self.runtime,
             hermes_runtime=self.hermes_runtime,
             profile=getattr(settings, "runtime_profile", "template"),
+            full_intelligence_enabled=bool(getattr(settings, "full_intelligence_enabled", False)),
+            default_intelligence_mode=getattr(settings, "default_intelligence_mode", "hybrid"),
         )
         self.telemetry = telemetry or TelemetrySink()
         self.admission = admission or AdmissionController(
@@ -749,8 +753,8 @@ class ChatUseCase:
             # and it is emitted only when the selector actually chose the
             # constrained analysis runtime.
             if (
-                parsed.intent.intent_name in {IntentName.TACTICAL, IntentName.RECAP}
-                and self.runtime_selector.for_intent(parsed.intent.intent_name) is not self.runtime
+                self.runtime_selector.for_intent(parsed.intent.intent_name, req.intelligence_mode)
+                is not self.runtime
             ):
                 await _emit(sink, "run.status", {"stage": "model", "text": "正在生成智能分析"})
             token.raise_if_cancelled()
@@ -768,6 +772,7 @@ class ChatUseCase:
                 token=token,
                 telemetry=telemetry,
                 user_message=req.message,
+                intelligence_mode=req.intelligence_mode,
             )
             try:
                 guarded = self.output_guard.validate(draft, facts)
@@ -918,12 +923,14 @@ class ChatUseCase:
         token: CancelToken,
         telemetry: QueryTelemetry,
         user_message: str | None = None,
+        intelligence_mode: IntelligenceMode | str | None = None,
     ) -> DraftAnswer:
-        """Select Hermes only for analysis intents, with a deterministic fallback.
+        """Select the constrained runtime according to the request mode.
 
         The runtime receives no raw provider data, URL, session identifier, cache,
-        or tool handle. Objective answers keep using the richer deterministic
-        renderer so factual formatting cannot drift.
+        or tool handle. In hybrid mode objective answers keep using the richer
+        deterministic renderer; full mode may append model wording while the
+        deterministic section remains authoritative.
         """
 
         base = self.template_composer.compose(
@@ -940,7 +947,7 @@ class ChatUseCase:
         telemetry.composition_mode = "deterministic"
         telemetry.composition_status = "not_requested"
         telemetry.composition_latency_ms = 0
-        selected = self.runtime_selector.for_intent(parsed.intent.intent_name)
+        selected = self.runtime_selector.for_intent(parsed.intent.intent_name, intelligence_mode)
         if selected is self.runtime:
             return base
 
@@ -1246,8 +1253,7 @@ class ChatUseCase:
                 provider_evidence_ids = [
                     str(item.evidence_id).strip()
                     for item in evidence
-                    if getattr(item, "evidence_id", None)
-                    and not str(item.evidence_id).isspace()
+                    if getattr(item, "evidence_id", None) and not str(item.evidence_id).isspace()
                 ]
                 verified_rows = [
                     verify_game(item, provider_evidence_ids or [f"game:{item.game_id}"])

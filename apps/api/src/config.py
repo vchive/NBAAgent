@@ -78,6 +78,15 @@ class Settings:
     max_session_turns: int = 8
     max_session_bytes: int = 16_384
     cache_max_entries: int = 10_000
+    # Optional, bounded web-search augmentation.  Fixture mode remains
+    # offline even if these flags are accidentally present.
+    ddg_search_enabled: bool = False
+    ddg_timeout_seconds: float = 3.0
+    ddg_max_results: int = 5
+    ddg_max_response_bytes: int = 512_000
+    ddg_cache_ttl_seconds: int = 300
+    full_intelligence_enabled: bool = False
+    default_intelligence_mode: str = "hybrid"
     llm_mode: str = "mock"
     llm_timeout_seconds: float = 8.0
     siliconflow_api_key: str = field(default="", repr=False)
@@ -153,6 +162,13 @@ class Settings:
             max_session_turns=_int("MAX_SESSION_TURNS", 8),
             max_session_bytes=_int("MAX_SESSION_BYTES", 16_384),
             cache_max_entries=_int("CACHE_MAX_ENTRIES", 10_000),
+            ddg_search_enabled=_bool("DDG_SEARCH_ENABLED", False),
+            ddg_timeout_seconds=_float("DDG_TIMEOUT_SECONDS", 3.0),
+            ddg_max_results=_int("DDG_MAX_RESULTS", 5),
+            ddg_max_response_bytes=_int("DDG_MAX_RESPONSE_BYTES", 512_000),
+            ddg_cache_ttl_seconds=_int("DDG_CACHE_TTL_SECONDS", 300),
+            full_intelligence_enabled=_bool("FULL_INTELLIGENCE_ENABLED", False),
+            default_intelligence_mode=os.getenv("DEFAULT_INTELLIGENCE_MODE", "hybrid").lower(),
             llm_mode=os.getenv("LLM_MODE", "mock").lower(),
             llm_timeout_seconds=_float("LLM_TIMEOUT_SECONDS", 8.0),
             siliconflow_api_key=os.getenv("SILICONFLOW_API_KEY", "").strip(),
@@ -208,6 +224,7 @@ class Settings:
         llm_mode = str(self.llm_mode).lower()
         runtime_profile = str(self.runtime_profile).lower()
         hermes_lite_mode = str(self.hermes_lite_mode).lower()
+        default_intelligence_mode = str(self.default_intelligence_mode).lower()
         if public_data_mode not in {"fixture", "live", "hybrid"}:
             raise ValueError("PUBLIC_DATA_MODE must be fixture, live, or hybrid")
         if self.highlights_demo_date:
@@ -221,6 +238,10 @@ class Settings:
             raise ValueError("RUNTIME_PROFILE must be template, hermes, or hybrid")
         if hermes_lite_mode not in {"off", "embedded_spike", "sidecar"}:
             raise ValueError("HERMES_LITE_MODE must be off, embedded_spike, or sidecar")
+        if default_intelligence_mode not in {"hybrid", "full"}:
+            raise ValueError("DEFAULT_INTELLIGENCE_MODE must be hybrid or full")
+        if default_intelligence_mode == "full" and not self.full_intelligence_enabled:
+            raise ValueError("full default intelligence requires FULL_INTELLIGENCE_ENABLED=true")
         if llm_mode == "live" and hermes_lite_mode == "off":
             raise ValueError("live LLM calls require HERMES_LITE_MODE to be enabled")
         if llm_mode == "live" and runtime_profile not in {"hermes", "hybrid"}:
@@ -259,6 +280,10 @@ class Settings:
             "max_session_turns": self.max_session_turns,
             "max_session_bytes": self.max_session_bytes,
             "cache_max_entries": self.cache_max_entries,
+            "ddg_timeout_seconds": self.ddg_timeout_seconds,
+            "ddg_max_results": self.ddg_max_results,
+            "ddg_max_response_bytes": self.ddg_max_response_bytes,
+            "ddg_cache_ttl_seconds": self.ddg_cache_ttl_seconds,
             "max_request_bytes": self.max_request_bytes,
             "max_event_bytes": self.max_event_bytes,
             "max_response_bytes": self.max_response_bytes,
@@ -342,6 +367,10 @@ class Settings:
             raise ValueError("SILICONFLOW_MAX_TOKENS must be <= 4096")
         if self.siliconflow_max_response_bytes > 1_048_576:
             raise ValueError("SILICONFLOW_MAX_RESPONSE_BYTES must be <= 1048576")
+        if self.ddg_max_results > 5:
+            raise ValueError("DDG_MAX_RESULTS must be <= 5")
+        if self.ddg_max_response_bytes > 1_048_576:
+            raise ValueError("DDG_MAX_RESPONSE_BYTES must be <= 1048576")
 
 
 settings = Settings.from_env()

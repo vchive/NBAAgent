@@ -7,6 +7,9 @@ services:
     environment:
       APP_ENV: public_demo
       PUBLIC_DATA_MODE: hybrid
+      DDG_SEARCH_ENABLED: "true"
+      FULL_INTELLIGENCE_ENABLED: "true"
+      DEFAULT_INTELLIGENCE_MODE: hybrid
       # Empty means the service clock drives today's Beijing projection.  The
       # fixture-only base continues to use its fixed demo date.
       HIGHLIGHTS_DEMO_DATE: ""

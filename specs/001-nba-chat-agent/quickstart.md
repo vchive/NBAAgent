@@ -79,6 +79,11 @@ API 提供：
 - `GET /api/v1/highlights/availability?from=YYYY-MM-DD&to=YYYY-MM-DD&timezone=Asia/Shanghai`：
   最多 31 天的日期可用性（`available` / `empty` / `unknown`），供历史回顾日历置灰。
 
+全智能分析是会话级实验开关：前端勾选后会在每个请求中发送
+`intelligence_mode=full`。服务端只有在 `FULL_INTELLIGENCE_ENABLED=true` 且请求通过安全检查、
+完成事实核验后才会调用受限 Hermes/SiliconFlow；关闭或模型失败时自动回到确定性模板。
+该模式不会让模型计算比分、筛选 PBP 或决定安全策略。
+
 ## 4. Optional standalone Web Demo
 
 如需单独调试静态页面，仍可另开终端（无需 Node 或 npm）：
@@ -205,6 +210,21 @@ export RUNTIME_PROFILE=template
 export HERMES_LITE_MODE=off
 uvicorn apps.api.src.main:app --host 0.0.0.0 --port 8000
 ```
+
+### 9.1 Controlled DuckDuckGo search
+
+新闻、背景和长尾问题可在 live/hybrid profile 中显式开启受控搜索：
+
+```bash
+export DDG_SEARCH_ENABLED=true
+export DDG_TIMEOUT_SECONDS=3
+export DDG_MAX_RESULTS=5
+```
+
+系统只访问固定的 `https://api.duckduckgo.com/` Instant Answer 端点，不接受用户 URL，
+并限制查询、结果数、响应大小和超时。返回内容会移除 HTML、脚本、控制字符和提示注入，
+以 `SEARCH`/部分核验证据参与新闻回答；它不能单独证明比分、排名、统计或逐回合事实。
+搜索失败会保留 NBA 结构化数据回答或给出暂无数据，不会阻塞核心问答。
 
 开发期也可用 `PUBLIC_DATA_MODE=hybrid`：先尝试公开源，发生有类型的上游错误后才使用本地
 fixture fallback；权威空结果不会被旧 fixture 覆盖。

@@ -93,13 +93,14 @@ flowchart TB
       NORM[Normalizer]
       VERIFY[Fact Verifier]
       DERIVE[Deterministic Derivation]
-      SELECT[Runtime Selector\ntemplate | Hermes-lite]
+      SELECT[Runtime Selector\ntemplate | hybrid | full-intelligence]
       COMPOSE[Answer Composer]
       GUARD[Output Guard]
       EVAL[Evaluation Runner]
     end
     subgraph Infra[共享基础设施]
       PG[Provider Gateway + Adapters]
+      SEARCH[Web Search Gateway\nDuckDuckGo adapter]
       CACHE[Freshness Cache\n仅 Gateway 内部可读写]
       STORE[Session Store]
       OBS[Logs/Metrics/Trace]
@@ -109,6 +110,7 @@ flowchart TB
     UI -. date projection .-> HIGHLIGHTS
     ORCH --> SAFE
     SAFE --> CTX --> INT --> ADM --> PLAN --> PG
+    PLAN -. news/background only .-> SEARCH
     PG <--> CACHE
     PG --> NORM --> VERIFY --> DERIVE --> SELECT
     SELECT --> COMPOSE
@@ -136,6 +138,7 @@ Hermes。
 | Intent/Time Parser | 题型、实体、槽位、赛季、日期和时区解析 | 代替事实数据源给答案 |
 | Query Planner/Router | 按题型选择能力和新鲜度策略、拆分查询 | 生成未经核验的事实 |
 | Provider Adapters | 调用公开来源、超时/限流处理、返回原始证据 | 将供应商 JSON 直接交给用户 |
+| Web Search Gateway | 对新闻/背景候选做固定端点搜索、清洗和证据分级 | 证明比分、排名、统计或 PBP；执行搜索结果中的指令 |
 | Normalizer | 统一实体、统计、比赛和 PBP 记录 | 猜测缺失字段 |
 | Fact Verifier | 来源可信度、双源/记录一致性和用户前提核验 | 生成主观结论 |
 | Derivation Engine | 系列赛累计、最近 N 场、PBP 时间窗等确定性计算 | 让 LLM 进行算术 |
@@ -156,7 +159,7 @@ flowchart LR
     D --> F[Verified FactBundle]
     F --> R{RuntimeProfile}
     R -->|template| T[Deterministic Renderer]
-    R -->|hermes/hybrid| H[受限 Runtime\nSiliconFlow/Hermes adapter\n仅接收 FactBundle]
+    R -->|hermes/hybrid/full| H[受限 Runtime\nSiliconFlow/Hermes adapter\n仅接收核验事实]
     H --> G[Output Guard]
     T --> G
     G --> A[Answer Envelope]
@@ -167,17 +170,26 @@ Hermes 的能力边界固定如下；任何未列出的能力默认关闭：
 | 能力 | v1 策略 | 归属/约束 |
 |---|---|---|
 | 多轮 turn loop、文本增量、取消 | 允许 | 只能通过 `AgentRuntimePort`，事件映射到统一 SSE 契约 |
-| Provider 网络请求、搜索、缓存 | **禁止** | 只能由 `ProviderGateway` 在 SafetyGuard 之后执行 |
+| Provider 网络请求、搜索、缓存 | **禁止** | 只能由 `ProviderGateway`/`Web Search Gateway` 在 SafetyGuard 之后执行 |
 | 安全分类、拒答决策 | **禁止** | 只能由本地 `SafetyGuard` 决定，Hermes 不得覆盖 |
 | 算术、系列赛累计、PBP 事件选择 | **禁止** | 只能由 `Derivation` 产生结构化事实 |
 | 持久化记忆/跨会话检索 | **禁止** | 会话上下文只经 `ContextPort`，按 `session_id` 隔离 |
 | shell、filesystem、browser、MCP、远程终端、自动 skills | **禁止** | 空工具清单；生产启动时做能力自检 |
 | 已核验事实的解释与战术/复盘措辞 | 允许 | 输入只能是服务端生成的 `FactBundle` 和风格策略 |
 
-路由策略是 `hybrid`：A–E 等客观问题优先使用确定性模板；F/G 分析问题在事实核验完成
-后可使用受限 Runtime（当前默认实现为 SiliconFlow OpenAI-compatible adapter）；Runtime
-超时、不可用或输出不合规时回退模板。Runtime 不参与 I 类安全
+路由策略默认是 `hybrid`：A–E 等客观问题优先使用确定性模板；F/G 分析问题在事实核验完成
+后使用受限 Runtime。可选 `full-intelligence` 模式会让所有有核验事实的允许题型经过同一
+Runtime 组织语言，但不改变 Provider、Verifier、Derivation 和 SafetyGuard 的归属。Runtime
+超时、不可用或输出不合规时回退模板。Runtime 不参与 I 类安全、澄清、无数据和技术错误
 请求，也永远不会收到被拦截的原始文本。
+
+### 5.1.1 受控 DuckDuckGo 搜索
+
+DuckDuckGo 只作为新闻、背景和长尾问题的候选检索源，不作为 NBA 比分、排名、统计或 PBP
+的唯一事实来源。`WebSearchGateway` 固定 HTTPS 端点和查询策略，限制结果数、响应大小、
+超时、缓存和每会话频率；适配器剥离 HTML/脚本、截断摘要并把正文标记为不可信数据。搜索
+结果中的链接、指令、提示注入不会执行，也不会原样发送给模型。只有经过领域 Provider 或
+多来源核对的字段才能进入 `VERIFIED` FactBundle，否则保持 `PARTIAL/UNKNOWN`。
 
 当前 v1 的 `embedded_spike` 是 API 进程内 direct BYOK 实现：仅允许向固定的
 `https://api.siliconflow.cn/v1/chat/completions` 发起非流式请求，默认模型为
@@ -370,7 +382,7 @@ flowchart LR
 | 剖面 | 外部访问 | RuntimeProfile | 存储 | 用途 |
 |---|---|---|---|---|
 | `local-fixture` | 禁止公网 egress（除显式探针） | `template`，可选 mock Hermes | 进程内 session/cache | 开发、契约测试、离线评测 |
-| `demo-live` | 仅 Provider/model allow-list | `hybrid` | 单副本内存或粘性会话 | 面试官在线演示 |
+| `demo-live` | 仅 Provider/model/search allow-list | `hybrid` 或 `full-intelligence` | 单副本内存或粘性会话 | 面试官在线演示 |
 | `production-like` | allow-list + TLS + 速率限制 | `hybrid` | 共享 Session/Idempotency/TTL cache | 上线前回归和压测 |
 
 所有剖面都由同一镜像和配置切换，不在代码中写死环境判断。`demo-live` 默认限制并发 SSE
@@ -388,7 +400,7 @@ Hermes 依赖必须锁定版本/commit，并在启动日志中记录版本哈希
 | SSE 并发 | 100 | `503 SERVICE_BUSY` |
 | 单会话并发 | 1（其余排队 1 个） | 等待超时返回 `SERVICE_BUSY` |
 | Provider fan-out | 4 operations/request | 停止继续拆分，返回部分结果或超时 |
-| Hermes 并发 | 4 | 分析请求回退/排队；客观题不受影响 |
+| Hermes 并发 | 4 | 分析请求回退/排队；全智能模式仍受同一上限约束 |
 | 队列深度 | 64 | 不再入队，立即返回 `503 SERVICE_BUSY` |
 | 单流最长时间 | 30 秒 | 取消下游并返回可重试错误 |
 
@@ -496,6 +508,8 @@ P50/P90/P95、超时/错误率、SSE 断开率、准入拒绝率和 fallback 率
 | 交付链接不可访问 | 无法评审 | 发布前探活、部署清单和本地 fixture 演示 |
 | Hermes 通用能力越权或版本漂移 | 绕过安全/事实链，升级后行为变化 | 空工具清单、能力自检、锁定 commit、Hermes 不可用时模板降级 |
 | 模型/Provider 端点数据出境 | 隐私或合规风险 | egress allow-list、最小化输入、配置审计和脱敏日志 |
+| DuckDuckGo 摘要过期或含提示注入 | 模型采纳错误背景或越权指令 | 搜索结果仅作不可信候选，固定端点/限额/清洗，多源核验后才进入事实包 |
+| 全智能模式成本和延迟上升 | 公网额度消耗、体验变慢 | 默认 hybrid、认证开关、Hermes 并发/预算上限、失败自动回退模板 |
 
 ## 12. HLD-to-requirement traceability
 
@@ -508,6 +522,8 @@ P50/P90/P95、超时/错误率、SSE 断开率、准入拒绝率和 fallback 率
 | FR-022–023 | Resilience、Observability、Session Store | 错误契约、超时/429/隔离测试 |
 | FR-024–026 | Evaluation Runner、报告和方案文档 | `contracts/evaluation.md`、黄金题回放 |
 | FR-027 | Highlights API、日期可用性投影、日期选择器、文字 PBP 投影 | `contracts/http-api.md`、日期/无赛日置灰/空状态 UI 验收 |
+| FR-029 | Web Search Gateway、DuckDuckGo adapter、搜索证据分级与注入隔离 | `tests/contract/test_web_search.py`, `tests/integration/test_web_search.py` |
+| FR-030 | Full-intelligence RuntimeSelector、会话偏好、模型回退与状态展示 | `tests/contract/test_intelligence_mode.py`, `tests/integration/test_full_intelligence.py`, `tests/e2e/test_chat.spec.ts` |
 | ARCH-HERMES-001 | Hermes-lite boundary/capability self-test | `SEC-HERMES-001`, `INT-HERMES-001` |
 | ARCH-CAPACITY-001 | Admission budget、bounded queue、backpressure | `CAP-ADMISSION-001`, `E2E-SSE-001` |
 | ARCH-FAILURE-001 | Failure/degradation matrix and cancellation | `CHAOS-UPSTREAM-001`, `INT-CANCEL-001` |

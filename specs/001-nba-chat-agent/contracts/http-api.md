@@ -60,7 +60,7 @@ The password and session token never appear in JSON responses or public logs.
 Response `200` (liveness; readiness may use `503`):
 
 ```json
-{"status":"ok|degraded|not_ready","version":"v1","mode":"live|fixture|hybrid","dependencies":{"session_store":"ok|degraded","cache":"ok|degraded","hermes":"disabled|ok|degraded","auth":"ok|degraded"}}
+{"status":"ok|degraded|not_ready","version":"v1","mode":"live|fixture|hybrid","capabilities":{"full_intelligence":true,"web_search":false},"dependencies":{"session_store":"ok|degraded","cache":"ok|degraded","hermes":"disabled|ok|degraded","auth":"ok|degraded","web_search":"enabled|disabled"}}
 ```
 
 `/healthz` is a compatibility alias for the public liveness response and must not expose
@@ -79,7 +79,8 @@ Request:
   "session_id": "optional UUID",
   "message": "2025-26 总决赛 G4 谁得分最高？",
   "client_timezone": "Asia/Shanghai",
-  "client_message_id": "optional idempotency key"
+  "client_message_id": "optional idempotency key",
+  "intelligence_mode": "hybrid|full|auto (optional)"
 }
 ```
 
@@ -116,6 +117,9 @@ or `no_data`). These are successful protocol responses, not transport failures:
 constrained analysis pass was accepted, and `mode=fallback` means the analysis path returned to
 the deterministic evidence-first answer. `status` is `not_requested`, `used`, `fallback`, or
 `disabled`. It never contains a model/provider name, endpoint, prompt, key, or internal IDs.
+
+`intelligence_mode=full` is accepted only when the service feature flag is enabled; otherwise the
+server safely uses hybrid routing. `auto` or an omitted field uses the configured default.
 
 `status=failed` uses the technical error envelope in §5. A blocked response must have an internal
 `provider_call_count=0`; that field is intentionally not exposed to the client. A clarification

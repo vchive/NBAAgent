@@ -99,17 +99,25 @@ async def healthz(request: Request):
         if auth_manager is None or not auth_manager.enabled or auth_manager.configured
         else "degraded"
     )
+    search_status = (
+        "enabled" if bool(getattr(settings, "ddg_search_enabled", False)) else "disabled"
+    )
     dependency_values = (session_status, cache_status, hermes_status, auth_status)
     status = "degraded" if "degraded" in dependency_values else "ok"
     return {
         "status": status,
         "version": "v1",
         "mode": mode,
+        "capabilities": {
+            "full_intelligence": bool(getattr(settings, "full_intelligence_enabled", False)),
+            "web_search": bool(getattr(settings, "ddg_search_enabled", False)),
+        },
         "dependencies": {
             "session_store": session_status,
             "cache": cache_status,
             "hermes": hermes_status,
             "auth": auth_status,
+            "web_search": search_status,
         },
     }
 
@@ -141,6 +149,9 @@ async def readyz(request: Request):
         if auth_manager is None or not auth_manager.enabled or auth_manager.configured
         else "degraded"
     )
+    search_status = (
+        "enabled" if bool(getattr(settings, "ddg_search_enabled", False)) else "disabled"
+    )
     # When a live composer is explicitly enabled, its local capability/key
     # check is part of readiness.  We do not perform a paid remote probe; a
     # missing key or malformed adapter simply keeps the instance out of the
@@ -148,21 +159,23 @@ async def readyz(request: Request):
     # explicit template-only profile.
     status = (
         "ok"
-        if store_ok
-        and cache_ok
-        and hermes_status in {"ok", "disabled"}
-        and auth_status == "ok"
+        if store_ok and cache_ok and hermes_status in {"ok", "disabled"} and auth_status == "ok"
         else "not_ready"
     )
     payload = {
         "status": status,
         "version": "v1",
         "mode": str(getattr(settings, "public_data_mode", "fixture")).lower(),
+        "capabilities": {
+            "full_intelligence": bool(getattr(settings, "full_intelligence_enabled", False)),
+            "web_search": bool(getattr(settings, "ddg_search_enabled", False)),
+        },
         "dependencies": {
             "session_store": "ok" if store_ok else "not_ready",
             "cache": "ok" if cache_ok else "not_ready",
             "hermes": hermes_status,
             "auth": auth_status,
+            "web_search": search_status,
         },
     }
     return JSONResponse(status_code=200 if status == "ok" else 503, content=payload)
