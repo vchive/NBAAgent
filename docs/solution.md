@@ -29,7 +29,8 @@ SiliconFlow / BYOK 需要单独说明：默认交付仍使用 `HERMES_LITE_MODE=
 `hermes`）和启用的 Hermes-lite mode 后，F/G 分析才会进入受限 SiliconFlow
 OpenAI-compatible adapter，默认模型为 `deepseek-ai/DeepSeek-V4-Flash`。当前实现是 API
 进程内 direct BYOK 出站，`sidecar` 隔离部署尚未交付；生产应迁移到独立、无工具的 sidecar。
-Key 只能通过 secret 文件或受控环境注入，不能进入仓库、镜像、前端、telemetry 或日志。
+Key 只能通过 secret 文件或受控环境注入，不能进入仓库、镜像、前端、telemetry 或日志；
+面试演示的隐藏输入步骤见 [`docs/byok.md`](byok.md)。
 在隔离实现交付前，`HERMES_LITE_MODE=sidecar` 会保持 not-ready/模板回退，不会绕过边界改走
 进程内直连。
 `LLM_MODE=live` 与 `PUBLIC_DATA_MODE` 独立：当前 SiliconFlow Compose profile 仍使用 fixture

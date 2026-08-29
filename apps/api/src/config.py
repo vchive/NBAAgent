@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 import os
 from dataclasses import dataclass, field
+from datetime import date
 from urllib.parse import urlparse
 
 
@@ -43,6 +44,9 @@ def _csv(name: str, default: tuple[str, ...] = ()) -> tuple[str, ...]:
 class Settings:
     app_env: str = "local"
     public_data_mode: str = "fixture"
+    # Optional fixed day for a reproducible fixture demo. Live/hybrid data
+    # modes always use the service's actual local date.
+    highlights_demo_date: str = ""
     provider_timeout_seconds: float = 8.0
     provider_max_retries: int = 2
     provider_max_response_bytes: int = 2_000_000
@@ -103,6 +107,7 @@ class Settings:
         settings = cls(
             app_env=os.getenv("APP_ENV", "local").lower(),
             public_data_mode=os.getenv("PUBLIC_DATA_MODE", "fixture").lower(),
+            highlights_demo_date=os.getenv("HIGHLIGHTS_DEMO_DATE", "").strip(),
             provider_timeout_seconds=_float("PROVIDER_TIMEOUT_SECONDS", 8.0),
             provider_max_retries=_int("PROVIDER_MAX_RETRIES", 2),
             provider_max_response_bytes=_int("PROVIDER_MAX_RESPONSE_BYTES", 2_000_000),
@@ -173,6 +178,11 @@ class Settings:
         hermes_lite_mode = str(self.hermes_lite_mode).lower()
         if public_data_mode not in {"fixture", "live", "hybrid"}:
             raise ValueError("PUBLIC_DATA_MODE must be fixture, live, or hybrid")
+        if self.highlights_demo_date:
+            try:
+                date.fromisoformat(self.highlights_demo_date)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("HIGHLIGHTS_DEMO_DATE must use YYYY-MM-DD") from exc
         if llm_mode not in {"mock", "live"}:
             raise ValueError("LLM_MODE must be mock or live")
         if runtime_profile not in {"template", "hermes", "hybrid"}:

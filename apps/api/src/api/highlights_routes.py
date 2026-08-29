@@ -68,7 +68,8 @@ async def highlights_availability(
         if (from_date is None) != (to_date is None):
             raise ValueError("from and to must be supplied together")
         if from_date is None and to_date is None:
-            today = service._now().astimezone(zone).date()
+            configured_demo = _fixture_demo_date(request)
+            today = configured_demo or service._now().astimezone(zone).date()
             start = today.replace(day=1)
             next_month = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
             end = next_month - timedelta(days=1)
@@ -124,7 +125,11 @@ async def highlights(
         zone = validate_timezone(timezone_name)
         timezone_name = zone.key
         if date_value is None:
-            target = service._now().astimezone(zone).date()
+            # A fixture deployment can opt into a fixed, populated day so an
+            # interview/demo instance remains useful even when the real
+            # calendar has no game. Live and hybrid modes deliberately ignore
+            # this setting and use the caller's actual local day.
+            target = _fixture_demo_date(request) or service._now().astimezone(zone).date()
         else:
             if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_value):
                 raise ValueError("date must use YYYY-MM-DD")
@@ -138,6 +143,24 @@ async def highlights(
     except HighlightsProviderError as exc:
         return _error_response(exc.code, exc.message, exc.status_code, retryable=exc.retryable)
     return result
+
+
+def _fixture_demo_date(request: Request) -> date | None:
+    """Return the configured fixture day, if this is a fixture deployment."""
+
+    settings = getattr(request.app.state, "settings", None)
+    if str(getattr(settings, "public_data_mode", "fixture")).lower() != "fixture":
+        return None
+    raw = str(getattr(settings, "highlights_demo_date", "") or "").strip()
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(raw)
+    except ValueError:
+        # Settings validation normally catches this. Keep the route fail-safe
+        # for injected test settings rather than turning health endpoints into
+        # a traceback.
+        return None
 
 
 def _error_response(

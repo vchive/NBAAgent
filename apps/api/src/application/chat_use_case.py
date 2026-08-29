@@ -1085,6 +1085,73 @@ class ChatUseCase:
                     ),
                 )
                 return facts, None, None, derived
+
+            # A date-scoped schedule is allowed to contain several games.  Keep
+            # the first game in the legacy single-game slot (so existing
+            # context/answer paths remain compatible), but verify and expose
+            # every canonical row to the composer.  Without this projection a
+            # query such as “某日有哪些比赛” would silently answer with only
+            # the provider's first row.
+            if parsed.intent.intent_name is IntentName.SCHEDULE_RESULT:
+                # Providers normally return a typed list, but retain a
+                # conservative guard for injected adapters that mix malformed
+                # rows or duplicate event IDs.  Duplicates are not rendered
+                # twice and make the evidence state partial rather than
+                # claiming a fully verified slate.
+                typed_games = [item for item in games if isinstance(item, Game)]
+                unique_games: list[Game] = []
+                seen_game_ids: set[str] = set()
+                duplicate_row = False
+                for item in typed_games:
+                    if item.game_id in seen_game_ids:
+                        duplicate_row = True
+                        continue
+                    seen_game_ids.add(item.game_id)
+                    unique_games.append(item)
+                if not unique_games:
+                    return (
+                        FactBundle(
+                            facts=[],
+                            missing=["比赛记录"],
+                            evidence_state=EvidenceState.NONE,
+                        ),
+                        None,
+                        None,
+                        None,
+                    )
+                # Preserve the provider evidence fingerprint on every row. A
+                # scoreboard response commonly has one evidence record for a
+                # whole date range, so sharing that record across the rows is
+                # more truthful than manufacturing a per-game source ID. The
+                # synthetic fallback is used only by injected providers that
+                # forgot to return evidence, keeping the verifier's invariant
+                # (verified facts always carry a non-empty evidence list).
+                provider_evidence_ids = [
+                    str(item.evidence_id).strip()
+                    for item in evidence
+                    if getattr(item, "evidence_id", None)
+                    and not str(item.evidence_id).isspace()
+                ]
+                verified_rows = [
+                    verify_game(item, provider_evidence_ids or [f"game:{item.game_id}"])
+                    for item in unique_games
+                ]
+                merged_facts = [fact for row in verified_rows for fact in row.facts]
+                merged_missing = [missing for row in verified_rows for missing in row.missing]
+                malformed_rows = len(typed_games) != len(games)
+                partial = bool(
+                    provider_partial
+                    or malformed_rows
+                    or duplicate_row
+                    or any(row.evidence_state is EvidenceState.PARTIAL for row in verified_rows)
+                )
+                facts = FactBundle(
+                    facts=merged_facts,
+                    missing=merged_missing,
+                    evidence_state=EvidenceState.PARTIAL if partial else EvidenceState.VERIFIED,
+                )
+                derived = DerivedResult(games=unique_games, partial=partial)
+                return facts, unique_games[0], None, derived
             game_facts = verify_game(games[0], [f"game:{games[0].game_id}"])
             if provider_partial and game_facts.evidence_state is EvidenceState.VERIFIED:
                 game_facts = FactBundle(

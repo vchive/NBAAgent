@@ -25,6 +25,9 @@
     featuredAwayToken: $("#featured-away-token"),
     featuredAwayName: $("#featured-away-name"),
     featuredGameFoot: $("#featured-game-foot"),
+    gamesSection: $("#games-section"),
+    gameList: $("#game-list"),
+    gameListCount: $("#game-list-count"),
     highlightsTitle: $("#highlights-title"),
     highlightModes: $$("[data-highlight-mode]"),
     highlightDateLabel: $("#highlight-date-label"),
@@ -126,6 +129,8 @@
     historyDate: "2026-06-12",
     activeGame: null,
     activePbp: PBP,
+    highlightGames: [],
+    selectedGameId: null,
     apiAvailable: false,
     apiProbeComplete: false,
     highlightRequest: 0,
@@ -140,24 +145,53 @@
     calendarOpen: false,
   };
 
-  // The static demo keeps one deterministic featured game offline.  The same
+  // The static demo keeps a deterministic multi-game slate offline. The same
   // shape is returned by GET /api/v1/highlights in the API implementation, so
   // this projection can switch transports without changing the interaction.
   const HIGHLIGHT_FIXTURES = {
-    "2026-06-12": {
-      game_id: "2026-finals-g4",
-      date: "2026-06-12",
-      home_name: "凯尔特人",
-      home_abbreviation: "BOS",
-      away_name: "雷霆",
-      away_abbreviation: "OKC",
-      home_score: 108,
-      away_score: 104,
-      series_game_number: 4,
-      status: "final",
-      quarter_scores: { Q1: "27–24", Q2: "25–31", Q3: "28–31", Q4: "24–22" },
-      pace: "98.4",
-    },
+    "2026-06-12": [
+      {
+        game_id: "2026-finals-g4",
+        date: "2026-06-12",
+        home_name: "凯尔特人",
+        home_abbreviation: "BOS",
+        away_name: "雷霆",
+        away_abbreviation: "OKC",
+        home_score: 108,
+        away_score: 104,
+        series_game_number: 4,
+        status: "final",
+        start_utc: "2026-06-12T01:30:00Z",
+        quarter_scores: { Q1: "27–24", Q2: "25–31", Q3: "28–31", Q4: "24–22" },
+        pace: "98.4",
+      },
+      {
+        game_id: "2026-demo-den-gsw",
+        date: "2026-06-12",
+        home_name: "掘金",
+        home_abbreviation: "DEN",
+        away_name: "勇士",
+        away_abbreviation: "GSW",
+        home_score: 103,
+        away_score: 99,
+        status: "final",
+        series_game_number: null,
+        start_utc: "2026-06-11T21:30:00Z",
+      },
+      {
+        game_id: "2026-demo-lal-nyk",
+        date: "2026-06-12",
+        home_name: "湖人",
+        home_abbreviation: "LAL",
+        away_name: "尼克斯",
+        away_abbreviation: "NYK",
+        home_score: 112,
+        away_score: 106,
+        status: "final",
+        series_game_number: null,
+        start_utc: "2026-06-11T18:00:00Z",
+      },
+    ],
     "2026-06-10": {
       game_id: "2026-finals-g3",
       date: "2026-06-10",
@@ -169,6 +203,7 @@
       away_score: 112,
       series_game_number: 3,
       status: "final",
+      start_utc: "2026-06-10T01:30:00Z",
     },
     "2026-06-08": {
       game_id: "2026-finals-g2",
@@ -181,6 +216,7 @@
       away_score: 99,
       series_game_number: 2,
       status: "final",
+      start_utc: "2026-06-08T01:30:00Z",
     },
     "2026-06-06": {
       game_id: "2026-finals-g1",
@@ -193,6 +229,7 @@
       away_score: 110,
       series_game_number: 1,
       status: "final",
+      start_utc: "2026-06-06T01:30:00Z",
     },
     "2026-05-20": {
       game_id: "2026-regular-bos-okc",
@@ -204,6 +241,7 @@
       home_score: 106,
       away_score: 103,
       status: "final",
+      start_utc: "2026-05-20T00:00:00Z",
     },
   };
 
@@ -215,7 +253,16 @@
     "2026-finals-g4": PBP,
   };
 
-  const KNOWN_TOKEN_CLASSES = ["token-bos", "token-okc", "token-neutral"];
+  const TOKEN_PALETTE = Object.freeze({
+    bos: "token-bos",
+    okc: "token-okc",
+    lal: "token-lal",
+    nyk: "token-nyk",
+    den: "token-den",
+    gsw: "token-gsw",
+  });
+
+  const KNOWN_TOKEN_CLASSES = ["token-neutral", ...Object.values(TOKEN_PALETTE)];
 
   function formatShortDate(value) {
     return String(value || "").replaceAll("-", "/");
@@ -223,7 +270,7 @@
 
   function tokenClass(abbreviation) {
     const key = String(abbreviation || "").trim().toLowerCase();
-    return ["bos", "okc"].includes(key) ? `token-${key}` : "token-neutral";
+    return TOKEN_PALETTE[key] || "token-neutral";
   }
 
   function setTeamToken(node, abbreviation) {
@@ -515,6 +562,16 @@
 
   function fixtureDateSet() {
     return new Set(Object.keys(HIGHLIGHT_FIXTURES));
+  }
+
+  function fixtureGamesForDate(dateValue) {
+    const value = HIGHLIGHT_FIXTURES[dateValue];
+    if (Array.isArray(value)) return value;
+    return value ? [value] : [];
+  }
+
+  function allFixtureGames() {
+    return Object.keys(HIGHLIGHT_FIXTURES).flatMap((dateValue) => fixtureGamesForDate(dateValue));
   }
 
   function seedFixtureAvailability() {
@@ -1349,7 +1406,10 @@
     };
     state.run = run;
     setComposerBusy(true);
-    setStreamStatus(true, "正在准备");
+    // Show an actionable transport state immediately.  The server may take a
+    // few seconds to emit its first progress event while the live model is
+    // selected; “正在准备” looked like a stuck page during that window.
+    setStreamStatus(true, "正在连接服务");
     setConnection("working", "连接中");
 
     schedule(run, () => handleStreamEvent("run.started", { request_id: response.request_id, session_id: state.sessionId }), 80);
@@ -1408,8 +1468,17 @@
     };
     state.run = run;
     setComposerBusy(true);
-    setStreamStatus(true, "正在准备");
+    setStreamStatus(true, "正在连接服务");
     setConnection("working", "连接中");
+
+    // If the first SSE frame is delayed by a proxy or a cold model connection,
+    // keep the user informed instead of leaving the initial label unchanged.
+    // ``finishRun`` clears this timer together with the rest of the run state.
+    schedule(run, () => {
+      if (!run.started && state.run === run) {
+        setStreamStatus(true, "服务响应较慢，仍在等待");
+      }
+    }, 2500);
 
     window.CourtsideApi.streamChat({
       message,
@@ -1434,10 +1503,16 @@
       // Auto-fallback is intentionally limited to transport failures.  A
       // valid API error must remain visible so the user can retry it.
       if (error?.network !== false) {
+        // Stop sending subsequent questions into the same broken transport.
+        // A page reload/probe can re-enable the API, while the current session
+        // remains immediately usable through the deterministic fixture.
+        state.apiAvailable = false;
+        state.apiProbeComplete = true;
         state.run = null;
         placeholder.article.remove();
         setComposerBusy(false);
         setStreamStatus(false);
+        setTransportLabel(false);
         setConnection("ready", "离线演示");
         showToast("API 暂不可用，已切换到离线演示");
         startDemoRun(message, { reuseUser: true, clientMessageId });
@@ -1538,8 +1613,8 @@
 
   function applyGameToHud(game) {
     const gameNumber = game.series_game_number ? `G${game.series_game_number}` : "GAME";
-    const pbp = PBP_BY_GAME[game.game_id] || null;
-    const fixture = Object.values(HIGHLIGHT_FIXTURES).find((item) => item.game_id === game.game_id);
+    const pbp = pbpForGame(game.game_id);
+    const fixture = allFixtureGames().find((item) => item.game_id === game.game_id);
     const quarterScores = game.quarter_scores || fixture?.quarter_scores || {};
     setTeamToken(el.hudAwayToken, game.away_abbreviation || "AWAY");
     setTeamToken(el.hudHomeToken, game.home_abbreviation || "HOME");
@@ -1570,8 +1645,195 @@
     });
   }
 
+  function normalizeHighlightGames(games) {
+    const seen = new Set();
+    return (Array.isArray(games) ? games : []).filter((game) => {
+      if (!game || typeof game !== "object") return false;
+      const id = String(game.game_id || "").trim();
+      if (!id || seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+  }
+
+  function pbpForGame(gameId) {
+    const key = String(gameId || "");
+    return Object.prototype.hasOwnProperty.call(PBP_BY_GAME, key) ? PBP_BY_GAME[key] : null;
+  }
+
+  function gameHasPbp(game) {
+    const pbp = game ? pbpForGame(game.game_id) : null;
+    return Boolean(pbp && Object.values(pbp).some((events) => Array.isArray(events) && events.length));
+  }
+
+  function defaultPbpPeriod(pbp) {
+    // Prefer the final period for a familiar replay entry point, then fall
+    // back to the latest populated period.  A game without PBP still opens on
+    // Q4 so the empty state explains the missing source honestly.
+    return ["Q4", "Q3", "Q2", "Q1", "OT"].find((period) => {
+      return Array.isArray(pbp?.[period]) && pbp[period].length;
+    }) || "Q4";
+  }
+
+  function formatGameStart(startUtc) {
+    if (!startUtc) return "时间待定";
+    const parsed = new Date(startUtc);
+    if (Number.isNaN(parsed.getTime())) return "时间待定";
+    const parts = new Intl.DateTimeFormat("zh-CN", {
+      timeZone: "Asia/Shanghai",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).formatToParts(parsed);
+    const values = Object.fromEntries(
+      parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value]),
+    );
+    if (!values.month || !values.day || !values.hour || !values.minute) return "时间待定";
+    return `${values.month}/${values.day} ${values.hour}:${values.minute}`;
+  }
+
+  function gameStatusClass(status) {
+    const normalized = String(status || "unknown").toLowerCase();
+    return ["live", "final", "scheduled", "postponed"].includes(normalized)
+      ? normalized
+      : "unknown";
+  }
+
+  function updateGameListSelection() {
+    if (!el.gameList) return;
+    $$(".game-list-card", el.gameList).forEach((card) => {
+      const selected = card.dataset.gameId === String(state.selectedGameId || "");
+      card.classList.toggle("selected", selected);
+      card.setAttribute("aria-pressed", selected ? "true" : "false");
+      card.setAttribute("aria-current", selected ? "true" : "false");
+    });
+  }
+
+  function renderGameList(games) {
+    if (!el.gameList) return;
+    const values = normalizeHighlightGames(games);
+    el.gameList.textContent = "";
+    if (el.gameListCount) el.gameListCount.textContent = `${String(values.length).padStart(2, "0")} 场`;
+    if (el.gamesSection) el.gamesSection.hidden = !values.length;
+    if (!values.length) return;
+
+    values.forEach((game, index) => {
+      const gameId = String(game.game_id);
+      const card = document.createElement("button");
+      card.type = "button";
+      card.className = `game-list-card game-list-card-${gameStatusClass(game.status)}`;
+      card.dataset.gameId = gameId;
+      card.setAttribute("aria-label", `查看${game.away_name || "客队"}对${game.home_name || "主队"}的比赛`);
+      card.addEventListener("click", () => selectActiveGame(gameId, { announce: true }));
+
+      const head = document.createElement("span");
+      head.className = "game-list-card-head";
+      const order = document.createElement("span");
+      order.className = "game-list-order";
+      order.textContent = String(index + 1).padStart(2, "0");
+      const start = document.createElement("span");
+      start.className = "game-list-time";
+      start.textContent = formatGameStart(game.start_utc);
+      const status = document.createElement("span");
+      status.className = "game-list-status";
+      status.textContent = statusLabel(game.status);
+      head.append(order, start, status);
+
+      const matchup = document.createElement("span");
+      matchup.className = "game-list-matchup";
+      const away = document.createElement("span");
+      away.className = "game-list-team game-list-away";
+      const awayToken = document.createElement("span");
+      awayToken.className = `team-token ${tokenClass(game.away_abbreviation)}`;
+      awayToken.textContent = game.away_abbreviation || "AWY";
+      const awayName = document.createElement("span");
+      awayName.className = "game-list-team-name";
+      awayName.textContent = game.away_name || "客队";
+      away.append(awayToken, awayName);
+      const awayScore = document.createElement("strong");
+      awayScore.className = "game-list-score";
+      awayScore.textContent = game.away_score == null ? "—" : String(game.away_score);
+      const divider = document.createElement("span");
+      divider.className = "game-list-score-divider";
+      divider.textContent = "–";
+      const homeScore = document.createElement("strong");
+      homeScore.className = "game-list-score";
+      homeScore.textContent = game.home_score == null ? "—" : String(game.home_score);
+      const home = document.createElement("span");
+      home.className = "game-list-team game-list-home";
+      const homeName = document.createElement("span");
+      homeName.className = "game-list-team-name";
+      homeName.textContent = game.home_name || "主队";
+      const homeToken = document.createElement("span");
+      homeToken.className = `team-token ${tokenClass(game.home_abbreviation)}`;
+      homeToken.textContent = game.home_abbreviation || "HOM";
+      home.append(homeName, homeToken);
+      matchup.append(away, awayScore, divider, homeScore, home);
+
+      const foot = document.createElement("span");
+      foot.className = "game-list-card-foot";
+      const coverage = document.createElement("span");
+      coverage.className = `game-list-coverage ${gameHasPbp(game) ? "has-pbp" : "no-pbp"}`;
+      coverage.textContent = gameHasPbp(game) ? "文字回放" : "暂无 PBP";
+      const hint = document.createElement("span");
+      hint.className = "game-list-hint";
+      hint.textContent = String(gameId).startsWith("2026-demo-") ? "DEMO" : "查看 HUD";
+      foot.append(coverage, hint);
+      card.append(head, matchup, foot);
+      el.gameList.append(card);
+    });
+    updateGameListSelection();
+  }
+
+  function renderFeaturedGame(game, mode, dateValue) {
+    if (!game || !el.featuredGame) return;
+    const safeDate = dateValue || state.highlightDate || "";
+    el.featuredGame.hidden = false;
+    el.featuredGame.setAttribute("aria-label", `查看${game.home_name || "主队"}与${game.away_name || "客队"}的比赛回放`);
+    setTeamToken(el.featuredHomeToken, game.home_abbreviation || "HOME");
+    setTeamToken(el.featuredAwayToken, game.away_abbreviation || "AWAY");
+    if (el.featuredHomeName) el.featuredHomeName.textContent = game.home_name || "主队";
+    if (el.featuredAwayName) el.featuredAwayName.textContent = game.away_name || "客队";
+    if (el.featuredGameMeta) {
+      const gameNumber = game.series_game_number ? `G${game.series_game_number}` : "GAME";
+      const demoLabel = String(game.game_id || "").startsWith("2026-demo-") ? " · DEMO" : "";
+      el.featuredGameMeta.textContent = `NBA · ${gameNumber}${demoLabel} · ${String(game.game_id || "").toUpperCase()}`;
+    }
+    if (el.featuredGameState) el.featuredGameState.textContent = statusLabel(game.status);
+    const scores = $$(".mini-scoreboard > strong", el.featuredGame);
+    if (scores[0]) scores[0].textContent = game.home_score == null ? "—" : String(game.home_score);
+    if (scores[1]) scores[1].textContent = game.away_score == null ? "—" : String(game.away_score);
+    if (el.featuredGameFoot) {
+      const todayLabel = safeDate === beijingDateString() ? "今日赛事" : "演示赛事";
+      el.featuredGameFoot.textContent = `${formatShortDate(safeDate)} · ${mode === "history" ? "历史回顾" : todayLabel}`;
+    }
+  }
+
+  function selectActiveGame(gameId, options = {}) {
+    const targetId = String(gameId || "");
+    const game = state.highlightGames.find((item) => String(item.game_id) === targetId);
+    if (!game) return false;
+    state.activeGame = game;
+    state.selectedGameId = targetId;
+    state.activePbp = pbpForGame(targetId);
+    updateGameListSelection();
+    renderFeaturedGame(game, state.highlightMode, state.highlightDate);
+    applyGameToHud(game);
+    renderPbp(defaultPbpPeriod(state.activePbp));
+    if (options.announce) {
+      const matchup = `${game.away_name || "客队"} · ${game.home_name || "主队"}`;
+      showToast(state.activePbp ? `已切换至 ${matchup}，可查看文字回放` : `已切换至 ${matchup}，该场暂无可用文字回放`);
+    }
+    return true;
+  }
+
   function renderHighlightProjection(games, mode, dateValue) {
-    const game = games && games[0];
+    const values = normalizeHighlightGames(games);
+    const previousId = state.selectedGameId;
+    const game = values.find((item) => String(item.game_id) === String(previousId || "")) || values[0];
+    state.highlightGames = values;
     state.highlightMode = mode;
     state.highlightDate = dateValue;
     el.highlightModes.forEach((button) => {
@@ -1600,14 +1862,18 @@
     if (el.dayDivider) {
       const dividerText = mode === "history"
         ? `历史回顾 · ${formatShortDate(safeDate)}`
-        : (state.apiAvailable ? `今天 · ${formatShortDate(safeDate)}` : `演示日期 · ${formatShortDate(safeDate)}`);
+        : (state.apiAvailable && safeDate === beijingDateString()
+          ? `今天 · ${formatShortDate(safeDate)}`
+          : `演示日期 · ${formatShortDate(safeDate)}`);
       const label = $("span", el.dayDivider);
       if (label) label.textContent = dividerText;
     }
     if (!game) {
       state.activeGame = null;
+      state.selectedGameId = null;
       state.activePbp = null;
       el.featuredGame.hidden = true;
+      renderGameList([]);
       if (el.highlightsEmpty) {
         // Reset a transient validation message before rendering a normal
         // empty-date response.
@@ -1619,27 +1885,13 @@
       return;
     }
     state.activeGame = game;
-    state.activePbp = PBP_BY_GAME[game.game_id] || null;
-    el.featuredGame.hidden = false;
+    state.selectedGameId = String(game.game_id);
+    state.activePbp = pbpForGame(game.game_id);
+    renderGameList(values);
+    renderFeaturedGame(game, mode, dateValue);
     if (el.highlightsEmpty) el.highlightsEmpty.hidden = true;
-    el.featuredGame.setAttribute("aria-label", `查看${game.home_name}与${game.away_name}的比赛回放`);
-    setTeamToken(el.featuredHomeToken, game.home_abbreviation || "HOME");
-    setTeamToken(el.featuredAwayToken, game.away_abbreviation || "AWAY");
-    if (el.featuredHomeName) el.featuredHomeName.textContent = game.home_name || "主队";
-    if (el.featuredAwayName) el.featuredAwayName.textContent = game.away_name || "客队";
-    if (el.featuredGameMeta) {
-      const gameNumber = game.series_game_number ? `G${game.series_game_number}` : "GAME";
-      el.featuredGameMeta.textContent = `NBA · ${gameNumber} · ${String(game.game_id || "").toUpperCase()}`;
-    }
-    if (el.featuredGameState) el.featuredGameState.textContent = statusLabel(game.status);
-    const scores = $$(".mini-scoreboard > strong", el.featuredGame);
-    if (scores[0]) scores[0].textContent = game.home_score == null ? "—" : String(game.home_score);
-    if (scores[1]) scores[1].textContent = game.away_score == null ? "—" : String(game.away_score);
-    if (el.featuredGameFoot) {
-      el.featuredGameFoot.textContent = `${formatShortDate(safeDate)} · ${mode === "history" ? "历史回顾" : "今日赛事"}`;
-    }
     applyGameToHud(game);
-    renderPbp("Q4");
+    renderPbp(defaultPbpPeriod(state.activePbp));
   }
 
   async function loadHighlights(mode, selectedDate) {
@@ -1699,10 +1951,10 @@
         seedFixtureAvailability();
       }
     }
-    const fixture = HIGHLIGHT_FIXTURES[fallbackDate];
-    recordHighlightAvailability(fallbackDate, Boolean(fixture), "fixture");
-    renderHighlightProjection(fixture ? [fixture] : [], mode, fallbackDate);
-    if (!fixture && mode === "history") showToast("该日期暂无比赛记录");
+    const fixtureGames = fixtureGamesForDate(fallbackDate);
+    recordHighlightAvailability(fallbackDate, Boolean(fixtureGames.length), "fixture");
+    renderHighlightProjection(fixtureGames, mode, fallbackDate);
+    if (!fixtureGames.length && mode === "history") showToast("该日期暂无比赛记录");
     if (state.apiProbeComplete && !state.apiAvailable) {
       setConnection("ready", "离线演示");
     }
@@ -1746,7 +1998,10 @@
   function clearHighlightProjection(message = "这一天暂无可用比赛记录。") {
     state.activeGame = null;
     state.activePbp = null;
+    state.highlightGames = [];
+    state.selectedGameId = null;
     if (el.featuredGame) el.featuredGame.hidden = true;
+    renderGameList([]);
     if (el.highlightsEmpty) {
       el.highlightsEmpty.textContent = message;
       el.highlightsEmpty.hidden = false;
@@ -2095,7 +2350,7 @@
     state.calendarMonth = monthKeyForDate(el.highlightDate?.value || state.highlightDate);
     renderPbp("Q4");
     setTransportLabel(false);
-    renderHighlightProjection([HIGHLIGHT_FIXTURES["2026-06-12"]], "today", "2026-06-12");
+    renderHighlightProjection(fixtureGamesForDate("2026-06-12"), "today", "2026-06-12");
     initSseParserDemo();
     bindEvents();
     // Probing is deliberately best-effort and bounded.  If uvicorn is not

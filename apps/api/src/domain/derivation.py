@@ -29,6 +29,12 @@ class DerivedResult:
     missing: list[str] = field(default_factory=list)
     partial: bool = False
     events: list[PlayEvent] = field(default_factory=list)
+    # A date-scoped schedule can contain more than one game.  Keep the
+    # canonical rows alongside derived facts so the renderer can present the
+    # complete slate without overloading the single-game ``game`` slot used
+    # by existing answer paths.  The field is optional/backwards compatible;
+    # derivation helpers that do not project a schedule leave it empty.
+    games: list[Game] = field(default_factory=list)
 
     @property
     def evidence_state(self) -> EvidenceState:

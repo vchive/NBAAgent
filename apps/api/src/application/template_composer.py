@@ -136,6 +136,10 @@ class TemplateComposer:
         blocks: list[AnswerBlock] = []
         lines: list[str] = []
         evidence = facts.evidence_state
+        schedule_games = list(getattr(derived, "games", []) or [])
+        multi_game_schedule = (
+            intent.intent_name.value == "SCHEDULE_RESULT" and len(schedule_games) > 1
+        )
         # A correction is rendered before the normal answer, matching the LLD policy.
         if public_corrections:
             for item in public_corrections:
@@ -151,7 +155,7 @@ class TemplateComposer:
             "RECAP",
             "TACTICAL",
             "FOLLOW_UP",
-        }:
+        } and not multi_game_schedule:
             if game.home_score is not None and game.away_score is not None:
                 winner = (
                     game.home
@@ -181,6 +185,53 @@ class TemplateComposer:
                     AnswerBlock(type=AnswerBlockType.WARNING, content="比分尚未完成核验。")
                 )
                 lines.append("比分尚未完成核验。")
+
+        if multi_game_schedule:
+            # Keep a broad date/scoreboard question complete when the provider
+            # returns a normal NBA slate.  The single-game lead above is
+            # intentionally suppressed in this branch; otherwise the first
+            # provider row would look like the entire day's result.  Scores in
+            # the table are backed by the merged ``verify_game`` facts created
+            # by ChatUseCase, so OutputGuard can trace every numeric value.
+            status_labels = {
+                "FINAL": "已结束",
+                "LIVE": "进行中",
+                "SCHEDULED": "未开赛",
+                "POSTPONED": "延期",
+                "UNKNOWN": "未知",
+            }
+            rows: list[list[str]] = []
+            for item in schedule_games:
+                if item.home_score is None or item.away_score is None:
+                    score = "—"
+                else:
+                    score = f"{item.away_score}–{item.home_score}"
+                status = status_labels.get(
+                    getattr(item.status, "value", item.status), "未知"
+                )
+                rows.append(
+                    [
+                        format_beijing(item.start_utc),
+                        item.away.display_name,
+                        score,
+                        item.home.display_name,
+                        status,
+                    ]
+                )
+            blocks.append(
+                AnswerBlock(
+                    type=AnswerBlockType.TABLE,
+                    columns=["北京时间", "客队", "比分", "主队", "状态"],
+                    rows=rows,
+                )
+            )
+            schedule_text = (
+                "该日期的比赛如下，比分与状态均按已核验记录整理。"
+                if evidence is EvidenceState.VERIFIED
+                else "该日期的比赛如下，部分字段仍待核验，请以标注的缺失状态为准。"
+            )
+            blocks.append(AnswerBlock(type=AnswerBlockType.TEXT, content=schedule_text))
+            lines.append(schedule_text)
 
         if (
             intent.intent_name.value in {"DATA", "FACT_CHECK"}

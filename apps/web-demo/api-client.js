@@ -26,6 +26,14 @@
 
   const baseUrl = defaultBase();
 
+  // A proxy or an upstream failure can leave a fetch stream open without
+  // delivering a terminal SSE event.  Without a client-side deadline the
+  // composer remains locked in its loading state forever.  The API itself has
+  // bounded provider timeouts, so this is deliberately generous while still
+  // guaranteeing that the UI eventually recovers to the offline demo/error
+  // branch.
+  const STREAM_TIMEOUT_MS = 15_000;
+
   function endpoint(path) {
     return `${baseUrl}${path}`;
   }
@@ -103,55 +111,100 @@
 
   async function streamChat({ message, sessionId, clientMessageId, onEvent, signal }) {
     if (!baseUrl) throw new Error("API base is not configured");
-    const response = await fetch(endpoint("/api/v1/chat/stream"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-      body: JSON.stringify({
-        message,
-        session_id: sessionId || undefined,
-        client_message_id: clientMessageId || undefined,
-        client_timezone: "Asia/Shanghai",
-      }),
-      credentials: "omit",
-      signal,
-    });
+    const requestController = new AbortController();
+    let timedOut = false;
+    const forwardAbort = () => requestController.abort();
+    if (signal) {
+      if (signal.aborted) requestController.abort();
+      else signal.addEventListener("abort", forwardAbort, { once: true });
+    }
+    const timeout = window.setTimeout(() => {
+      timedOut = true;
+      requestController.abort();
+    }, STREAM_TIMEOUT_MS);
 
-    const contentType = response.headers.get("content-type") || "";
-    if (!response.ok || !contentType.includes("text/event-stream")) {
-      let payload = null;
-      try {
-        payload = await response.json();
-      } catch (_error) {
-        // Keep the public error generic; the UI must not display raw response text.
+    let response;
+    try {
+      response = await fetch(endpoint("/api/v1/chat/stream"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+        body: JSON.stringify({
+          message,
+          session_id: sessionId || undefined,
+          client_message_id: clientMessageId || undefined,
+          client_timezone: "Asia/Shanghai",
+        }),
+        credentials: "omit",
+        signal: requestController.signal,
+      });
+
+      const contentType = response.headers.get("content-type") || "";
+      if (!response.ok || !contentType.includes("text/event-stream")) {
+        let payload = null;
+        try {
+          payload = await response.json();
+        } catch (_error) {
+          // Keep the public error generic; the UI must not display raw response text.
+        }
+        const error = new Error(payload?.error?.message || "服务暂时不可用，请稍后重试。");
+        error.publicPayload = payload || {
+          status: "failed",
+          error: { code: "SERVICE_BUSY", retryable: true, message: error.message },
+        };
+        error.network = false;
+        throw error;
       }
-      const error = new Error(payload?.error?.message || "服务暂时不可用，请稍后重试。");
-      error.publicPayload = payload || {
-        status: "failed",
-        error: { code: "SERVICE_BUSY", retryable: true, message: error.message },
-      };
-      error.network = false;
+
+      if (!response.body) throw new Error("流式响应不可用");
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let terminalSeen = false;
+      const parser = new SSEParser((eventName, raw) => {
+        // Once a terminal event arrives the API contract is complete.  Ignore
+        // accidental frames after it and stop reading below; this prevents a
+        // proxy that keeps the HTTP connection alive from keeping the UI in
+        // “正在准备” indefinitely.
+        if (terminalSeen) return;
+        let payload;
+        try {
+          payload = JSON.parse(raw);
+        } catch (_error) {
+          return;
+        }
+        if (eventName === "message.completed" || eventName === "run.error") {
+          terminalSeen = true;
+        }
+        onEvent(eventName, payload);
+      });
+      while (!terminalSeen) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        parser.feed(decoder.decode(chunk.value, { stream: true }));
+      }
+      // Release the network reader promptly when a terminal frame was seen.
+      // The server normally closes immediately, but this is important when a
+      // load balancer buffers/keeps the connection open.
+      if (terminalSeen) {
+        try {
+          await reader.cancel();
+        } catch (_error) {
+          // The terminal event has already been delivered; cancellation is
+          // only a resource cleanup best effort.
+        }
+      }
+      parser.feed(decoder.decode());
+      parser.flush();
+    } catch (error) {
+      if (timedOut && !signal?.aborted) {
+        const timeoutError = new Error("流式响应超时，已切换到离线演示。", { cause: error });
+        timeoutError.network = true;
+        throw timeoutError;
+      }
       throw error;
+    } finally {
+      window.clearTimeout(timeout);
+      signal?.removeEventListener("abort", forwardAbort);
     }
-
-    if (!response.body) throw new Error("流式响应不可用");
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    const parser = new SSEParser((eventName, raw) => {
-      let payload;
-      try {
-        payload = JSON.parse(raw);
-      } catch (_error) {
-        return;
-      }
-      onEvent(eventName, payload);
-    });
-    while (true) {
-      const chunk = await reader.read();
-      if (chunk.done) break;
-      parser.feed(decoder.decode(chunk.value, { stream: true }));
-    }
-    parser.feed(decoder.decode());
-    parser.flush();
   }
 
   async function highlights(dateValue, timezone) {

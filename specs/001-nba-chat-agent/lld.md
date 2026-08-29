@@ -551,10 +551,14 @@ Provider。
 `GET /api/v1/highlights?date=YYYY-MM-DD&timezone=...` is a read-only scoreboard projection,
 separate from the chat `HISTORY` intent. The service converts the requested local calendar day
 to a half-open UTC range, rejects dates later than the injected clock's local day, and returns a
-provider-free `games` projection plus `evidence_state`/`as_of_beijing`. An empty successful result
-is represented by `games: []`; the browser must clear the prior card before rendering it. The
-static demo uses `2026-06-12` as its explicit offline fixture date and labels the PBP panel as
-text-only; no third-party media URL is accepted by this contract.
+provider-free `games` projection plus `evidence_state`/`as_of_beijing`. The `games` array is never
+truncated: a normal NBA slate may contain multiple games. The browser renders a compact list,
+keeps one selected game as the featured card, and updates HUD/PBP atomically when a list item is
+clicked. An empty successful result is represented by `games: []`; the browser must clear the
+prior card before rendering it. Missing PBP is rendered as an explicit no-data state rather than
+reusing events from another game. The static demo uses `2026-06-12` as its explicit offline
+fixture date and labels the PBP panel as text-only; no third-party media URL is accepted by this
+contract.
 
 ### 9.2 Date availability projection
 

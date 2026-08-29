@@ -102,6 +102,13 @@
             </span>
             <span class="game-foot"><span id="featured-game-foot">2026/06/12 · 波士顿</span><span class="arrow" aria-hidden="true">↗</span></span>
           </button>
+          <section class="games-section" id="games-section" aria-labelledby="games-section-title" hidden>
+            <div class="section-label games-section-heading">
+              <span id="games-section-title">当日比赛</span>
+              <span class="section-count" id="game-list-count">00 场</span>
+            </div>
+            <div class="game-list" id="game-list" role="list" aria-label="当日比赛列表"></div>
+          </section>
           <div class="highlights-empty" id="highlights-empty" hidden>这一天暂无可用比赛记录。</div>
 
           <div class="rail-section">
@@ -178,7 +185,7 @@
 
           <div class="stream-status" id="stream-status" role="status" aria-live="polite" hidden>
             <span class="stream-spinner" aria-hidden="true"></span>
-            <span class="stream-stage" id="stream-stage">正在准备</span>
+            <span class="stream-stage" id="stream-stage">正在连接服务</span>
             <button type="button" class="stop-button" id="stop-stream" aria-label="停止生成">停止</button>
           </div>
 

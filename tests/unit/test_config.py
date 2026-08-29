@@ -45,3 +45,8 @@ def test_sidecar_profile_does_not_require_a_direct_provider_url() -> None:
         hermes_lite_mode="sidecar",
         siliconflow_base_url="http://sidecar-placeholder.invalid/v1",
     ).validate()
+
+
+def test_fixture_demo_date_must_be_iso_calendar_date() -> None:
+    with pytest.raises(ValueError, match="HIGHLIGHTS_DEMO_DATE"):
+        Settings(highlights_demo_date="2026-02-30").validate()

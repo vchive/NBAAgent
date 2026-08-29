@@ -1,4 +1,4 @@
-.PHONY: install test lint api demo eval docker-build docker-up docker-up-silicon docker-down deploy deploy-status
+.PHONY: install test lint api demo eval docker-build docker-up configure-siliconflow-key docker-up-silicon docker-down deploy deploy-status
 
 install:
 	python -m pip install -e '.[dev]'
@@ -24,8 +24,11 @@ docker-build:
 docker-up:
 	docker compose up --build
 
+configure-siliconflow-key:
+	./scripts/configure-siliconflow-key.sh
+
 docker-up-silicon:
-	test -s secrets/siliconflow_api_key
+	@test -s secrets/siliconflow_api_key || { echo "缺少 secrets/siliconflow_api_key；先运行 make configure-siliconflow-key" >&2; exit 1; }
 	docker compose -f docker-compose.yml -f docker-compose.siliconflow.yml up --build
 
 docker-down:

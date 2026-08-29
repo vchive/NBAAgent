@@ -49,6 +49,10 @@ set -a; . ./.env; set +a    # Settings 读取进程环境变量，不会自动�
 > `LLM_MODE=live` 只影响 F/G 分析措辞，和 `PUBLIC_DATA_MODE` 独立；下面的 Compose override
 > 仍使用 fixture 事实。公网启用前必须置于认证反代/VPN/受限安全组后，并设置 SiliconFlow
 > 账户预算与限额，避免匿名请求消耗 BYOK 额度。
+>
+> 面试演示建议直接运行仓库内的隐藏输入脚本：`make configure-siliconflow-key`，再按
+> [SiliconFlow BYOK 配置指南](../../docs/byok.md)启动 Compose；脚本只写入本地
+> `secrets/siliconflow_api_key`（目录 `0700`、文件 `0600`）。
 
 ## 3. Start the single-port app (fixture mode)
 
@@ -211,7 +215,8 @@ export LLM_MODE=live
 export RUNTIME_PROFILE=hybrid
 export HERMES_LITE_MODE=embedded_spike
 export HERMES_LITE_TIMEOUT_MS=8000
-export SILICONFLOW_API_KEY='<your-token>'
+./scripts/configure-siliconflow-key.sh
+export SILICONFLOW_API_KEY_FILE="$PWD/secrets/siliconflow_api_key"
 export SILICONFLOW_BASE_URL=https://api.siliconflow.cn/v1
 export SILICONFLOW_MODEL=deepseek-ai/DeepSeek-V4-Flash
 uvicorn apps.api.src.main:app --host 0.0.0.0 --port 8000

@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from apps.api.src.application.chat_use_case import ChatUseCase
+from apps.api.src.config import Settings
 from apps.api.src.infrastructure.cache import InMemoryTTLCache
 from apps.api.src.main import create_app
 from apps.api.src.providers.fixture_provider import FixtureProvider
@@ -21,8 +22,38 @@ async def test_highlights_contract_valid_empty_and_future_dates() -> None:
         future = await client.get("/api/v1/highlights?date=2999-01-01&timezone=Asia/Shanghai")
     assert good.status_code == 200 and good.json()["games"]
     assert good.json()["date"] == "2026-06-12"
+    # A normal NBA slate can contain multiple games on one local calendar
+    # date.  The highlights projection must preserve every normalized game;
+    # the UI is responsible for selecting one card for the detailed HUD.
+    assert [game["game_id"] for game in good.json()["games"]] == [
+        "2026-finals-g4",
+        "2026-demo-den-gsw",
+        "2026-demo-lal-nyk",
+    ]
+    assert all(
+        game["series_game_number"] is None
+        for game in good.json()["games"]
+        if game["game_id"].startswith("2026-demo-")
+    )
     assert empty.status_code == 200 and empty.json()["games"] == []
     assert future.status_code == 400 and future.json()["error"]["code"] == "INVALID_PAYLOAD"
+
+
+@pytest.mark.asyncio
+async def test_fixture_demo_date_populates_unscoped_today_projection() -> None:
+    """A fixture deployment can keep the interview landing page populated."""
+
+    app = create_app(settings=Settings(highlights_demo_date="2026-06-12"))
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(
+            "/api/v1/highlights", params={"timezone": "Asia/Shanghai"}
+        )
+
+    assert response.status_code == 200
+    assert response.json()["date"] == "2026-06-12"
+    assert len(response.json()["games"]) == 3
 
 
 @pytest.mark.asyncio
@@ -55,6 +86,7 @@ async def test_highlights_availability_returns_tri_state_fixture_calendar() -> N
         "empty",
     ]
     assert payload["days"][0]["game_count"] == 1
+    assert payload["days"][6]["game_count"] == 3
     assert payload["days"][1]["game_count"] == 0
     assert all(day["is_future"] is False for day in payload["days"])
 

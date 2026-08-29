@@ -23,3 +23,27 @@ def test_api_routes_keep_precedence_over_static_mount() -> None:
 
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+
+
+def test_web_demo_exposes_multi_game_highlights_projection() -> None:
+    """The mounted shell must keep the multi-game selector contract visible.
+
+    This is intentionally a small static contract: the browser owns selection
+    state, while the API already guarantees that ``games[]`` is not truncated.
+    Catching a missing mount hook here prevents a deployment from silently
+    serving an older single-game page after a backend-only rollout.
+    """
+
+    with TestClient(create_app()) as client:
+        page = client.get("/")
+        script = client.get("/app.js")
+
+    assert page.status_code == 200
+    assert 'id="game-list"' in page.text
+    assert 'id="games-section"' in page.text
+    assert script.status_code == 200
+    assert "renderGameList" in script.text
+    assert "selectActiveGame" in script.text
+    assert "2026-demo-den-gsw" in script.text
+    assert "2026-demo-lal-nyk" in script.text
+    assert "games[0]" not in script.text

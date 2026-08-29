@@ -7,6 +7,7 @@ services:
     environment:
       APP_ENV: local
       PUBLIC_DATA_MODE: fixture
+      HIGHLIGHTS_DEMO_DATE: 2026-06-12
       LLM_MODE: mock
       RUNTIME_PROFILE: template
       HERMES_LITE_MODE: off

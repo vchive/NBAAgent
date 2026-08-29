@@ -50,6 +50,31 @@ async def test_objective_chat_creates_session_and_returns_traceable_fact() -> No
 
 
 @pytest.mark.asyncio
+async def test_date_schedule_preserves_all_same_day_games() -> None:
+    """A date-scoped schedule must not collapse a normal multi-game slate."""
+
+    app = create_app()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/v1/chat", json={"message": "2026-06-12 有哪些比赛？"}
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "completed"
+    schedule = next(block for block in payload["blocks"] if block["type"] == "table")
+    assert schedule["columns"] == ["北京时间", "客队", "比分", "主队", "状态"]
+    assert len(schedule["rows"]) == 3
+    assert {row[3] for row in schedule["rows"]} == {"凯尔特人", "掘金", "湖人"}
+    assert {row[1] for row in schedule["rows"]} == {"雷霆", "勇士", "尼克斯"}
+    # Provider/game IDs remain internal and must not leak into the public answer.
+    assert "2026-demo-den-gsw" not in response.text
+    assert "2026-demo-lal-nyk" not in response.text
+
+
+@pytest.mark.asyncio
 async def test_complex_series_pbp_and_correction_paths_are_distinct() -> None:
     app = create_app()
     async with httpx.AsyncClient(

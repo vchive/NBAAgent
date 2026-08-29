@@ -63,14 +63,13 @@ docker compose up --build
 Compose 默认将完整应用暴露在 `http://<服务器IP>:8000/`。
 后台部署可使用 `make deploy`，查看状态用 `make deploy-status`。
 
-启用 SiliconFlow（仅在你已准备好自己的 key 时）：
+启用 SiliconFlow（仅在你已准备好自己的 key 时；完整说明见
+[`docs/byok.md`](docs/byok.md)）：
 
 ```bash
-mkdir -p secrets
-chmod 700 secrets
-printf '%s\n' "$SILICONFLOW_API_KEY" > secrets/siliconflow_api_key
-chmod 600 secrets/siliconflow_api_key
+make configure-siliconflow-key   # 交互式隐藏输入，写入 root:10001 / 0640 secret 文件
 docker compose -f docker-compose.yml -f docker-compose.siliconflow.yml up -d --build
+curl -fsS http://127.0.0.1:8000/readyz
 ```
 
 上述 override 会把 key 作为 Docker secret 文件挂载，不会写入镜像层或环境变量。没有
@@ -115,6 +114,7 @@ python3 -m http.server 4173 --directory apps/web-demo
 - [Provider 契约](specs/001-nba-chat-agent/contracts/provider-adapter.md)
 - [评测契约](specs/001-nba-chat-agent/contracts/evaluation.md)
 - [本地验收指南](specs/001-nba-chat-agent/quickstart.md)
+- [SiliconFlow BYOK 配置指南](docs/byok.md)
 - [方案说明源文档](docs/solution.md)
 
 ## 开发流程
