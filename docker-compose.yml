@@ -7,7 +7,9 @@ services:
     environment:
       APP_ENV: local
       PUBLIC_DATA_MODE: fixture
-      HIGHLIGHTS_DEMO_DATE: 2026-06-12
+      # Quote the ISO date: Compose's YAML parser otherwise converts it to a
+      # Go time value ("2026-06-12 00:00:00 +0000 UTC") before injection.
+      HIGHLIGHTS_DEMO_DATE: "2026-06-12"
       LLM_MODE: mock
       RUNTIME_PROFILE: template
       HERMES_LITE_MODE: off
