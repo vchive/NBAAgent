@@ -1,5 +1,8 @@
 # SiliconFlow BYOK 配置指南
 
+> 对外演示同时需要访问密码。先运行 `make configure-app-password`，再配置模型 key；认证
+> 配置与 Hermes 自检互相独立，但没有密码不应将 live profile 暴露到公网。
+
 本项目默认是 `fixture + mock + template`，不需要模型凭据，也不会产生模型请求。只有在
 明确开启下面三个开关后，战术（F）和复盘（G）问题才会把已经核验的事实摘要交给
 SiliconFlow：
@@ -22,6 +25,7 @@ HERMES_LITE_MODE=embedded_spike
 固定 gid `10001`；脚本会将文件设为 `root:10001`、`0640`，仅容器应用用户可读：
 
 ```bash
+./scripts/configure-app-password.sh
 ./scripts/configure-siliconflow-key.sh
 # 已存在的 key 需要替换时：
 # ./scripts/configure-siliconflow-key.sh --force
@@ -32,7 +36,7 @@ HERMES_LITE_MODE=embedded_spike
 ```bash
 make docker-up-silicon
 # 后台启动可用：
-# docker compose -f docker-compose.yml -f docker-compose.siliconflow.yml up -d --build
+# docker compose -f docker-compose.yml -f docker-compose.auth.yml -f docker-compose.siliconflow.yml up -d --build
 ```
 
 验证本地配置（不会进行付费模型探活）：

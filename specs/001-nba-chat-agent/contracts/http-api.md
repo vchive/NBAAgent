@@ -38,6 +38,21 @@ codes use the uppercase names shown there.
 - Safety BLOCK and `OUT_OF_SCOPE` decisions are made before any Provider or Provider-cache lookup;
   their internal call/read/write counters are all zero.
 
+### Authentication
+
+When `AUTH_REQUIRED=true`, `POST /api/v1/chat`, `POST /api/v1/chat/stream`,
+`GET /api/v1/highlights`, and `GET /api/v1/highlights/availability` require the opaque session
+Cookie issued by `POST /api/v1/auth/login`. Missing/expired sessions return HTTP 401 with
+`AUTH_REQUIRED`; a required but unreadable password secret returns HTTP 503 with
+`AUTH_NOT_CONFIGURED`. Authentication never falls back to anonymous access.
+
+- `GET /api/v1/auth/status` → `{"enabled":true,"authenticated":false}`.
+- `POST /api/v1/auth/login` with `{"password":"..."}` → `{"authenticated":true}` plus
+  `HttpOnly; SameSite=Lax; Path=/` Cookie; bad credentials return 401 and repeated failures 429.
+- `POST /api/v1/auth/logout` revokes the session and expires the Cookie.
+
+The password and session token never appear in JSON responses or public logs.
+
 ## 2. Health endpoint
 
 `GET /healthz`
@@ -45,7 +60,7 @@ codes use the uppercase names shown there.
 Response `200` (liveness; readiness may use `503`):
 
 ```json
-{"status":"ok|degraded|not_ready","version":"v1","mode":"live|fixture|hybrid","dependencies":{"session_store":"ok|degraded","cache":"ok|degraded","hermes":"disabled|ok|degraded"}}
+{"status":"ok|degraded|not_ready","version":"v1","mode":"live|fixture|hybrid","dependencies":{"session_store":"ok|degraded","cache":"ok|degraded","hermes":"disabled|ok|degraded","auth":"ok|degraded"}}
 ```
 
 `/healthz` is a compatibility alias for the public liveness response and must not expose

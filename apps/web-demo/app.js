@@ -77,6 +77,12 @@
     hudPossession: $("#hud-possession"),
     hudPace: $("#hud-pace"),
     toast: $("#toast"),
+    authGate: $("#auth-gate"),
+    authForm: $("#auth-form"),
+    authPassword: $("#auth-password"),
+    authSubmit: $("#auth-submit"),
+    authError: $("#auth-error"),
+    logout: $("#logout-button"),
   };
 
   const STORAGE_KEY = "courtside-demo-session-v1";
@@ -143,6 +149,9 @@
     calendarScanRequests: new Map(),
     calendarScanToken: 0,
     calendarOpen: false,
+    authEnabled: false,
+    authenticated: false,
+    authBootstrapped: false,
   };
 
   // The static demo keeps a deterministic multi-game slate offline. The same
@@ -363,6 +372,94 @@
     el.connectionLabel.textContent = label;
   }
 
+  function setAuthGate(visible, message = "") {
+    if (!el.authGate) return;
+    el.authGate.hidden = !visible;
+    if (el.logout) el.logout.hidden = !state.authEnabled || !state.authenticated;
+    if (el.authError) {
+      el.authError.textContent = message;
+      el.authError.hidden = !message;
+    }
+    if (visible) {
+      window.setTimeout(() => el.authPassword?.focus(), 0);
+    }
+  }
+
+  function requireLogin(message = "请先登录后再访问该服务。") {
+    state.authenticated = false;
+    state.authEnabled = true;
+    setComposerBusy(state.streaming);
+    setAuthGate(true, message);
+    setConnection("ready", "需要登录");
+  }
+
+  async function submitLogin() {
+    if (!el.authPassword || !window.CourtsideApi?.login) return;
+    const password = el.authPassword.value;
+    if (!password) {
+      setAuthGate(true, "请输入访问密码。");
+      el.authPassword.focus();
+      return;
+    }
+    if (el.authSubmit) el.authSubmit.disabled = true;
+    setAuthGate(true, "正在验证密码…");
+    try {
+      await window.CourtsideApi.login(password);
+      state.authenticated = true;
+      state.authBootstrapped = true;
+      el.authPassword.value = "";
+      setAuthGate(false);
+      setComposerBusy(false);
+      setConnection("ready", "API 就绪");
+      detectApi();
+    } catch (error) {
+      if (error?.network) {
+        setAuthGate(true, "登录服务暂时不可用，请稍后重试。");
+      } else {
+        setAuthGate(true, error?.message || "密码不正确。");
+      }
+    } finally {
+      if (el.authSubmit) el.authSubmit.disabled = false;
+    }
+  }
+
+  async function bootstrapAuth() {
+    if (!window.CourtsideApi?.baseUrl || !window.CourtsideApi?.authStatus) {
+      state.authBootstrapped = true;
+      state.authenticated = true;
+      setAuthGate(false);
+      detectApi();
+      return;
+    }
+    try {
+      const status = await window.CourtsideApi.authStatus();
+      state.authEnabled = Boolean(status?.enabled);
+      state.authenticated = !state.authEnabled || Boolean(status?.authenticated);
+      state.authBootstrapped = true;
+      if (state.authEnabled && !state.authenticated) {
+        setComposerBusy(false);
+        setAuthGate(true);
+        setConnection("ready", "需要登录");
+        return;
+      }
+      setAuthGate(false);
+      detectApi();
+    } catch (error) {
+      // A rolling deployment may serve the new page from an API image that
+      // predates the auth route. Treat a 404 as the old, unprotected demo;
+      // real network failures still leave the offline UI usable.
+      if (error?.status === 404 || error?.network) {
+        state.authEnabled = false;
+        state.authenticated = true;
+        state.authBootstrapped = true;
+        setAuthGate(false);
+        detectApi();
+        return;
+      }
+      requireLogin(error?.message || "登录服务暂时不可用。");
+    }
+  }
+
   function setTransportLabel(available) {
     const live = Boolean(available);
     if (el.modeLabel) {
@@ -385,7 +482,9 @@
 
   function setComposerBusy(busy) {
     state.streaming = busy;
-    el.input.disabled = busy;
+    const locked = state.authEnabled && !state.authenticated;
+    el.input.disabled = busy || locked;
+    el.sendButton.disabled = locked;
     el.sendButton.classList.toggle("is-stop", busy);
     el.sendButton.setAttribute("aria-label", busy ? "停止生成" : "发送问题");
     el.sendButton.innerHTML = busy
@@ -809,6 +908,11 @@
         verified = !candidates.some((dateValue) => ["unknown", "error", "loading"]
           .includes(state.highlightAvailability.get(dateValue)));
       } else {
+        if (error?.authRequired) {
+          requireLogin("登录已失效，请重新登录。");
+          state.calendarScanRequests.delete(monthMarker);
+          return;
+        }
         candidates.forEach((dateValue) => {
           if (dateValue <= today) state.highlightAvailability.set(dateValue, "error");
         });
@@ -1500,6 +1604,14 @@
       }
     }).catch((error) => {
       if (controller.signal.aborted || state.run !== run) return;
+      if (error?.authRequired) {
+        state.run = null;
+        placeholder.article.remove();
+        setComposerBusy(false);
+        setStreamStatus(false);
+        requireLogin("登录已失效，请重新登录。");
+        return;
+      }
       // Auto-fallback is intentionally limited to transport failures.  A
       // valid API error must remain visible so the user can retry it.
       if (error?.network !== false) {
@@ -1529,6 +1641,10 @@
   }
 
   function startRequest(message, options = {}) {
+    if (state.authEnabled && !state.authenticated) {
+      requireLogin();
+      return false;
+    }
     if (!options.forceDemo && state.apiAvailable && window.CourtsideApi) {
       return startApiRun(message, options);
     }
@@ -1543,6 +1659,10 @@
   }
 
   function submitCurrentInput() {
+    if (state.authEnabled && !state.authenticated) {
+      requireLogin();
+      return;
+    }
     const message = el.input.value.trim();
     if (!message) {
       showToast("请先输入一个 NBA 问题");
@@ -1918,6 +2038,11 @@
         return;
       } catch (error) {
         if (requestNumber !== state.highlightRequest) return;
+        if (error?.authRequired) {
+          requireLogin("登录已失效，请重新登录。");
+          clearHighlightProjection("请登录后查看赛事数据。");
+          return;
+        }
         const publicError = error?.publicPayload?.error;
         // A reachable API error is authoritative: clear stale cards and show
         // the server's safe message.  Only a transport failure may fall back
@@ -2239,6 +2364,19 @@
   }
 
   function bindEvents() {
+    el.authForm?.addEventListener("submit", (event) => {
+      event.preventDefault();
+      submitLogin();
+    });
+    el.logout?.addEventListener("click", async () => {
+      try {
+        await window.CourtsideApi?.logout();
+      } catch (_error) {
+        // The server-side session will expire independently; still lock the
+        // local UI immediately when a user explicitly logs out.
+      }
+      requireLogin("您已退出登录。");
+    });
     el.chatForm.addEventListener("submit", (event) => {
       event.preventDefault();
       if (state.streaming) {
@@ -2353,9 +2491,10 @@
     renderHighlightProjection(fixtureGamesForDate("2026-06-12"), "today", "2026-06-12");
     initSseParserDemo();
     bindEvents();
-    // Probing is deliberately best-effort and bounded.  If uvicorn is not
-    // running, the page stays fully usable as an offline interaction demo.
-    detectApi();
+    // Authenticate before probing highlights/chat. If uvicorn is not running,
+    // the page remains a usable offline interaction demo; if a password is
+    // configured, the gate blocks all data requests until login succeeds.
+    bootstrapAuth();
   }
 
   init();

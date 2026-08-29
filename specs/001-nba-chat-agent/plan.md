@@ -148,6 +148,7 @@ docs/
 | FR-025 | Quickstart；evaluation contract | `DOC-002`, `EVAL-RUN-001` 可复现 |
 | FR-026 | Evaluation contract | `EVAL-REPORT-001` 七维汇总 |
 | FR-027 | HLD highlights projection；日期可用性三态接口；HTTP contract；Web Demo | `CONTRACT-HIGHLIGHTS-001`, `E2E-HIGHLIGHTS-001` 日期/无赛日置灰/空状态/隔离 |
+| FR-028 | HLD public demo access control；Cookie session；Compose secret | `tests/contract/test_auth.py`, `DOC-AUTH-001` |
 | SC-001 | HLD deployment；quickstart | `OPS-001` 公网 URL/HTTPS 探活 |
 | SC-002 | Evaluation contract | `EVAL-COVERAGE-001` A–I 覆盖报告 |
 | SC-003 | HLD multi-turn；LLD context | `EVAL-H-001` 三轮一致 |
@@ -159,6 +160,7 @@ docs/
 | SC-009 | Quickstart/config contract | `DOC-003` clean-environment run |
 | SC-010 | HLD observability；HTTP contract | `OPS-TELEM-002` 时间/状态可审计 |
 | SC-011 | HLD highlights projection；quickstart | `CONTRACT-HIGHLIGHTS-001`, `E2E-HIGHLIGHTS-001` |
+| SC-012 | HLD/LLD shared-password boundary；auth middleware and probes | `tests/contract/test_auth.py`, `OPS-AUTH-001` |
 | ARCH-HERMES-001 | HLD §5.1；LLD §1.3/§4.4 runtime boundary | `SEC-HERMES-001`, `INT-HERMES-001` |
 | ARCH-CAPACITY-001 | HLD §9.2；LLD §3.1/§10 admission budget | `CAP-ADMISSION-001`, `E2E-SSE-001` |
 | ARCH-FAILURE-001 | HLD failure matrix；LLD §10 errors/cancellation | `CHAOS-UPSTREAM-001`, `INT-CANCEL-001` |

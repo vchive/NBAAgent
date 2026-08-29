@@ -62,6 +62,7 @@ apps/api/src/
 │   ├── model_composer.py
 │   ├── hermes_runtime.py            # constrained Hermes adapter/sidecar client
 │   ├── admission.py                 # rate limit, semaphore, deadline budget
+│   ├── auth.py                      # shared-password Cookie sessions
 │   └── telemetry.py
 └── evaluation/
     ├── runner.py
@@ -683,6 +684,14 @@ MAX_INFLIGHT_REQUESTS=32
 QUEUE_MAX_DEPTH=64
 SHUTDOWN_DRAIN_MS=10000
 EGRESS_ALLOWLIST=...
+AUTH_REQUIRED=false                 # true for public/demo Compose profile
+APP_PASSWORD=                        # local only; prefer APP_PASSWORD_FILE
+APP_PASSWORD_FILE=/run/secrets/app_password
+AUTH_COOKIE_NAME=nba_session
+AUTH_COOKIE_SECURE=false             # set true behind HTTPS
+AUTH_SESSION_TTL_SECONDS=86400
+AUTH_MAX_FAILED_ATTEMPTS=8
+AUTH_LOCKOUT_SECONDS=60
 ```
 
 `.env` 只作为本地未提交文件；仓库只提交 `.env.example`，其中不得包含真实凭据。

@@ -12,6 +12,21 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
+    <div class="auth-gate" id="auth-gate" hidden>
+      <section class="auth-card" role="dialog" aria-modal="true" aria-labelledby="auth-title">
+        <div class="auth-mark" aria-hidden="true">CS</div>
+        <span class="eyebrow">PRIVATE COURTSIDE / ACCESS CONTROL</span>
+        <h1 id="auth-title">登录赛事工作台</h1>
+        <p class="auth-copy" id="auth-copy">请输入访问密码，进入比赛数据与回放。</p>
+        <form id="auth-form" novalidate>
+          <label class="sr-only" for="auth-password">访问密码</label>
+          <input id="auth-password" name="password" type="password" autocomplete="current-password" maxlength="512" placeholder="访问密码" required />
+          <button class="auth-submit" id="auth-submit" type="submit">登录</button>
+        </form>
+        <p class="auth-error" id="auth-error" role="alert" hidden></p>
+        <small class="auth-note">会话仅保存在当前浏览器 Cookie 中，不会保存密码。</small>
+      </section>
+    </div>
     <div class="app-shell">
       <header class="topbar">
         <a class="brand" href="#top" aria-label="COURTSIDE NBA Intelligence 首页">
@@ -39,6 +54,9 @@
           <button class="icon-button new-session-button" id="new-session" type="button" aria-label="开始新对话" title="新对话">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
             <span class="button-label">新对话</span>
+          </button>
+          <button class="icon-button logout-button" id="logout-button" type="button" aria-label="退出登录" title="退出登录" hidden>
+            <span class="button-label">退出</span>
           </button>
         </div>
       </header>

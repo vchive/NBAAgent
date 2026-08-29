@@ -163,6 +163,22 @@ without conflating it with the chat `HISTORY` intent.
 - [X] T059 Update health/readiness, environment templates, deployment docs and optional Compose
   secret override so default fixture mode remains offline and explicit live mode is auditable.
 
+## Phase 11: Access control for public demo
+
+- [X] T061 Add shared-password settings, Docker secret loader, opaque HttpOnly Cookie sessions,
+  constant-time comparison, login-failure rate limiting, and fail-closed configuration in
+  `apps/api/src/config.py` and `apps/api/src/infrastructure/auth.py`.
+- [X] T062 Add login/status/logout routes and protect chat/highlights APIs while keeping static
+  assets and health/readiness probes accessible in `apps/api/src/api/auth_routes.py` and
+  `apps/api/src/main.py`.
+- [X] T063 Add the login gate, credentialed same-origin transport, 401 recovery, and logout action
+  to `apps/web-demo/index.html`, `apps/web-demo/app.js`, `apps/web-demo/api-client.js`, and
+  `apps/web-demo/styles.css`.
+- [X] T064 Add password configuration script, Compose auth profile, deployment targets, docs, and
+  contract tests covering unauthenticated/authorized/logout/missing-secret behavior in
+  `scripts/configure-app-password.sh`, `docker-compose.auth.yml`, `Makefile`, `docs/auth.md`,
+  and `tests/contract/test_auth.py`.
+
 ## Dependencies & Execution Order
 
 ### Phase dependencies

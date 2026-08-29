@@ -92,7 +92,13 @@ async def healthz(request: Request):
     else:
         self_test = getattr(hermes_runtime, "capability_self_test", None)
         hermes_status = "ok" if self_test is None or bool(self_test()) else "degraded"
-    dependency_values = (session_status, cache_status, hermes_status)
+    auth_manager = getattr(request.app.state, "auth_manager", None)
+    auth_status = (
+        "ok"
+        if auth_manager is None or not auth_manager.enabled or auth_manager.configured
+        else "degraded"
+    )
+    dependency_values = (session_status, cache_status, hermes_status, auth_status)
     status = "degraded" if "degraded" in dependency_values else "ok"
     return {
         "status": status,
@@ -102,6 +108,7 @@ async def healthz(request: Request):
             "session_store": session_status,
             "cache": cache_status,
             "hermes": hermes_status,
+            "auth": auth_status,
         },
     }
 
@@ -127,12 +134,25 @@ async def readyz(request: Request):
     else:
         self_test = getattr(hermes_runtime, "capability_self_test", None)
         hermes_status = "ok" if self_test is None or bool(self_test()) else "degraded"
+    auth_manager = getattr(request.app.state, "auth_manager", None)
+    auth_status = (
+        "ok"
+        if auth_manager is None or not auth_manager.enabled or auth_manager.configured
+        else "degraded"
+    )
     # When a live composer is explicitly enabled, its local capability/key
     # check is part of readiness.  We do not perform a paid remote probe; a
     # missing key or malformed adapter simply keeps the instance out of the
     # ready pool while conversational requests can still be served by an
     # explicit template-only profile.
-    status = "ok" if store_ok and cache_ok and hermes_status in {"ok", "disabled"} else "not_ready"
+    status = (
+        "ok"
+        if store_ok
+        and cache_ok
+        and hermes_status in {"ok", "disabled"}
+        and auth_status == "ok"
+        else "not_ready"
+    )
     payload = {
         "status": status,
         "version": "v1",
@@ -141,6 +161,7 @@ async def readyz(request: Request):
             "session_store": "ok" if store_ok else "not_ready",
             "cache": "ok" if cache_ok else "not_ready",
             "hermes": hermes_status,
+            "auth": auth_status,
         },
     }
     return JSONResponse(status_code=200 if status == "ok" else 503, content=payload)

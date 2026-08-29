@@ -36,6 +36,10 @@ set -a; . ./.env; set +a    # Settings 读取进程环境变量，不会自动�
 默认配置是 `PUBLIC_DATA_MODE=fixture`、`LLM_MODE=mock`、`RUNTIME_PROFILE=template` 和
 `HERMES_LITE_MODE=off`，所有本地示例均可离线完成。
 
+> **访问密码**：对外部署请先运行 `make configure-app-password`，再使用带有
+> `docker-compose.auth.yml` 的启动命令（`make deploy` 或 `make docker-up-silicon`）。登录后
+> 才能访问聊天、赛事焦点和日期接口；`/healthz`、`/readyz`、`/livez` 保持公开探活。
+
 > **BYOK 说明**：默认 profile 不读取或发送模型请求。要启用当前实现的受限 SiliconFlow
 > adapter，必须显式设置 `LLM_MODE=live`、`RUNTIME_PROFILE=hybrid`（或 `hermes`）和
 > `HERMES_LITE_MODE=embedded_spike`（仅本地/演示）；模型默认是
@@ -107,12 +111,13 @@ Compose 会以非 root 用户启动 fixture API 和同源 Web Demo，映射
 
 ### 5.1 云主机 IP + 端口访问
 
-如果部署在带 EIP/NAT 的云主机上，除了 Compose 的端口映射，还必须在主机防火墙和云安全组
-同时放行 TCP 8000。例如：
+如果部署在带 EIP/NAT 的云主机上，除了 Compose 的端口映射，还必须先配置访问密码，并在
+主机防火墙和云安全组同时放行 TCP 8000。例如：
 
 ```bash
 sudo ufw allow 8000/tcp comment 'NBAAgent web and API'
-docker compose up -d --build
+make configure-app-password
+docker compose -f docker-compose.yml -f docker-compose.auth.yml up -d --build
 docker compose ps
 curl -fsS http://127.0.0.1:8000/healthz
 ```

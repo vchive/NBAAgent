@@ -24,6 +24,10 @@ fixture/mock/template；将
 `PUBLIC_DATA_MODE` 改为 `live` 或 `hybrid` 可启用 allow-list ESPN 适配器（详见
 [quickstart](../specs/001-nba-chat-agent/quickstart.md)）。
 
+公网演示通过 `docker-compose.auth.yml` 启用共享密码登录：静态入口和探活保持可用，聊天、
+赛事焦点和日期接口要求短期 HttpOnly Cookie 会话。密码只从 `secrets/app_password` 读取，
+不进入前端、响应或日志；缺失必需 secret 时服务 fail closed 并在 `/readyz` 标记认证依赖异常。
+
 SiliconFlow / BYOK 需要单独说明：默认交付仍使用 `HERMES_LITE_MODE=off`、`LLM_MODE=mock`，
 完全离线且不需要模型 Key。显式切换 `LLM_MODE=live`、`RUNTIME_PROFILE=hybrid`（或
 `hermes`）和启用的 Hermes-lite mode 后，F/G 分析才会进入受限 SiliconFlow

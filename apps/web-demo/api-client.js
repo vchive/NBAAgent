@@ -63,6 +63,70 @@
     }
   }
 
+  async function authStatus() {
+    if (!baseUrl) throw new Error("API base is not configured");
+    let response;
+    try {
+      response = await withTimeout(1500, (signal) => fetch(endpoint("/api/v1/auth/status"), {
+        method: "GET",
+        headers: { Accept: "application/json" },
+        credentials: "include",
+        signal,
+      }));
+    } catch (cause) {
+      const error = new Error("登录服务暂时不可用。", { cause });
+      error.network = true;
+      throw error;
+    }
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      const error = new Error(payload?.error?.message || "登录服务暂时不可用。");
+      error.publicPayload = payload;
+      error.status = response.status;
+      error.network = false;
+      throw error;
+    }
+    return payload || { enabled: false, authenticated: true };
+  }
+
+  async function login(password) {
+    if (!baseUrl) throw new Error("API base is not configured");
+    let response;
+    try {
+      response = await withTimeout(5000, (signal) => fetch(endpoint("/api/v1/auth/login"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ password: String(password || "") }),
+        credentials: "include",
+        signal,
+      }));
+    } catch (cause) {
+      const error = new Error("登录服务暂时不可用，请稍后重试。", { cause });
+      error.network = true;
+      throw error;
+    }
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      const error = new Error(payload?.error?.message || "密码不正确。");
+      error.publicPayload = payload;
+      error.status = response.status;
+      error.network = false;
+      error.authRequired = response.status === 401 || response.status === 429;
+      throw error;
+    }
+    return payload || { authenticated: true };
+  }
+
+  async function logout() {
+    if (!baseUrl) return { authenticated: false };
+    const response = await fetch(endpoint("/api/v1/auth/logout"), {
+      method: "POST",
+      headers: { Accept: "application/json" },
+      credentials: "include",
+    });
+    return response.json().catch(() => ({ authenticated: false }));
+  }
+
   class SSEParser {
     constructor(onEvent) {
       this.buffer = "";
@@ -134,7 +198,7 @@
           client_message_id: clientMessageId || undefined,
           client_timezone: "Asia/Shanghai",
         }),
-        credentials: "omit",
+        credentials: "include",
         signal: requestController.signal,
       });
 
@@ -152,6 +216,7 @@
           error: { code: "SERVICE_BUSY", retryable: true, message: error.message },
         };
         error.network = false;
+        error.authRequired = response.status === 401 || payload?.error?.code === "AUTH_REQUIRED";
         throw error;
       }
 
@@ -216,7 +281,7 @@
       response = await fetch(endpoint(`/api/v1/highlights?${query.toString()}`), {
         method: "GET",
         headers: { Accept: "application/json" },
-        credentials: "omit",
+        credentials: "include",
       });
     } catch (cause) {
       const error = new Error("日期赛事连接暂时不可用。", { cause });
@@ -229,6 +294,7 @@
       error.publicPayload = payload;
       error.status = response.status;
       error.network = false;
+      error.authRequired = response.status === 401 || payload?.error?.code === "AUTH_REQUIRED";
       throw error;
     }
     return payload;
@@ -246,7 +312,7 @@
         {
           method: "GET",
           headers: { Accept: "application/json" },
-          credentials: "omit",
+          credentials: "include",
           signal,
         },
       ));
@@ -261,6 +327,7 @@
       error.publicPayload = payload;
       error.status = response.status;
       error.network = false;
+      error.authRequired = response.status === 401 || payload?.error?.code === "AUTH_REQUIRED";
       throw error;
     }
     return payload;
@@ -269,6 +336,9 @@
   window.CourtsideApi = {
     baseUrl,
     probe,
+    authStatus,
+    login,
+    logout,
     streamChat,
     highlights,
     highlightsAvailability,

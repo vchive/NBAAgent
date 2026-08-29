@@ -54,25 +54,34 @@ curl -fsS 'http://127.0.0.1:8000/api/v1/highlights/availability?from=2026-06-06&
 python3 -m pytest -q
 ```
 
-可选的容器启动：
+可选的容器启动（本地 fixture，不启用登录）：
 
 ```bash
 docker compose up --build
 ```
 
 Compose 默认将完整应用暴露在 `http://<服务器IP>:8000/`。
-后台部署可使用 `make deploy`，查看状态用 `make deploy-status`。
+后台对外部署请先设置访问密码，再使用 `make deploy`；查看状态用 `make deploy-status`。
+
+```bash
+make configure-app-password   # 隐藏输入，写入 secrets/app_password
+make deploy                   # 自动加入 docker-compose.auth.yml
+```
+
+登录后才可访问聊天、赛事焦点和日期接口；`/healthz`、`/readyz`、`/livez` 仍可用于探活。
+完整说明见 [`docs/auth.md`](docs/auth.md)。
 
 启用 SiliconFlow（仅在你已准备好自己的 key 时；完整说明见
 [`docs/byok.md`](docs/byok.md)）：
 
 ```bash
+make configure-app-password
 make configure-siliconflow-key   # 交互式隐藏输入，写入 root:10001 / 0640 secret 文件
-docker compose -f docker-compose.yml -f docker-compose.siliconflow.yml up -d --build
+docker compose -f docker-compose.yml -f docker-compose.auth.yml -f docker-compose.siliconflow.yml up -d --build
 curl -fsS http://127.0.0.1:8000/readyz
 ```
 
-上述 override 会把 key 作为 Docker secret 文件挂载，不会写入镜像层或环境变量。没有
+上述 override 会把 key 和访问密码作为 Docker secret 文件挂载，不会写入镜像层或环境变量。没有
 授权 key 时不要切换 live；服务会保持模板回退并在 `/healthz`/`/readyz` 标为 degraded。
 该 profile 的 `PUBLIC_DATA_MODE` 仍为 `fixture`，只验证模型措辞链路；要访问 ESPN 公开数据，
 另行显式设置 `PUBLIC_DATA_MODE=live` 或 `hybrid`，并先审核数据源条款。live profile 不应直接

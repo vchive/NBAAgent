@@ -1,0 +1,15 @@
+# Opt-in shared-password profile for any externally reachable deployment.
+# The base compose file remains convenient for local, unauthenticated fixture
+# development; public/demo runs should include this override.
+services:
+  nba-agent:
+    environment:
+      AUTH_REQUIRED: "true"
+      APP_PASSWORD_FILE: /run/secrets/app_password
+      AUTH_COOKIE_SECURE: "false"
+    secrets:
+      - app_password
+
+secrets:
+  app_password:
+    file: ./secrets/app_password

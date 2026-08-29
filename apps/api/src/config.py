@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import date
 from urllib.parse import urlparse
@@ -38,6 +39,18 @@ def _csv(name: str, default: tuple[str, ...] = ()) -> tuple[str, ...]:
     if not raw:
         return default
     return tuple(item.strip() for item in raw.split(",") if item.strip())
+
+
+def _bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "y", "on"}:
+        return True
+    if value in {"0", "false", "no", "n", "off"}:
+        return False
+    raise ValueError(f"{name} must be true or false")
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +114,17 @@ class Settings:
     queue_max_depth: int = 64
     shutdown_drain_ms: int = 10_000
     egress_allowlist: tuple[str, ...] = field(default_factory=tuple)
+    # A single shared password is enough for the interview/demo deployment.
+    # Prefer the secret file in Docker; the environment value is retained for
+    # local development and tests only.  Passwords are hidden from repr/logs.
+    auth_required: bool = False
+    app_password: str = field(default="", repr=False)
+    app_password_file: str = field(default="", repr=False)
+    auth_cookie_name: str = "nba_session"
+    auth_cookie_secure: bool = False
+    auth_session_ttl_seconds: int = 86_400
+    auth_max_failed_attempts: int = 8
+    auth_lockout_seconds: int = 60
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -166,6 +190,14 @@ class Settings:
             queue_max_depth=_int("QUEUE_MAX_DEPTH", 64),
             shutdown_drain_ms=_int("SHUTDOWN_DRAIN_MS", 10_000),
             egress_allowlist=_csv("EGRESS_ALLOWLIST"),
+            auth_required=_bool("AUTH_REQUIRED", False),
+            app_password=os.getenv("APP_PASSWORD", ""),
+            app_password_file=os.getenv("APP_PASSWORD_FILE", "").strip(),
+            auth_cookie_name=os.getenv("AUTH_COOKIE_NAME", "nba_session").strip(),
+            auth_cookie_secure=_bool("AUTH_COOKIE_SECURE", False),
+            auth_session_ttl_seconds=_int("AUTH_SESSION_TTL_SECONDS", 86_400),
+            auth_max_failed_attempts=_int("AUTH_MAX_FAILED_ATTEMPTS", 8),
+            auth_lockout_seconds=_int("AUTH_LOCKOUT_SECONDS", 60),
         )
         settings.validate()
         return settings
@@ -253,6 +285,23 @@ class Settings:
             raise ValueError("SILICONFLOW_API_KEY must be a string")
         if not isinstance(self.siliconflow_api_key_file, str):
             raise ValueError("SILICONFLOW_API_KEY_FILE must be a string")
+        if not isinstance(self.app_password, str) or not isinstance(self.app_password_file, str):
+            raise ValueError("APP_PASSWORD and APP_PASSWORD_FILE must be strings")
+        if self.app_password and (
+            len(self.app_password) > 512
+            or any(ord(char) < 32 or ord(char) == 127 for char in self.app_password)
+        ):
+            raise ValueError("APP_PASSWORD must be a text value of <= 512 characters")
+        if self.app_password_file and any(
+            ord(char) < 32 or ord(char) == 127 for char in self.app_password_file
+        ):
+            raise ValueError("APP_PASSWORD_FILE contains control characters")
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", self.auth_cookie_name or ""):
+            raise ValueError("AUTH_COOKIE_NAME must contain only letters, numbers, '_' or '-'")
+        if self.auth_session_ttl_seconds <= 0:
+            raise ValueError("AUTH_SESSION_TTL_SECONDS must be positive")
+        if self.auth_max_failed_attempts <= 0 or self.auth_lockout_seconds <= 0:
+            raise ValueError("authentication rate-limit values must be positive")
         direct_model_enabled = llm_mode == "live" and hermes_lite_mode == "embedded_spike"
         # The fixed SiliconFlow allow-list applies only to the in-process
         # embedded spike.  A future isolated sidecar owns its own endpoint;

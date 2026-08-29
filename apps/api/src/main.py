@@ -12,12 +12,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from apps.api.src.api.auth_routes import router as auth_router
 from apps.api.src.api.highlights_routes import router as highlights_router
 from apps.api.src.api.http_routes import router as http_router
 from apps.api.src.api.sse_routes import SSEConnectionLimiter
 from apps.api.src.api.sse_routes import router as sse_router
 from apps.api.src.application.chat_use_case import ChatUseCase
 from apps.api.src.config import Settings
+from apps.api.src.infrastructure.auth import AuthManager
 from apps.api.src.infrastructure.cache import InMemoryTTLCache
 from apps.api.src.providers.espn_adapter import ESPNAdapter
 from apps.api.src.providers.fixture_provider import FixtureProvider
@@ -57,6 +59,14 @@ def create_app(*, settings: Settings | None = None, usecase: ChatUseCase | None 
     _validate_capacity_limits(config)
     app = FastAPI(title="NBA Chat Agent", version="v1", docs_url="/docs", redoc_url=None)
     app.state.settings = config
+    app.state.auth_manager = AuthManager(
+        password=getattr(config, "app_password", ""),
+        password_file=getattr(config, "app_password_file", ""),
+        required=bool(getattr(config, "auth_required", False)),
+        session_ttl_seconds=int(getattr(config, "auth_session_ttl_seconds", 86_400)),
+        max_failed_attempts=int(getattr(config, "auth_max_failed_attempts", 8)),
+        lockout_seconds=int(getattr(config, "auth_lockout_seconds", 60)),
+    )
     # The limiter is application-scoped so concurrent workers do not each
     # allocate an unbounded number of SSE streams.  The route performs a
     # non-blocking admission check and releases the slot when its generator
@@ -80,15 +90,68 @@ def create_app(*, settings: Settings | None = None, usecase: ChatUseCase | None 
     app.include_router(http_router)
     app.include_router(sse_router)
     app.include_router(highlights_router)
+    app.include_router(auth_router)
     origins = list(getattr(config, "allowed_origins", ()) or ())
     if origins:
         app.add_middleware(
             CORSMiddleware,
             allow_origins=origins,
-            allow_credentials=False,
+            # Login uses an HttpOnly cookie.  Credentials are constrained by
+            # the explicit origin allow-list above; wildcard origins are
+            # rejected by Settings.validate in production.
+            allow_credentials=True,
             allow_methods=["GET", "POST"],
             allow_headers=["Content-Type", "Accept", "X-Requested-With"],
         )
+
+    @app.middleware("http")
+    async def auth_guard(request: Request, call_next):
+        """Require the shared-password session on data and chat endpoints."""
+
+        path = request.url.path
+        protected = (
+            path == "/api/v1/chat"
+            or path == "/api/v1/chat/stream"
+            or path == "/api/v1/highlights"
+            or path == "/api/v1/highlights/availability"
+        )
+        manager: AuthManager = request.app.state.auth_manager
+        if protected and manager.enabled and request.method != "OPTIONS":
+            if manager.required and not manager.configured:
+                response = JSONResponse(
+                    status_code=503,
+                    content={
+                        "status": "failed",
+                        "error": {
+                            "code": "AUTH_NOT_CONFIGURED",
+                            "retryable": False,
+                            "message": "服务尚未配置访问密码。",
+                        },
+                    },
+                    headers={"Cache-Control": "no-store"},
+                )
+                _set_security_headers(response)
+                return response
+            token = request.cookies.get(config.auth_cookie_name)
+            if not manager.is_authenticated(token):
+                response = JSONResponse(
+                    status_code=401,
+                    content={
+                        "status": "failed",
+                        "error": {
+                            "code": "AUTH_REQUIRED",
+                            "retryable": False,
+                            "message": "请先登录后再访问该服务。",
+                        },
+                    },
+                    headers={
+                        "Cache-Control": "no-store",
+                        "WWW-Authenticate": "Cookie",
+                    },
+                )
+                _set_security_headers(response)
+                return response
+        return await call_next(request)
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):

@@ -45,6 +45,15 @@
 - 未公开的 NBA 内部数据库和不可审计的“记忆答案”。
 - 把系统建设为 NBA 之外的通用搜索引擎。
 
+### Public demo access control
+
+对外演示增加一个轻量认证边界：静态页面与探活接口保持可加载，聊天、赛事焦点和日期
+可用性接口统一要求共享密码登录。认证服务从 Docker secret 读取密码，用恒定时间比较校验，
+成功后仅发放短期 HttpOnly/SameSite Cookie；进程内只保存 Cookie 哈希和过期时间。登录失败按
+客户端 IP 做有界限流，缺失必需 secret 时 `/readyz` 为 not-ready 且数据接口返回 503，避免
+配置错误退化为匿名放行。该方案满足面试演示的单用户场景，正式生产仍应由 HTTPS 反向代理
+和独立账户系统承担认证。
+
 ## 4. System context
 
 ```mermaid
