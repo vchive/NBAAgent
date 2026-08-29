@@ -1553,6 +1553,12 @@ p {
   font-size: 11px;
 }
 
+/* Author CSS overrides the browser's user-agent rule for the HTML hidden
+   attribute. Keep the initial status region invisible until a request starts. */
+.stream-status[hidden] {
+  display: none;
+}
+
 .stream-spinner {
   width: 13px;
   height: 13px;

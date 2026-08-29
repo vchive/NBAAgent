@@ -47,3 +47,12 @@ def test_web_demo_exposes_multi_game_highlights_projection() -> None:
     assert "2026-demo-den-gsw" in script.text
     assert "2026-demo-lal-nyk" in script.text
     assert "games[0]" not in script.text
+
+
+def test_web_demo_keeps_stream_status_hidden_until_a_request_starts() -> None:
+    with TestClient(create_app()) as client:
+        styles = client.get("/styles.css")
+
+    assert styles.status_code == 200
+    assert ".stream-status[hidden]" in styles.text
+    assert "display: none" in styles.text[styles.text.index(".stream-status[hidden]"):]
