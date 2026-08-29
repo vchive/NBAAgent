@@ -73,6 +73,17 @@ from apps.api.src.infrastructure.hermes_runtime import (
 from apps.api.src.infrastructure.session_store import InMemorySessionStore
 from apps.api.src.infrastructure.telemetry import QueryTelemetry, TelemetrySink, hash_text
 
+_MODEL_META_RE = re.compile(
+    r"(?:你|您|当前|本次|系统|服务).{0,8}(?:用的|使用的|调用的|配置的)?\s*"
+    r"(?:哪个|什么|何种)?\s*(?:模型|大模型|语言模型|LLM)"
+    r"|(?:模型|大模型|语言模型|LLM).{0,8}(?:是什么|是哪一个|哪个|名称|配置)",
+    re.IGNORECASE,
+)
+
+
+def _is_model_meta_question(message: str) -> bool:
+    return bool(_MODEL_META_RE.search(str(message or "").strip()))
+
 
 @dataclass(slots=True)
 class ChatResult:
@@ -409,6 +420,52 @@ class ChatUseCase:
                     await _emit(sink, "safety.blocked", {"message": draft.markdown})
                 else:
                     await _emit(sink, "run.status", {"stage": "scope", "text": "已确认问题范围"})
+                await _emit(sink, "message.completed", result.to_dict())
+                return result
+
+            # Configuration questions are intentionally answered locally. They
+            # should not be misclassified as an NBA lookup (which previously
+            # produced a misleading "请补充查询对象" clarification), and a
+            # model does not need to explain which model is configured.
+            if _is_model_meta_question(req.message):
+                runtime_model = getattr(
+                    getattr(self.hermes_runtime, "model_runtime", None), "model", ""
+                )
+                configured_model = runtime_model or getattr(
+                    self.settings, "siliconflow_model", "deepseek-ai/DeepSeek-V4-Flash"
+                )
+                llm_mode = str(getattr(self.settings, "llm_mode", "mock")).lower()
+                hermes_mode = str(getattr(self.settings, "hermes_lite_mode", "off")).lower()
+                if llm_mode == "live" and hermes_mode in {"embedded_spike", "sidecar"}:
+                    availability = "当前已启用"
+                else:
+                    availability = "当前未启用（服务使用确定性模板）"
+                answer = (
+                    f"当前配置的表达模型是 **{configured_model}**，{availability}。"
+                    "它只用于战术分析和赛后复盘的自然语言表达；比分、统计和逐回合事实"
+                    "仍由已核验数据与确定性逻辑生成。这个模型配置查询本身不会再次调用大模型。"
+                )
+                from apps.api.src.domain.models import AnswerBlock, AnswerBlockType, DraftAnswer
+
+                draft = DraftAnswer(
+                    markdown=answer,
+                    blocks=[AnswerBlock(type=AnswerBlockType.TEXT, content=answer)],
+                    evidence_state=EvidenceState.NONE,
+                    follow_up="您可以问我一场比赛的战术或赛后复盘。",
+                )
+                result = self._result_from_draft(
+                    request_id, session_id, "completed", draft, started, as_of=None
+                )
+                telemetry.intent_name = "MODEL_META"
+                telemetry.evidence_state = "none"
+                telemetry.finish(outcome="completed", total_latency_ms=result.latency_ms)
+                telemetry.provider_call_count = 0
+                telemetry.cache_read_count = 0
+                telemetry.cache_write_count = 0
+                telemetry.cache_hit_count = 0
+                self.telemetry.record(telemetry)
+                if client_id:
+                    await self.session_store.complete_idempotency(session_id, client_id, result)
                 await _emit(sink, "message.completed", result.to_dict())
                 return result
 

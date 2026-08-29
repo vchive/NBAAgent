@@ -45,6 +45,24 @@ async def test_red_line_short_circuits_provider_and_cache() -> None:
     assert usecase.gateway.counters()["cache_read_count"] == 0
 
 
+@pytest.mark.asyncio
+async def test_model_configuration_question_is_answered_without_lookup_or_hermes() -> None:
+    app = create_app()
+    usecase = app.state.chat_use_case
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post("/api/v1/chat", json={"message": "你用的哪个模型"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "completed"
+    assert "DeepSeek-V4-Flash" in payload["answer_markdown"]
+    assert "请补充查询对象" not in payload["answer_markdown"]
+    assert usecase.provider.calls == 0
+    assert usecase.telemetry.latest().intent_name == "MODEL_META"
+
+
 def test_live_profile_without_key_is_degraded_and_not_ready() -> None:
     app = create_app(
         settings=Settings(
