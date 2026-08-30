@@ -1,10 +1,10 @@
 # NBA Chat Agent — High-Level Design (HLD)
 
 **Feature**: [001-nba-chat-agent](spec.md)
-**Status**: 可交付版本已实现并完成公网 hybrid 验证
-**Date**: 2026-08-26
+**Status**: 官方 Hermes Agent 已实现并完成公网 live 验收
+**Date**: 2026-08-30
 **Audience**: 面试评审、实现人员和部署维护人员
-**Revision**: v0.2 — 增加 Hermes-lite 运行时边界、部署剖面和安全/运维细节
+**Revision**: v0.3 — 正式 Hermes Agent、受控 NBA 工具循环与双通道路由
 
 ## 1. Design goals
 
@@ -93,7 +93,7 @@ flowchart TB
       NORM[Normalizer]
       VERIFY[Fact Verifier]
       DERIVE[Deterministic Derivation]
-      SELECT[Runtime Selector\ntemplate | hybrid | full-intelligence]
+      SELECT[Mode Router\nhybrid | full]
       COMPOSE[Answer Composer]
       GUARD[Output Guard]
       EVAL[Evaluation Runner]
@@ -104,27 +104,29 @@ flowchart TB
       CACHE[Freshness Cache\n仅 Gateway 内部可读写]
       STORE[Session Store]
       OBS[Logs/Metrics/Trace]
-      HERMES[Hermes-lite sidecar\n无工具/无 Provider]
+      HERMES[Official Hermes Agent\nNBA tools only]
     end
     UI --> API --> ORCH
     UI -. date projection .-> HIGHLIGHTS
     ORCH --> SAFE
-    SAFE --> CTX --> INT --> ADM --> PLAN --> PG
+    SAFE --> CTX --> SELECT
+    SELECT -->|hybrid| INT --> ADM --> PLAN --> PG
+    SELECT -->|full| HERMES
+    HERMES -. nba tools .-> INT
     PLAN -. news/background only .-> SEARCH
     PG <--> CACHE
-    PG --> NORM --> VERIFY --> DERIVE --> SELECT
-    SELECT --> COMPOSE
-    SELECT -. analysis only .-> HERMES
+    PG --> NORM --> VERIFY --> DERIVE --> COMPOSE
+    HERMES --> COMPOSE
     COMPOSE --> GUARD --> API
     CTX <--> STORE
     ORCH --> OBS
     EVAL --> ORCH
 ```
 
-图中的 `Provider Gateway` 内部才可以读写 `Freshness Cache`，且只能由 `PLAN` 在
-`SAFE → CTX → INT → ADM` 链路完成后调用；不存在 Orchestrator 或 Hermes 绕过 Safety Guard
-的旁路。BLOCK、`OUT_OF_SCOPE`、早期澄清或本地过载分支既不访问 Provider/cache，也不调用
-Hermes。
+图中的 `Provider Gateway` 内部才可以读写 `Freshness Cache`。无论 hybrid 直接进入本地解析，
+还是 full 由 Hermes 通过 NBA tool bridge 进入，调用都必须发生在 `SAFE → CTX` 之后并经过
+`INT → ADM → PLAN`；不存在绕过 Safety Guard 的旁路。BLOCK/`OUT_OF_SCOPE` 分支既不访问
+Provider/cache，也不调用 Hermes。
 
 ### Component responsibilities
 
@@ -146,42 +148,51 @@ Hermes。
 | Output Guard | 检查红线、无证据数字和内部细节泄露 | 放宽安全政策 |
 | Evaluation Runner | 黄金题、重复回放、评分和时延报告 | 修改线上答案 |
 
-### 5.1 Hermes-lite runtime boundary
+### 5.1 Official Hermes Agent boundary
 
-首版采用 **Hermes-lite** 运行时剖面：Hermes 只作为可替换的 Agent 编排/自然语言表达
-实现，领域事实和安全策略仍由本项目代码拥有。这样可以复用 Python/FastAPI 生态和多轮、
-流式能力，又不会让通用 Agent 的工具调用绕过 NBA 的事实链。
+全智能模式集成锁定版本的 NousResearch Hermes Agent，而不是把普通模型客户端命名为
+Hermes。安全门之后存在两条通道：默认 `hybrid` 保留低延迟确定性流水线；`full` 由 Hermes
+先理解问题并执行有界 tool-calling loop。Hermes 不能直接接触 Provider、缓存或任意网络，
+只能调用 API 进程注册的任务级 NBA 工具；工具内部复用现有 Parser、Provider Gateway、
+Verifier、Derivation 和模板，因此 Agent 获得规划能力而事实所有权不变。
 
 ```mermaid
 flowchart LR
-    Q[已通过 SafetyGuard 的请求] --> O[Chat Orchestrator]
-    O --> D[Domain Core\nParser/Provider/Verifier/Derivation]
-    D --> F[Verified FactBundle]
-    F --> R{RuntimeProfile}
-    R -->|template| T[Deterministic Renderer]
-    R -->|hermes/hybrid/full| H[受限 Runtime\nSiliconFlow/Hermes adapter\n仅接收核验事实]
-    H --> G[Output Guard]
-    T --> G
+    Q[请求] --> S[Pre-Agent SafetyGuard]
+    S -->|BLOCK| B[本地拒答 / zero calls]
+    S -->|ALLOW| R{intelligence mode}
+    R -->|hybrid| D[Deterministic pipeline]
+    R -->|full| H[Official Hermes Agent\nmax 4 iterations]
+    H -->|nba_query| TQ[NBA Query Tool]
+    H -->|nba_schedule| TS[NBA Schedule Tool]
+    H -->|nba_news| TN[NBA News Tool]
+    TQ --> D
+    TS --> D
+    TN --> D
+    D --> O[Sanitized tool observation]
+    O --> H
+    H --> G[Agent Output Guard]
     G --> A[Answer Envelope]
+    H -. timeout / invalid / unavailable .-> D
 ```
 
 Hermes 的能力边界固定如下；任何未列出的能力默认关闭：
 
 | 能力 | v1 策略 | 归属/约束 |
 |---|---|---|
-| 多轮 turn loop、文本增量、取消 | 允许 | 只能通过 `AgentRuntimePort`，事件映射到统一 SSE 契约 |
-| Provider 网络请求、搜索、缓存 | **禁止** | 只能由 `ProviderGateway`/`Web Search Gateway` 在 SafetyGuard 之后执行 |
-| 安全分类、拒答决策 | **禁止** | 只能由本地 `SafetyGuard` 决定，Hermes 不得覆盖 |
+| 问题理解、容错、turn/tool loop | 允许 | `hermes-agent==0.19.0`，每请求最多 4 iterations/4 tool calls |
+| `nba_query`、`nba_schedule`、`nba_news` | 允许 | 任务级 bridge；只返回清洗后的状态、时间范围、答案块和证据等级 |
+| 直接 Provider/搜索/缓存访问 | **禁止** | 只能由 NBA 工具内部的既有应用用例执行 |
+| 安全分类、拒答决策 | **禁止** | 本地 `SafetyGuard` 在 Agent 之前决定，Hermes 不得覆盖 |
 | 算术、系列赛累计、PBP 事件选择 | **禁止** | 只能由 `Derivation` 产生结构化事实 |
-| 持久化记忆/跨会话检索 | **禁止** | 会话上下文只经 `ContextPort`，按 `session_id` 隔离 |
-| shell、filesystem、browser、MCP、远程终端、自动 skills | **禁止** | 空工具清单；生产启动时做能力自检 |
-| 已核验事实的解释与战术/复盘措辞 | 允许 | 输入只能是服务端生成的 `FactBundle` 和风格策略 |
+| shell、filesystem、browser、MCP、memory、skills、subagents | **禁止** | 仅启用独立 `nba` toolset；启动自检必须验证精确清单 |
+| 任意 URL 或用户提供的端点 | **禁止** | 新闻工具只接受主题/日期，不接受 URL |
+| 基于工具观察的解释、问候和澄清 | 允许 | 输出仍经注入、内部字段、长度和无来源数字守卫 |
 
-路由策略默认是 `hybrid`：A–E 等客观问题优先使用确定性模板；F/G 分析问题在事实核验完成
-后使用受限 Runtime。可选 `full-intelligence` 模式会让所有有核验事实的允许题型经过同一
-Runtime 组织语言，但不改变 Provider、Verifier、Derivation 和 SafetyGuard 的归属。Runtime
-超时、不可用或输出不合规时回退模板。Runtime 不参与 I 类安全、澄清、无数据和技术错误
-请求，也永远不会收到被拦截的原始文本。
+`hybrid` 继续为客观题使用确定性模板，并可为 F/G 使用旧的单轮受限 composer；`full` 在
+SafetyGuard 和会话加载后、规则解析之前进入 Hermes。问候可零工具完成；事实问题至少使用
+一个 NBA 工具。空工具结果不会提前结束全智能请求，而会把实际查询范围、`empty/partial`
+状态和可用限制交给 Hermes 解释。任何 Agent/工具/模型失败都回退原确定性通道。
 
 ### 5.1.1 受控 DuckDuckGo 搜索
 
@@ -191,19 +202,17 @@ DuckDuckGo 只作为新闻、背景和长尾问题的候选检索源，不作为
 结果中的链接、指令、提示注入不会执行，也不会原样发送给模型。只有经过领域 Provider 或
 多来源核对的字段才能进入 `VERIFIED` FactBundle，否则保持 `PARTIAL/UNKNOWN`。
 
-当前 v1 的 `embedded_spike` 是 API 进程内 direct BYOK 实现：仅允许向固定的
-`https://api.siliconflow.cn/v1/chat/completions` 发起非流式请求，默认模型为
-`deepseek-ai/DeepSeek-V4-Flash`。请求只携带清理后的分析任务、风格策略和
-`VERIFIED/PARTIAL` 事实投影，不携带证据/会话 ID、Provider 原文、URL、工具或凭据；完整
-草稿返回后才经过本地 Output Guard，再向前端分片。`sidecar` 是后续生产隔离形态：API
-只连接本地受限进程，由 sidecar 持有 key 和模型出站权限；当前仓库不把 direct adapter
-描述为已完成的 sidecar。
+面试演示的 `embedded_agent` 在 API 进程内加载官方 Hermes 包，模型 egress 固定为
+SiliconFlow OpenAI-compatible endpoint，默认模型为 `deepseek-ai/DeepSeek-V4-Flash`。
+Hermes 只看到清理后的问题、当前北京时间、泛化会话上下文、NBA 工具 schema 和清洗后的
+工具观察；不携带证据/会话 ID、Provider 原文、URL 或凭据。`sidecar` 是后续生产隔离形态，
+当前仓库不得把进程内嵌入描述为已完成的生产隔离。
 
 生产环境的 Hermes 只允许 `SIDECAR` 模式：独立非 root UID、只读 rootfs、drop capabilities、
 无公网入站端口，仅通过 loopback/Unix socket 接收 API 请求，出站仅允许 LLM egress gateway。
-Provider、SessionStore、Cache 的凭据和网络地址不注入 sidecar。启动时校验固定的
-`policy_hash`/工具清单；策略或版本漂移时禁用 Hermes 并回退模板。`EMBEDDED_SPIKE` 可用于
-受控本地或临时演示，但不得作为生产隔离边界或承载真实用户流量。
+Provider、SessionStore、Cache 的凭据和网络地址不注入 sidecar。启动时校验锁定包版本、
+`policy_hash` 和精确工具清单；策略或版本漂移时禁用 Agent 并回退模板。`embedded_agent`
+只用于受控面试演示，不作为正式生产隔离边界。
 
 ### 5.2 Trust zones and dependency rules
 
@@ -217,10 +226,15 @@ Provider、SessionStore、Cache 的凭据和网络地址不注入 sidecar。启�
 | Egress boundary | Provider 与模型端点 | 仅允许配置的 HTTPS 主机；Web 浏览器不直接访问上游 |
 
 依赖方向只能从 API → Application → Domain/Ports → Infrastructure；Domain 不导入 Hermes、
-FastAPI 或具体 Provider。Hermes 适配器不得持有 `ProviderPort`、`CachePort` 或任意网络
-客户端引用。该规则用 import 检查和运行时能力自检共同验证。
+FastAPI 或具体 Provider。Hermes runtime 只持有任务级 `AgentToolBridgePort`，不持有
+`ProviderPort`、`CachePort` 或任意 URL 客户端；bridge 在请求结束后销毁。该规则用 import
+检查、工具清单断言和运行时 capability self-test 共同验证。
 
 ## 6. Request and data flow
+
+下图描述默认 `hybrid` 的确定性路径；`full` 在 `SG → Context` 之后按 §5.1 进入 Hermes
+tool loop，每个 NBA tool call 再从 `CP → Admission → Provider → Verify/Derive` 执行同一段，
+工具返回空结果时回到 Hermes 解释而不是直接结束请求。
 
 ```mermaid
 sequenceDiagram
@@ -233,7 +247,7 @@ sequenceDiagram
     participant PG as Provider Gateway
     participant FV as Verify/Derive
     participant RS as Runtime Selector
-    participant HC as Hermes-lite
+    participant HC as Hermes composer (hybrid)
     participant AC as Composer/Guard
 
     B->>API: message + session_id
@@ -357,7 +371,7 @@ flowchart LR
     IN --> WEB[Web UI]
     IN --> API[无状态 nba-api 副本]
     API --> DATA[Provider egress proxy\n公开数据 allow-list]
-    API --> H[Hermes-lite sidecar\n非 root / 无工具]
+    API --> H[Hermes Agent sidecar\n非 root / NBA tool protocol]
     H --> LLM[LLM egress gateway\n模型 allow-list]
     API --> S[(共享 Session + Idempotency Store)]
     API --> CACHE[(有界 TTL Cache)]
@@ -402,7 +416,7 @@ Hermes 依赖必须锁定版本/commit，并在启动日志中记录版本哈希
 | Provider fan-out | 4 operations/request | 停止继续拆分，返回部分结果或超时 |
 | Hermes 并发 | 4 | 分析请求回退/排队；全智能模式仍受同一上限约束 |
 | 队列深度 | 64 | 不再入队，立即返回 `503 SERVICE_BUSY` |
-| 单流最长时间 | 30 秒 | 取消下游并返回可重试错误 |
+| 单流最长时间 | 45 秒（浏览器 55 秒） | 取消下游并返回可重试错误 |
 
 准入顺序为 `body/schema → IP/session rate limit → SafetyGuard → idempotency reserve /
 session lock → Context/Parse → admission semaphore → Provider/cache`。Safety BLOCK、
@@ -414,7 +428,7 @@ session lock → Context/Parse → admission semaphore → Provider/cache`。Saf
 ### 9.3 Health, rollout and graceful shutdown
 
 `/livez` 只检查进程；`/readyz` 检查配置、SessionStore、TTL cache 和（启用时）Hermes
-sidecar 的本地可达性，不把 ESPN/LLM 外网探针作为重启条件。滚动发布先等待新副本 ready，
+包版本/精确工具清单（sidecar 形态则检查本地可达性），不把 ESPN/LLM 外网探针作为重启条件。滚动发布先等待新副本 ready，
 再摘除旧副本；多副本模式要求共享 SessionStore 和 IdempotencyStore，sticky session 只能
 优化路由，不能替代共享存储。
 
@@ -524,7 +538,7 @@ P50/P90/P95、超时/错误率、SSE 断开率、准入拒绝率和 fallback 率
 | FR-027 | Highlights API、日期可用性投影、日期选择器、文字 PBP 投影 | `contracts/http-api.md`、日期/无赛日置灰/空状态 UI 验收 |
 | FR-029 | Web Search Gateway、DuckDuckGo adapter、搜索证据分级与注入隔离 | `tests/contract/test_web_search.py`, `tests/integration/test_web_search.py` |
 | FR-030 | Full-intelligence RuntimeSelector、会话偏好、模型回退与状态展示 | `tests/contract/test_intelligence_mode.py`, `tests/integration/test_full_intelligence.py`, `tests/e2e/test_chat.spec.ts` |
-| ARCH-HERMES-001 | Hermes-lite boundary/capability self-test | `SEC-HERMES-001`, `INT-HERMES-001` |
+| ARCH-HERMES-001 | Official Hermes Agent boundary/capability self-test | `tests/contract/test_hermes_agent_runtime.py`, `tests/integration/test_agent_safety.py` |
 | ARCH-CAPACITY-001 | Admission budget、bounded queue、backpressure | `CAP-ADMISSION-001`, `E2E-SSE-001` |
 | ARCH-FAILURE-001 | Failure/degradation matrix and cancellation | `CHAOS-UPSTREAM-001`, `INT-CANCEL-001` |
 | ARCH-DEPLOY-001 | Profiles、health probes、shared store、graceful drain | `OPS-HEALTH-001`, `OPS-DRAIN-001` |
@@ -533,11 +547,12 @@ P50/P90/P95、超时/错误率、SSE 断开率、准入拒绝率和 fallback 率
 ## 13. Decisions and deferred items
 
 已确定的首版工程决策是：保留 Python/FastAPI 领域核心，采用 `hybrid` runtime profile，
-Hermes 仅通过 `AgentRuntimePort` 提供可选编排/表达能力；客观事实、安全门、Provider、
-Verifier 和 Derivation 不迁移到 Hermes。这样可获得 Hermes 的开发速度，同时保持 PDF 与
-现有契约的可验证性。
+hybrid 的旧 composer 仍通过 `AgentRuntimePort` 提供可选表达能力；full 通过官方
+`AgentOrchestratorPort` 和三个任务级 NBA 工具提供问题理解/规划能力。客观事实、安全门、
+Provider、Verifier 和 Derivation 不迁移到 Hermes。这样可获得 Hermes 的开发速度，同时保持
+PDF 与现有契约的可验证性。
 
 模型供应商、最终公开数据 fallback、托管平台、持久化会话存储和认证策略仍不是 PDF 指定项。
 LLD 通过窄接口和配置开关保持可替换；任何新增复杂度必须在 plan 的 Complexity Tracking
-中记录理由、风险、回滚方式和可验证收益。Hermes 先以 fixture 做 Spike，通过安全/事实/多轮
-契约后才允许进入在线剖面。
+中记录理由、风险、回滚方式和可验证收益。`embedded_agent` 已通过 fixture、真实
+SiliconFlow、工具白名单、安全零调用和多轮契约；生产隔离 sidecar 仍作为后续演进项。

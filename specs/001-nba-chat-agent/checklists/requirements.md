@@ -4,6 +4,8 @@
 **Created**: 2026-08-26
 **Feature**: [spec.md](../spec.md)
 
+**Revalidated**: 2026-08-30 — full-intelligence Agent orchestration refinement
+
 ## Content Quality
 
 - [x] No implementation details (languages, frameworks, APIs)
@@ -28,3 +30,10 @@
 - [x] User stories cover primary flows
 - [x] Feature meets measurable outcomes defined in Success Criteria
 - [x] No implementation details leak into specification
+
+## Notes
+
+- Full-intelligence acceptance now covers greetings, typo tolerance, empty schedules, bounded
+  tool use, provenance and pre-Agent safety short-circuiting.
+- No unresolved clarification markers remain; the existing authentication, evidence and
+  deterministic-fact boundaries remain authoritative.

@@ -115,6 +115,12 @@ class Settings:
     hermes_lite_endpoint: str = ""
     hermes_lite_max_tokens: int = 800
     hermes_lite_timeout_ms: int = 2_500
+    agent_max_iterations: int = 4
+    agent_max_tool_calls: int = 4
+    agent_tool_timeout_ms: int = 8_000
+    agent_max_tool_result_bytes: int = 16_384
+    agent_max_output_bytes: int = 20_000
+    agent_package_version: str = "0.19.0"
     max_request_bytes: int = 32_768
     max_event_bytes: int = 16_384
     max_response_bytes: int = 262_144
@@ -198,6 +204,12 @@ class Settings:
             hermes_lite_endpoint=os.getenv("HERMES_LITE_ENDPOINT", ""),
             hermes_lite_max_tokens=_int("HERMES_LITE_MAX_TOKENS", 800),
             hermes_lite_timeout_ms=_int("HERMES_LITE_TIMEOUT_MS", 2_500),
+            agent_max_iterations=_int("AGENT_MAX_ITERATIONS", 4),
+            agent_max_tool_calls=_int("AGENT_MAX_TOOL_CALLS", 4),
+            agent_tool_timeout_ms=_int("AGENT_TOOL_TIMEOUT_MS", 8_000),
+            agent_max_tool_result_bytes=_int("AGENT_MAX_TOOL_RESULT_BYTES", 16_384),
+            agent_max_output_bytes=_int("AGENT_MAX_OUTPUT_BYTES", 20_000),
+            agent_package_version=os.getenv("AGENT_PACKAGE_VERSION", "0.19.0").strip(),
             max_request_bytes=_int("MAX_REQUEST_BYTES", 32_768),
             max_event_bytes=_int("MAX_EVENT_BYTES", 16_384),
             max_response_bytes=_int("MAX_RESPONSE_BYTES", 262_144),
@@ -236,8 +248,10 @@ class Settings:
             raise ValueError("LLM_MODE must be mock or live")
         if runtime_profile not in {"template", "hermes", "hybrid"}:
             raise ValueError("RUNTIME_PROFILE must be template, hermes, or hybrid")
-        if hermes_lite_mode not in {"off", "embedded_spike", "sidecar"}:
-            raise ValueError("HERMES_LITE_MODE must be off, embedded_spike, or sidecar")
+        if hermes_lite_mode not in {"off", "embedded_spike", "embedded_agent", "sidecar"}:
+            raise ValueError(
+                "HERMES_LITE_MODE must be off, embedded_spike, embedded_agent, or sidecar"
+            )
         if default_intelligence_mode not in {"hybrid", "full"}:
             raise ValueError("DEFAULT_INTELLIGENCE_MODE must be hybrid or full")
         if default_intelligence_mode == "full" and not self.full_intelligence_enabled:
@@ -268,8 +282,8 @@ class Settings:
             or self.cache_ttl_history_seconds < 0
         ):
             raise ValueError("cache TTL values must be non-negative")
-        if app_env == "production" and hermes_lite_mode == "embedded_spike":
-            raise ValueError("embedded Hermes spike is forbidden in production")
+        if app_env == "production" and hermes_lite_mode in {"embedded_spike", "embedded_agent"}:
+            raise ValueError("embedded Hermes runtimes are forbidden in production")
         positive = {
             "provider_timeout_seconds": self.provider_timeout_seconds,
             "llm_timeout_seconds": self.llm_timeout_seconds,
@@ -294,10 +308,23 @@ class Settings:
             "siliconflow_max_response_bytes": self.siliconflow_max_response_bytes,
             "hermes_lite_max_tokens": self.hermes_lite_max_tokens,
             "hermes_lite_timeout_ms": self.hermes_lite_timeout_ms,
+            "agent_tool_timeout_ms": self.agent_tool_timeout_ms,
+            "agent_max_tool_result_bytes": self.agent_max_tool_result_bytes,
+            "agent_max_output_bytes": self.agent_max_output_bytes,
         }
         invalid = [name for name, value in positive.items() if value <= 0]
         if invalid:
             raise ValueError(f"configuration values must be positive: {', '.join(invalid)}")
+        if not 1 <= self.agent_max_iterations <= 4:
+            raise ValueError("AGENT_MAX_ITERATIONS must be between 1 and 4")
+        if not 1 <= self.agent_max_tool_calls <= 4:
+            raise ValueError("AGENT_MAX_TOOL_CALLS must be between 1 and 4")
+        if self.agent_max_tool_result_bytes > 65_536:
+            raise ValueError("AGENT_MAX_TOOL_RESULT_BYTES must be <= 65536")
+        if self.agent_max_output_bytes > 65_536:
+            raise ValueError("AGENT_MAX_OUTPUT_BYTES must be <= 65536")
+        if self.agent_package_version != "0.19.0":
+            raise ValueError("AGENT_PACKAGE_VERSION must match the locked Hermes version 0.19.0")
         if not self.espn_base_url:
             raise ValueError("ESPN_BASE_URL must not be empty")
         if not self.espn_allowed_hosts:
@@ -327,7 +354,10 @@ class Settings:
             raise ValueError("AUTH_SESSION_TTL_SECONDS must be positive")
         if self.auth_max_failed_attempts <= 0 or self.auth_lockout_seconds <= 0:
             raise ValueError("authentication rate-limit values must be positive")
-        direct_model_enabled = llm_mode == "live" and hermes_lite_mode == "embedded_spike"
+        direct_model_enabled = llm_mode == "live" and hermes_lite_mode in {
+            "embedded_spike",
+            "embedded_agent",
+        }
         # The fixed SiliconFlow allow-list applies only to the in-process
         # embedded spike.  A future isolated sidecar owns its own endpoint;
         # keeping that setting opaque here avoids coupling sidecar startup to

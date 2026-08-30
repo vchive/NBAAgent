@@ -141,6 +141,7 @@ class CompositionMode(StrEnum):
 
     DETERMINISTIC = "deterministic"
     MODEL = "model"
+    AGENT = "agent"
     FALLBACK = "fallback"
 
 

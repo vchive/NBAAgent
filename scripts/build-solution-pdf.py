@@ -27,7 +27,6 @@ from reportlab.platypus import (
     TableStyle,
 )
 
-
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "docs" / "solution.pdf"
 FONT = "STSong-Light"
@@ -163,9 +162,9 @@ def build() -> None:
     section("1. 产品思路")
     story.append(
         p(
-            "产品采用“事实链 + 受限分析”的双通道。比分、球员数据、赛程、排名、系列赛累计和逐回合事件，"
-            "先从公开数据获取并归一化，再由确定性代码核验和推导；战术与复盘只在事实完成后交给受限模型组织语言。"
-            "因此模型不能修改比分、做算术或绕过安全策略。",
+            "产品采用“确定性事实链 + 受控 Agent”的双通道。比分、球员数据、赛程、排名、系列赛累计和逐回合事件，"
+            "先从公开数据获取并归一化，再由确定性代码核验和推导；全智能模式由 Hermes 理解问题并选择三个 NBA 工具。"
+            "因此模型可以规划查询，但不能修改比分、做算术或绕过安全策略。",
             styles["BodyCN"],
         )
     )
@@ -180,18 +179,42 @@ def build() -> None:
     section("2. 系统架构")
     story.append(
         p(
-            "浏览器 Web Demo → FastAPI Chat API → 检索前 Safety Guard → 会话/时区/意图解析 →"
-            " Provider Gateway → Normalizer → Verifier/Derivation → 模板或 Hermes-lite/SiliconFlow → Output Guard。",
+            "浏览器 Web Demo → FastAPI Chat API → 检索前 Safety Guard → 会话/时区上下文 → hybrid 确定性通道或"
+            " Official Hermes Agent → NBA 工具 → Provider/Verifier/Derivation → Output Guard。",
             styles["BodyCN"],
         )
     )
     rows = [
-        [p("模块", styles["CellHeadCN"]), p("职责", styles["CellHeadCN"]), p("边界", styles["CellHeadCN"])],
-        [p("Safety Guard", styles["CellCN"]), p("识别红线并在检索前拒答", styles["CellCN"]), p("不搜索敏感问题", styles["CellCN"])],
-        [p("Provider Gateway", styles["CellCN"]), p("公开数据、超时、重试、缓存和 fallback", styles["CellCN"]), p("唯一外网访问边界", styles["CellCN"])],
-        [p("Verifier / Derivation", styles["CellCN"]), p("核验事实，确定性汇总系列赛与 PBP", styles["CellCN"]), p("模型不参与算术和选球", styles["CellCN"])],
-        [p("Hermes-lite", styles["CellCN"]), p("仅组织已核验事实的战术/复盘措辞", styles["CellCN"]), p("无 Provider、浏览器、Shell、Memory、MCP", styles["CellCN"])],
-        [p("Output Guard", styles["CellCN"]), p("拦截无证据数字、敏感内容和内部字段", styles["CellCN"]), p("模型输出不直接信任", styles["CellCN"])],
+        [
+            p("模块", styles["CellHeadCN"]),
+            p("职责", styles["CellHeadCN"]),
+            p("边界", styles["CellHeadCN"]),
+        ],
+        [
+            p("Safety Guard", styles["CellCN"]),
+            p("识别红线并在检索前拒答", styles["CellCN"]),
+            p("不搜索敏感问题", styles["CellCN"]),
+        ],
+        [
+            p("Provider Gateway", styles["CellCN"]),
+            p("公开数据、超时、重试、缓存和 fallback", styles["CellCN"]),
+            p("唯一外网访问边界", styles["CellCN"]),
+        ],
+        [
+            p("Verifier / Derivation", styles["CellCN"]),
+            p("核验事实，确定性汇总系列赛与 PBP", styles["CellCN"]),
+            p("模型不参与算术和选球", styles["CellCN"]),
+        ],
+        [
+            p("Official Hermes Agent", styles["CellCN"]),
+            p("理解问题并调用 nba_query / nba_schedule / nba_news", styles["CellCN"]),
+            p("无通用网络、浏览器、Shell、Memory、MCP", styles["CellCN"]),
+        ],
+        [
+            p("Output Guard", styles["CellCN"]),
+            p("拦截无证据数字、敏感内容和内部字段", styles["CellCN"]),
+            p("模型输出不直接信任", styles["CellCN"]),
+        ],
     ]
     table = Table(rows, colWidths=[32 * mm, 78 * mm, 58 * mm], repeatRows=1)
     table.setStyle(
@@ -248,16 +271,16 @@ def build() -> None:
     section("5. 模型与 Hermes 取舍")
     story.append(
         p(
-            "模型并不替代事实系统。默认 fixture/mock 模式完全离线；显式启用 live + hybrid +"
-            " embedded_spike 后，只有战术（F）和复盘（G）问题调用 SiliconFlow OpenAI-compatible 接口，"
-            "默认模型为 deepseek-ai/DeepSeek-V4-Flash。模型输入只含结构化 FactBundle，输出必须通过 Output Guard。",
+            "模型并不替代事实系统。默认 fixture/mock 模式完全离线；live + hybrid + embedded_agent 使用锁定的"
+            " hermes-agent==0.19.0 和官方 AIAgent，默认模型为 deepseek-ai/DeepSeek-V4-Flash。"
+            "全智能请求在规则 Parser 之前进入有界 tool loop，输出必须通过本地 Output Guard。",
             styles["BodyCN"],
         )
     )
     story.append(
         p(
-            "当前是 API 进程内的受限 Hermes-lite Spike，并非生产级独立 sidecar；这是为了快速完成可验证首版。"
-            "正式生产可将同一 AgentRuntimePort 迁移到无工具、无网络、无文件系统的独立 sidecar。",
+            "Agent 只启用三个任务级 NBA 工具，Shell、文件系统、浏览器、通用搜索、MCP、Memory、Skills 和子代理均关闭。"
+            "当前 embedded_agent 是 API 进程内的受控面试演示形态；正式生产可将 AgentOrchestratorPort 迁移到隔离 sidecar。",
             styles["BodyCN"],
         )
     )
@@ -265,17 +288,37 @@ def build() -> None:
     section("6. 验证、评测与交付")
     story.append(
         p(
-            "黄金题集包含 18 条案例，覆盖 A–I 参考题型；评测 Runner 支持重复运行、七维评分、性能记录和安全一票否决。"
+            "黄金题集包含 21 条案例，覆盖 A–I 参考题型和全智能验收题；评测 Runner 支持重复运行、七维评分、性能记录和安全一票否决。"
             "本地 pytest 覆盖模型、时间、Provider、HTTP/SSE、认证、运行时、失败路径和多轮上下文。",
             styles["BodyCN"],
         )
     )
     rows = [
-        [p("交付项", styles["CellHeadCN"]), p("状态", styles["CellHeadCN"]), p("入口", styles["CellHeadCN"])],
-        [p("在线产品", styles["CellCN"]), p("已部署，单端口访问", styles["CellCN"]), p("http://115.190.174.39:8000/（需访问密码）", styles["CellCN"])],
-        [p("需求/HLD/LLD", styles["CellCN"]), p("已提交", styles["CellCN"]), p("specs/001-nba-chat-agent/", styles["CellCN"])],
-        [p("方案说明 PDF", styles["CellCN"]), p("本文件", styles["CellCN"]), p("docs/solution.pdf", styles["CellCN"])],
-        [p("运行配置", styles["CellCN"]), p("fixture / hybrid / live 可切换", styles["CellCN"]), p("README.md、docs/byok.md", styles["CellCN"])],
+        [
+            p("交付项", styles["CellHeadCN"]),
+            p("状态", styles["CellHeadCN"]),
+            p("入口", styles["CellHeadCN"]),
+        ],
+        [
+            p("在线产品", styles["CellCN"]),
+            p("已部署，单端口访问", styles["CellCN"]),
+            p("http://115.190.174.39:8000/（需访问密码）", styles["CellCN"]),
+        ],
+        [
+            p("需求/HLD/LLD", styles["CellCN"]),
+            p("已提交", styles["CellCN"]),
+            p("specs/001-nba-chat-agent/", styles["CellCN"]),
+        ],
+        [
+            p("方案说明 PDF", styles["CellCN"]),
+            p("本文件", styles["CellCN"]),
+            p("docs/solution.pdf", styles["CellCN"]),
+        ],
+        [
+            p("运行配置", styles["CellCN"]),
+            p("fixture / hybrid / live 可切换", styles["CellCN"]),
+            p("README.md、docs/byok.md", styles["CellCN"]),
+        ],
     ]
     table = Table(rows, colWidths=[35 * mm, 42 * mm, 91 * mm], repeatRows=1)
     table.setStyle(

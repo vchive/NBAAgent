@@ -50,6 +50,9 @@ class QueryTelemetry:
     hermes_mode: str | None = None
     hermes_status: str | None = None
     fallback_reason: str | None = None
+    agent_iteration_count: int = 0
+    agent_tool_call_count: int = 0
+    agent_tool_names: list[str] = field(default_factory=list)
     # Publicly projected by the application as a small, provider-neutral
     # explanation of where the answer came from.  These fields remain
     # internal telemetry here so exporters can correlate model/fallback
@@ -92,7 +95,8 @@ class TelemetrySink:
             del self.records[: len(self.records) - self.max_records]
         logger.info(
             "query_complete request=%s outcome=%s intent=%s provider_calls=%d evidence=%s "
-            "composition=%s composition_status=%s composition_latency_ms=%d fallback=%s",
+            "composition=%s composition_status=%s composition_latency_ms=%d fallback=%s "
+            "agent_iterations=%d agent_tool_calls=%d agent_tools=%s",
             telemetry.request_id,
             telemetry.outcome,
             telemetry.intent_name,
@@ -102,6 +106,9 @@ class TelemetrySink:
             telemetry.composition_status,
             telemetry.composition_latency_ms,
             telemetry.fallback_reason or "none",
+            telemetry.agent_iteration_count,
+            telemetry.agent_tool_call_count,
+            ",".join(telemetry.agent_tool_names) or "none",
         )
 
     def latest(self) -> QueryTelemetry | None:

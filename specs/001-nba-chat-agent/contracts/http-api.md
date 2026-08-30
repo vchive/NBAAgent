@@ -105,7 +105,7 @@ or `no_data`). These are successful protocol responses, not transport failures:
   "follow_up": null,
   "latency_ms": 1234,
   "composition": {
-    "mode": "model",
+    "mode": "agent",
     "status": "used",
     "latency_ms": 980
   }
@@ -113,10 +113,11 @@ or `no_data`). These are successful protocol responses, not transport failures:
 ```
 
 `composition` is a deliberately small, provider-neutral provenance marker for the demo UI:
-`mode=deterministic` means the objective fact renderer answered directly, `mode=model` means a
-constrained analysis pass was accepted, and `mode=fallback` means the analysis path returned to
-the deterministic evidence-first answer. `status` is `not_requested`, `used`, `fallback`, or
-`disabled`. It never contains a model/provider name, endpoint, prompt, key, or internal IDs.
+`mode=deterministic` means the fact renderer answered directly, `mode=model` means the legacy
+single-pass analysis composer was accepted, `mode=agent` means the bounded full-intelligence loop
+participated, and `mode=fallback` means a model/Agent path returned to the deterministic
+evidence-first answer. `status` is `not_requested`, `used`, `fallback`, or `disabled`. It never
+contains a model/provider name, endpoint, prompt, key, tool arguments or internal IDs.
 
 `intelligence_mode=full` is accepted only when the service feature flag is enabled; otherwise the
 server safely uses hybrid routing. `auto` or an omitted field uses the configured default.

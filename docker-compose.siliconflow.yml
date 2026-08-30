@@ -8,14 +8,23 @@ services:
     environment:
       LLM_MODE: live
       RUNTIME_PROFILE: hybrid
-      HERMES_LITE_MODE: embedded_spike
+      HERMES_LITE_MODE: embedded_agent
       FULL_INTELLIGENCE_ENABLED: "true"
       DEFAULT_INTELLIGENCE_MODE: hybrid
       # The live model gets a longer wall-clock budget than the local mock;
       # the request deadline still caps the effective timeout per call.
-      HERMES_LITE_TIMEOUT_MS: 20000
+      HERMES_LITE_TIMEOUT_MS: 40000
       LLM_TIMEOUT_SECONDS: 20
-      REQUEST_DEADLINE_MS: 25000
+      REQUEST_DEADLINE_MS: 45000
+      AGENT_MAX_ITERATIONS: 4
+      AGENT_MAX_TOOL_CALLS: 4
+      AGENT_TOOL_TIMEOUT_MS: 12000
+      AGENT_MAX_TOOL_RESULT_BYTES: 16384
+      AGENT_MAX_OUTPUT_BYTES: 20000
+      AGENT_PACKAGE_VERSION: 0.19.0
+      # Official Hermes may initialise small process-local metadata. The base
+      # image is read-only, so keep it in the bounded /tmp tmpfs.
+      HERMES_HOME: /tmp/hermes
       # Analysis is appended to deterministic facts, so keep the generation
       # budget focused on a concise 2–4 point explanation.
       SILICONFLOW_MAX_TOKENS: 480

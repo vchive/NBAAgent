@@ -36,7 +36,10 @@
   // Live SiliconFlow generation can take 10–20 seconds on a cold request.
   // Keep the client deadline above the server's 20s model budget so a valid
   // model answer is not discarded just as it completes.
-  const STREAM_TIMEOUT_MS = 30_000;
+  // A bounded Agent turn can include two model iterations plus one NBA tool
+  // lookup. Keep the browser slightly above the server's 45s deadline so the
+  // terminal fallback/answer is not aborted just before it arrives.
+  const STREAM_TIMEOUT_MS = 55_000;
 
   function endpoint(path) {
     return `${baseUrl}${path}`;

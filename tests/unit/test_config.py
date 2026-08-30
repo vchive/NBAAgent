@@ -50,3 +50,22 @@ def test_sidecar_profile_does_not_require_a_direct_provider_url() -> None:
 def test_fixture_demo_date_must_be_iso_calendar_date() -> None:
     with pytest.raises(ValueError, match="HIGHLIGHTS_DEMO_DATE"):
         Settings(highlights_demo_date="2026-02-30").validate()
+
+
+def test_official_agent_settings_are_bounded_and_version_locked() -> None:
+    settings = Settings(
+        llm_mode="live",
+        runtime_profile="hybrid",
+        hermes_lite_mode="embedded_agent",
+        agent_max_iterations=4,
+        agent_max_tool_calls=4,
+    )
+    settings.validate()
+    assert settings.agent_package_version == "0.19.0"
+
+    with pytest.raises(ValueError, match="AGENT_MAX_ITERATIONS"):
+        Settings(agent_max_iterations=5).validate()
+    with pytest.raises(ValueError, match="AGENT_MAX_TOOL_CALLS"):
+        Settings(agent_max_tool_calls=0).validate()
+    with pytest.raises(ValueError, match="locked Hermes version"):
+        Settings(agent_package_version="latest").validate()

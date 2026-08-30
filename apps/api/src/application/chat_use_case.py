@@ -14,7 +14,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from apps.api.src.application.context_manager import ContextManager
-from apps.api.src.application.parser import IntentParser, ParseResult
+from apps.api.src.application.parser import IntentParser, ParseResult, resolve_entities
 from apps.api.src.application.ports import (
     CancelToken,
     ComposerInput,
@@ -38,6 +38,7 @@ from apps.api.src.domain.errors import AgentError, OutputBlockedError, ProviderE
 from apps.api.src.domain.models import (
     AnswerBlock,
     AnswerBlockType,
+    Category,
     ChatRequest,
     DraftAnswer,
     EntityKind,
@@ -47,14 +48,20 @@ from apps.api.src.domain.models import (
     FactBundle,
     Game,
     GameBundle,
+    GameFilters,
     HistoryRecord,
     IntelligenceMode,
     IntentName,
+    MetricRef,
     NewsItem,
+    Operation,
+    QueryIntent,
+    QueryMode,
     SafetyCategory,
     SafetyDecision,
     SafetyOutcome,
     Standing,
+    StatScope,
     VerificationState,
 )
 from apps.api.src.domain.safety import OutputGuard, OutputGuardError, SafetyGuard
@@ -66,6 +73,12 @@ from apps.api.src.domain.verifier import (
     verify_stat_lines,
 )
 from apps.api.src.infrastructure.admission import AdmissionController
+from apps.api.src.infrastructure.agent_tools import resolve_date_expression
+from apps.api.src.infrastructure.hermes_agent_runtime import (
+    AgentTurnInput,
+    AgentTurnResult,
+    HermesAgentRuntime,
+)
 from apps.api.src.infrastructure.hermes_runtime import (
     HermesRuntimeAdapter,
     TemplateRuntime,
@@ -78,6 +91,12 @@ _MODEL_META_RE = re.compile(
     r"(?:你|您|当前|本次|系统|服务).{0,8}(?:用的|使用的|调用的|配置的)?\s*"
     r"(?:哪个|什么|何种)?\s*(?:模型|大模型|语言模型|LLM)"
     r"|(?:模型|大模型|语言模型|LLM).{0,8}(?:是什么|是哪一个|哪个|名称|配置)",
+    re.IGNORECASE,
+)
+
+_GREETING_RE = re.compile(
+    r"^(?:你?好|您好|嗨|哈喽|hello|hi|hey|ni\s*hao|nihao|在吗|早上好|下午好|晚上好)"
+    r"(?:[!！,.，。?？\s]*)$",
     re.IGNORECASE,
 )
 
@@ -174,6 +193,7 @@ class ChatUseCase:
         telemetry: TelemetrySink | None = None,
         runtime: Any | None = None,
         hermes_runtime: Any | None = None,
+        agent_runtime: Any | None = None,
         siliconflow_client: Any | None = None,
         gateway: Any | None = None,
         admission: AdmissionController | None = None,
@@ -211,9 +231,13 @@ class ChatUseCase:
         self.planner = QueryPlanner()
         self.template_composer = TemplateComposer()
         self.runtime = runtime or TemplateRuntime(composer=self.template_composer)
+        configured_hermes_mode = str(getattr(settings, "hermes_lite_mode", "off")).lower()
+        legacy_hermes_mode = (
+            "off" if configured_hermes_mode == "embedded_agent" else configured_hermes_mode
+        )
         self.hermes_runtime = hermes_runtime or HermesRuntimeAdapter(
             fallback=self.runtime,
-            mode=getattr(settings, "hermes_lite_mode", "off"),
+            mode=legacy_hermes_mode,
             timeout_ms=getattr(settings, "hermes_lite_timeout_ms", 2500),
             endpoint=getattr(settings, "hermes_lite_endpoint", ""),
             llm_mode=getattr(settings, "llm_mode", "mock"),
@@ -232,6 +256,22 @@ class ChatUseCase:
             ),
             siliconflow_max_request_bytes=getattr(settings, "max_request_bytes", 32_768),
             siliconflow_client=siliconflow_client,
+        )
+        self.agent_runtime = agent_runtime or HermesAgentRuntime(
+            mode=configured_hermes_mode if configured_hermes_mode == "embedded_agent" else "off",
+            llm_mode=getattr(settings, "llm_mode", "mock"),
+            api_key=getattr(settings, "siliconflow_api_key", ""),
+            api_key_file=getattr(settings, "siliconflow_api_key_file", ""),
+            base_url=getattr(settings, "siliconflow_base_url", "https://api.siliconflow.cn/v1"),
+            model=getattr(settings, "siliconflow_model", "deepseek-ai/DeepSeek-V4-Flash"),
+            max_tokens=getattr(settings, "siliconflow_max_tokens", 640),
+            timeout_ms=getattr(settings, "hermes_lite_timeout_ms", 40_000),
+            max_iterations=getattr(settings, "agent_max_iterations", 4),
+            max_tool_calls=getattr(settings, "agent_max_tool_calls", 4),
+            tool_timeout_ms=getattr(settings, "agent_tool_timeout_ms", 8_000),
+            max_tool_result_bytes=getattr(settings, "agent_max_tool_result_bytes", 16_384),
+            max_output_bytes=getattr(settings, "agent_max_output_bytes", 20_000),
+            package_version=getattr(settings, "agent_package_version", "0.19.0"),
         )
         self.runtime_selector = RuntimeSelector(
             template_runtime=self.runtime,
@@ -290,6 +330,8 @@ class ChatUseCase:
         event_sink: Any | None = None,
         cancel: CancelToken | None = None,
         request_id: UUID | None = None,
+        _internal_tool: bool = False,
+        _parent_deadline: datetime | None = None,
     ) -> ChatResult:
         started = time.monotonic()
         sink = event_sink or _NullSink()
@@ -318,7 +360,8 @@ class ChatUseCase:
             request_id=request_id,
             session_hash=InMemorySessionStore.hash_session(session_id),
             message_hash=hash_text(req.message),
-            deadline_at_utc=self._now()
+            deadline_at_utc=_parent_deadline
+            or self._now()
             + timedelta(milliseconds=getattr(self.settings, "request_deadline_ms", 10_000)),
         )
         client_id = req.client_message_id
@@ -451,7 +494,7 @@ class ChatUseCase:
             # produced a misleading "请补充查询对象" clarification), and a
             # model does not need to explain which model is configured.
             if _is_model_meta_question(req.message):
-                runtime_model = getattr(
+                runtime_model = getattr(self.agent_runtime, "model", "") or getattr(
                     getattr(self.hermes_runtime, "model_runtime", None), "model", ""
                 )
                 configured_model = runtime_model or getattr(
@@ -459,17 +502,20 @@ class ChatUseCase:
                 )
                 llm_mode = str(getattr(self.settings, "llm_mode", "mock")).lower()
                 hermes_mode = str(getattr(self.settings, "hermes_lite_mode", "off")).lower()
-                if llm_mode == "live" and hermes_mode in {"embedded_spike", "sidecar"}:
+                if llm_mode == "live" and hermes_mode in {
+                    "embedded_spike",
+                    "embedded_agent",
+                    "sidecar",
+                }:
                     availability = "当前已启用"
                 else:
                     availability = "当前未启用（服务使用确定性模板）"
                 answer = (
-                    f"当前配置的表达模型是 **{configured_model}**，{availability}。"
-                    "它只用于战术分析和赛后复盘的自然语言表达；比分、统计和逐回合事实"
-                    "仍由已核验数据与确定性逻辑生成。这个模型配置查询本身不会再次调用大模型。"
+                    f"当前配置的模型是 **{configured_model}**，{availability}。"
+                    "默认 hybrid 只在战术分析和赛后复盘中使用模型；开启全智能模式后，"
+                    "官方 Hermes Agent 会理解问题并选择受控 NBA 工具。比分、统计、赛程和"
+                    "逐回合事实仍由工具后的核验与确定性逻辑生成。这个配置查询本身不会再次调用大模型。"
                 )
-                from apps.api.src.domain.models import AnswerBlock, AnswerBlockType, DraftAnswer
-
                 draft = DraftAnswer(
                     markdown=answer,
                     blocks=[AnswerBlock(type=AnswerBlockType.TEXT, content=answer)],
@@ -503,6 +549,180 @@ class ChatUseCase:
             ):
                 context = context.model_copy(update={"timezone": req.client_timezone})
             telemetry.transition("CONTEXT_RESOLVED")
+            agent_attempted = False
+            if not _internal_tool and self._full_agent_requested(req):
+                agent_attempted = True
+                await _emit(
+                    sink,
+                    "run.status",
+                    {"stage": "agent_planning", "text": "Hermes 正在理解问题"},
+                )
+                before_agent = self._gateway_counters()
+                try:
+                    agent_turn = await self._await_with_cancel(
+                        self.agent_runtime.run(
+                            AgentTurnInput(
+                                request_id=str(request_id),
+                                opaque_session_id=InMemorySessionStore.hash_session(session_id),
+                                sanitized_question=req.message,
+                                timezone=context.timezone,
+                                now_beijing=format_beijing(self._now()),
+                                context_hint=self._agent_context_hint(context),
+                                deadline_at_utc=telemetry.deadline_at_utc,
+                                max_iterations=getattr(self.settings, "agent_max_iterations", 4),
+                                max_tool_calls=getattr(self.settings, "agent_max_tool_calls", 4),
+                            ),
+                            tool_runner=self._agent_tool_runner(
+                                session_id=session_id,
+                                context=context,
+                                deadline_at_utc=telemetry.deadline_at_utc,
+                                token=token,
+                                sink=sink,
+                            ),
+                            cancel=token,
+                        ),
+                        token,
+                    )
+                except Exception:
+                    agent_turn = AgentTurnResult(
+                        status=RuntimeStatus.UNAVAILABLE,
+                        finish_reason="runtime_exception",
+                    )
+                after_agent = self._gateway_counters()
+                telemetry.provider_call_count = max(
+                    0,
+                    after_agent.get("provider_call_count", 0)
+                    - before_agent.get("provider_call_count", 0),
+                )
+                telemetry.cache_read_count = max(
+                    0,
+                    after_agent.get("cache_read_count", 0)
+                    - before_agent.get("cache_read_count", 0),
+                )
+                telemetry.cache_write_count = max(
+                    0,
+                    after_agent.get("cache_write_count", 0)
+                    - before_agent.get("cache_write_count", 0),
+                )
+                telemetry.cache_hit_count = max(
+                    0,
+                    after_agent.get("cache_hit_count", 0)
+                    - before_agent.get("cache_hit_count", 0),
+                )
+                telemetry.hermes_mode = "embedded_agent"
+                telemetry.hermes_status = str(
+                    getattr(agent_turn.status, "value", agent_turn.status)
+                ).lower()
+                telemetry.agent_iteration_count = agent_turn.iteration_count
+                telemetry.agent_tool_call_count = len(
+                    [call for call in agent_turn.tool_calls if call.status != "duplicate"]
+                )
+                telemetry.agent_tool_names = list(
+                    dict.fromkeys(call.tool_name for call in agent_turn.tool_calls)
+                )
+                telemetry.composition_latency_ms = agent_turn.latency_ms
+                if (
+                    agent_turn.status is RuntimeStatus.OK
+                    and agent_turn.answer_markdown
+                ):
+                    agent_answer = self._ground_agent_answer(
+                        agent_turn.answer_markdown,
+                        agent_turn.observations,
+                    )
+                    evidence_value = str(agent_turn.evidence_state).upper()
+                    evidence = (
+                        EvidenceState(evidence_value)
+                        if evidence_value in {"VERIFIED", "PARTIAL", "NONE"}
+                        else EvidenceState.NONE
+                    )
+                    draft = DraftAnswer(
+                        markdown=agent_answer,
+                        blocks=[
+                            AnswerBlock(
+                                type=AnswerBlockType.TEXT,
+                                content=agent_answer,
+                            )
+                        ],
+                        evidence_state=evidence,
+                    )
+                    guarded: DraftAnswer | None = None
+                    try:
+                        guarded = self.output_guard.validate_agent(
+                            draft,
+                            agent_turn.observations,
+                            require_observation=not self._is_greeting(req.message),
+                        )
+                    except (OutputGuardError, ValueError, TypeError):
+                        if self._is_greeting(req.message) and not agent_turn.observations:
+                            safe_greeting = (
+                                "您好！我是 COURTSIDE，可以帮您查询 NBA 赛程、赛果、"
+                                "球员数据、关键回合和战术复盘。您想先看哪一项？"
+                            )
+                            guarded = self.output_guard.validate_agent(
+                                DraftAnswer(
+                                    markdown=safe_greeting,
+                                    blocks=[
+                                        AnswerBlock(
+                                            type=AnswerBlockType.TEXT,
+                                            content=safe_greeting,
+                                        )
+                                    ],
+                                    evidence_state=EvidenceState.NONE,
+                                ),
+                                [],
+                                require_observation=False,
+                            )
+                        else:
+                            telemetry.fallback_reason = "agent_output_guard"
+                    if guarded is not None:
+                        await _emit(
+                            sink,
+                            "run.status",
+                            {"stage": "agent_completing", "text": "Hermes 已完成回答"},
+                        )
+                        telemetry.composition_mode = "agent"
+                        telemetry.composition_status = "used"
+                        telemetry.evidence_state = evidence.value.lower()
+                        telemetry.transition("COMPOSED")
+                        telemetry.transition("OUTPUT_GUARDED")
+                        try:
+                            await self.context_manager.commit(
+                                context,
+                                intent=self._agent_summary_intent(),
+                                facts=FactBundle(facts=[], evidence_state=EvidenceState.NONE),
+                                answer=guarded.markdown,
+                            )
+                        except Exception:
+                            pass
+                        as_of = self._agent_as_of(agent_turn.observations)
+                        result = self._result_from_draft(
+                            request_id,
+                            session_id,
+                            "completed",
+                            guarded,
+                            started,
+                            as_of=as_of,
+                            composition=self._composition_from_telemetry(telemetry),
+                        )
+                        telemetry.finish(outcome="completed", total_latency_ms=result.latency_ms)
+                        self.telemetry.record(telemetry)
+                        if client_id:
+                            await self.session_store.complete_idempotency(
+                                session_id, client_id, result
+                            )
+                        for chunk in _chunks(guarded.markdown, 120):
+                            await _emit(sink, "message.delta", {"text": chunk})
+                        await _emit(sink, "message.completed", result.to_dict())
+                        return result
+                if telemetry.fallback_reason is None:
+                    telemetry.fallback_reason = agent_turn.finish_reason or "agent_unavailable"
+                telemetry.composition_mode = "fallback"
+                telemetry.composition_status = "fallback"
+                await _emit(
+                    sink,
+                    "run.status",
+                    {"stage": "agent_fallback", "text": "正在回退到已核验事实链路"},
+                )
             parser = IntentParser(clock=self.clock, input_timezone=context.timezone)
             try:
                 parsed = parser.parse(req.message, context)
@@ -573,6 +793,11 @@ class ChatUseCase:
                     draft,
                     started,
                     as_of=None,
+                    composition=(
+                        self._composition_from_telemetry(telemetry)
+                        if agent_attempted
+                        else None
+                    ),
                 )
                 telemetry.evidence_state = "none"
                 telemetry.finish(outcome="no_data", total_latency_ms=result.latency_ms)
@@ -590,8 +815,6 @@ class ChatUseCase:
                 return result
             if parsed.missing_slots or parsed.ambiguity_reasons:
                 question = self._clarification(parsed)
-                from apps.api.src.domain.models import AnswerBlock, AnswerBlockType, DraftAnswer
-
                 draft = DraftAnswer(
                     markdown=question,
                     blocks=[AnswerBlock(type=AnswerBlockType.TEXT, content=question)],
@@ -599,7 +822,17 @@ class ChatUseCase:
                     follow_up=question,
                 )
                 result = self._result_from_draft(
-                    request_id, session_id, "needs_clarification", draft, started, as_of=None
+                    request_id,
+                    session_id,
+                    "needs_clarification",
+                    draft,
+                    started,
+                    as_of=None,
+                    composition=(
+                        self._composition_from_telemetry(telemetry)
+                        if agent_attempted
+                        else None
+                    ),
                 )
                 telemetry.finish(outcome="needs_clarification", total_latency_ms=result.latency_ms)
                 self.telemetry.record(telemetry)
@@ -612,8 +845,6 @@ class ChatUseCase:
             telemetry.transition("PLAN_READY")
             if plan is None:
                 question = "请补充具体的球队、球员或比赛，我再帮您核对。"
-                from apps.api.src.domain.models import AnswerBlock, AnswerBlockType, DraftAnswer
-
                 draft = DraftAnswer(
                     markdown=question,
                     blocks=[AnswerBlock(type=AnswerBlockType.TEXT, content=question)],
@@ -621,7 +852,17 @@ class ChatUseCase:
                     follow_up=question,
                 )
                 result = self._result_from_draft(
-                    request_id, session_id, "needs_clarification", draft, started, as_of=None
+                    request_id,
+                    session_id,
+                    "needs_clarification",
+                    draft,
+                    started,
+                    as_of=None,
+                    composition=(
+                        self._composition_from_telemetry(telemetry)
+                        if agent_attempted
+                        else None
+                    ),
                 )
                 telemetry.finish(outcome="needs_clarification", total_latency_ms=result.latency_ms)
                 self.telemetry.record(telemetry)
@@ -632,7 +873,7 @@ class ChatUseCase:
                 return result
             await _emit(sink, "run.status", {"stage": "retrieving", "text": "正在查找相关比赛数据"})
             telemetry.transition("RETRIEVING")
-            deadline = self._now() + timedelta(
+            deadline = telemetry.deadline_at_utc or self._now() + timedelta(
                 milliseconds=getattr(self.settings, "request_deadline_ms", 10_000)
             )
             budget = RequestBudget(
@@ -674,16 +915,16 @@ class ChatUseCase:
             finally:
                 await lease.release()
             after = self._gateway_counters()
-            telemetry.provider_call_count = max(
+            telemetry.provider_call_count += max(
                 0, after.get("provider_call_count", 0) - before.get("provider_call_count", 0)
             )
-            telemetry.cache_read_count = max(
+            telemetry.cache_read_count += max(
                 0, after.get("cache_read_count", 0) - before.get("cache_read_count", 0)
             )
-            telemetry.cache_write_count = max(
+            telemetry.cache_write_count += max(
                 0, after.get("cache_write_count", 0) - before.get("cache_write_count", 0)
             )
-            telemetry.cache_hit_count = max(
+            telemetry.cache_hit_count += max(
                 0, after.get("cache_hit_count", 0) - before.get("cache_hit_count", 0)
             )
             if provider_result.error is not None:
@@ -701,7 +942,17 @@ class ChatUseCase:
             if data is None or data == []:
                 draft = self.template_composer.no_data()
                 result = self._result_from_draft(
-                    request_id, session_id, "no_data", draft, started, as_of=None
+                    request_id,
+                    session_id,
+                    "no_data",
+                    draft,
+                    started,
+                    as_of=None,
+                    composition=(
+                        self._composition_from_telemetry(telemetry)
+                        if agent_attempted
+                        else None
+                    ),
                 )
                 telemetry.evidence_state = "none"
                 telemetry.finish(outcome="no_data", total_latency_ms=result.latency_ms)
@@ -773,6 +1024,8 @@ class ChatUseCase:
                 telemetry=telemetry,
                 user_message=req.message,
                 intelligence_mode=req.intelligence_mode,
+                force_template=_internal_tool or agent_attempted,
+                preserve_fallback=agent_attempted,
             )
             try:
                 guarded = self.output_guard.validate(draft, facts)
@@ -798,14 +1051,15 @@ class ChatUseCase:
                 )
             telemetry.transition("COMPOSED")
             telemetry.transition("OUTPUT_GUARDED")
-            try:
-                await self.context_manager.commit(
-                    context, intent=parsed.intent, facts=facts, answer=guarded.markdown
-                )
-            except Exception:
-                # A context write failure must not invalidate a verified answer; the next
-                # turn will ask for clarification rather than crossing sessions.
-                pass
+            if not _internal_tool:
+                try:
+                    await self.context_manager.commit(
+                        context, intent=parsed.intent, facts=facts, answer=guarded.markdown
+                    )
+                except Exception:
+                    # A context write failure must not invalidate a verified answer; the next
+                    # turn will ask for clarification rather than crossing sessions.
+                    pass
             result = self._result_from_draft(
                 request_id,
                 session_id,
@@ -870,6 +1124,334 @@ class ChatUseCase:
             await _emit(sink, "run.error", result.to_dict())
             return result
 
+    def _full_agent_requested(self, request: ChatRequest) -> bool:
+        requested = getattr(request.intelligence_mode, "value", request.intelligence_mode)
+        requested = str(
+            requested or getattr(self.settings, "default_intelligence_mode", "hybrid")
+        ).lower()
+        return bool(
+            requested == "full"
+            and getattr(self.settings, "full_intelligence_enabled", False)
+            and getattr(self.agent_runtime, "mode", "off") == "embedded_agent"
+        )
+
+    @staticmethod
+    def _is_greeting(message: str) -> bool:
+        return bool(_GREETING_RE.fullmatch(str(message or "").strip()))
+
+    @staticmethod
+    def _agent_context_hint(context: Any) -> str | None:
+        parts: list[str] = []
+        active_names = [
+            item.display_name
+            for item in (
+                getattr(context, "active_game", None),
+                getattr(context, "active_team", None),
+                getattr(context, "active_player", None),
+            )
+            if item is not None
+        ]
+        if active_names:
+            parts.append("当前对象：" + "、".join(active_names[:3]))
+        for summary in list(getattr(context, "recent_turn_summaries", []) or [])[-3:]:
+            text = " ".join(str(getattr(summary, "text_summary", "")).split())[:600]
+            if text and not is_unsafe_runtime_text(text):
+                parts.append("上轮摘要：" + text)
+        value = "\n".join(parts)
+        return value[:3000] or None
+
+    @staticmethod
+    def _agent_summary_intent() -> QueryIntent:
+        return QueryIntent(
+            category=Category.A,
+            intent_name=IntentName.DATA,
+            mode=QueryMode.OBJECTIVE,
+            confidence=1,
+            operation=Operation.EXPLAIN,
+        )
+
+    @staticmethod
+    def _agent_as_of(observations: list[dict[str, Any]]) -> str | None:
+        values = [
+            str(item.get("as_of_beijing"))
+            for item in observations
+            if item.get("as_of_beijing")
+        ]
+        return max(values) if values else None
+
+    @staticmethod
+    def _ground_agent_answer(
+        answer: str,
+        observations: list[dict[str, Any]],
+    ) -> str:
+        """Make bounded empty-schedule answers deterministic.
+
+        A model may abbreviate a tool's ISO dates or speculate that an empty
+        schedule means the offseason.  The server-owned schedule observation
+        already contains the complete Beijing range and is the only truthful
+        statement available, so project that canonical result instead.  Hermes
+        still owns question understanding and tool selection; it does not own
+        the factual wording of an empty result.
+        """
+
+        for item in reversed(observations):
+            if not isinstance(item, Mapping):
+                continue
+            if str(item.get("intent", "")).lower() != "schedule_result":
+                continue
+            if str(item.get("status", "")).lower() != "no_data":
+                continue
+            scope = item.get("query_scope")
+            if not isinstance(scope, Mapping):
+                continue
+            start = str(scope.get("start_date") or "").strip()
+            end = str(scope.get("end_date") or "").strip()
+            if re.fullmatch(r"\d{4}-\d{2}-\d{2}", start) and re.fullmatch(
+                r"\d{4}-\d{2}-\d{2}", end
+            ):
+                return (
+                    f"北京时间 **{start} 至 {end}** 的公开赛程查询"
+                    "没有返回 NBA 比赛。"
+                )
+        return answer
+
+    def _agent_tool_runner(
+        self,
+        *,
+        session_id: UUID,
+        context: Any,
+        deadline_at_utc: datetime,
+        token: CancelToken,
+        sink: Any,
+    ):
+        async def run(tool_name: str, arguments: dict[str, str]) -> Mapping[str, Any]:
+            token.raise_if_cancelled()
+            await _emit(
+                sink,
+                "run.status",
+                {"stage": "agent_tool", "text": "正在调用受控 NBA 数据工具"},
+            )
+            if tool_name == "nba_schedule":
+                return await self._agent_schedule_observation(
+                    arguments,
+                    timezone_name=context.timezone,
+                    deadline_at_utc=deadline_at_utc,
+                    token=token,
+                )
+            if tool_name == "nba_query":
+                message = arguments.get("question", "")
+                intent = "nba_query"
+            elif tool_name == "nba_news":
+                message = arguments.get("subject", "")
+                date_expression = arguments.get("date_expression")
+                if date_expression:
+                    message = f"{message}，时间范围：{date_expression}"
+                message = f"{message} NBA 新闻"
+                intent = "nba_news"
+            else:
+                return {
+                    "status": "failed",
+                    "intent": "unknown",
+                    "query_scope": None,
+                    "answer_markdown": "该工具不可用。",
+                    "blocks": [],
+                    "evidence_state": "none",
+                    "as_of_beijing": None,
+                }
+            nested = await self.handle(
+                ChatRequest(
+                    session_id=session_id,
+                    message=message,
+                    client_timezone=context.timezone,
+                    intelligence_mode=IntelligenceMode.HYBRID,
+                ),
+                cancel=token,
+                _internal_tool=True,
+                _parent_deadline=deadline_at_utc,
+            )
+            status = nested.status
+            if status not in {"completed", "no_data", "needs_clarification"}:
+                status = "failed"
+            return {
+                "status": status,
+                "intent": intent,
+                "query_scope": None,
+                "answer_markdown": nested.answer_markdown,
+                "blocks": [
+                    block.model_dump(mode="json")
+                    if hasattr(block, "model_dump")
+                    else block
+                    for block in nested.blocks
+                ],
+                "evidence_state": nested.evidence_state,
+                "as_of_beijing": nested.as_of_beijing,
+            }
+
+        return run
+
+    async def _agent_schedule_observation(
+        self,
+        arguments: Mapping[str, str],
+        *,
+        timezone_name: str,
+        deadline_at_utc: datetime,
+        token: CancelToken,
+    ) -> Mapping[str, Any]:
+        try:
+            date_range, scope = resolve_date_expression(
+                arguments.get("date_expression", ""),
+                now_utc=self._now(),
+                timezone_name=timezone_name,
+            )
+        except (TypeError, ValueError):
+            return {
+                "status": "needs_clarification",
+                "intent": "schedule_result",
+                "query_scope": None,
+                "answer_markdown": "请给出明确日期，例如今天、明天、下周或具体日期。",
+                "blocks": [],
+                "evidence_state": "none",
+                "as_of_beijing": None,
+            }
+        team_ids = [
+            item.canonical_id
+            for item in resolve_entities(arguments.get("team", ""))
+            if item.kind is EntityKind.TEAM
+        ][:1]
+        budget = RequestBudget(
+            deadline_at_utc,
+            max_provider_operations=getattr(self.settings, "max_provider_operations", 4),
+            max_retries_per_operation=getattr(self.settings, "provider_max_retries", 2),
+            clock=self.clock,
+        )
+        admission_result, lease, _ = await self._await_with_cancel(
+            self.admission.acquire(
+                timeout_ms=getattr(self.settings, "queue_wait_deadline_ms", 1000)
+            ),
+            token,
+        )
+        if lease is None:
+            return {
+                "status": "failed",
+                "intent": "schedule_result",
+                "query_scope": scope,
+                "answer_markdown": "当前查询较多，请稍后重试。",
+                "blocks": [],
+                "evidence_state": "none",
+                "as_of_beijing": None,
+            }
+        try:
+            provider_result = await self._await_with_cancel(
+                self.gateway.search_games(
+                    GameFilters(date_range=date_range, team_ids=team_ids), budget=budget
+                ),
+                token,
+            )
+        finally:
+            await lease.release()
+        if provider_result.error is not None:
+            return {
+                "status": "failed",
+                "intent": "schedule_result",
+                "query_scope": scope,
+                "answer_markdown": "赛程数据暂时不可用，请稍后重试。",
+                "blocks": [],
+                "evidence_state": "none",
+                "as_of_beijing": None,
+            }
+        games = [item for item in (provider_result.data or []) if isinstance(item, Game)]
+        as_of = format_beijing(provider_result.retrieved_at_utc)
+        if not games:
+            message = (
+                f"北京时间 **{scope['start_date']} 至 {scope['end_date']}** 的公开赛程查询"
+                "没有返回 NBA 比赛。"
+            )
+            return {
+                "status": "no_data",
+                "intent": "schedule_result",
+                "query_scope": scope,
+                "answer_markdown": message,
+                "blocks": [
+                    AnswerBlock(type=AnswerBlockType.TEXT, content=message).model_dump(mode="json")
+                ],
+                "evidence_state": "none",
+                "as_of_beijing": as_of,
+            }
+        intent = QueryIntent(
+            category=Category.B,
+            intent_name=IntentName.SCHEDULE_RESULT,
+            mode=QueryMode.OBJECTIVE,
+            confidence=1,
+            metrics=[MetricRef(name="points", unit="分", scope=StatScope.GAME)],
+            date_range=date_range,
+            operation=Operation.LOOKUP,
+        )
+        parsed = ParseResult(intent=intent)
+        facts, _, _, _ = self._facts_for(
+            parsed,
+            games,
+            provider_result.evidence,
+            provider_partial=bool(provider_result.partial),
+        )
+        status_labels = {
+            "FINAL": "已结束",
+            "LIVE": "进行中",
+            "SCHEDULED": "未开赛",
+            "POSTPONED": "延期",
+            "UNKNOWN": "状态待确认",
+        }
+        rows: list[list[str]] = []
+        lines = [f"北京时间 **{scope['start_date']} 至 {scope['end_date']}** 的 NBA 赛程："]
+        for game in games[:30]:
+            score = (
+                f"{game.away_score}–{game.home_score}"
+                if game.away_score is not None and game.home_score is not None
+                else "—"
+            )
+            game_status = status_labels.get(
+                str(getattr(game.status, "value", game.status)), "状态待确认"
+            )
+            start = format_beijing(game.start_utc)
+            rows.append(
+                [start, game.away.display_name, score, game.home.display_name, game_status]
+            )
+            lines.append(
+                f"- {start}：{game.away.display_name} vs {game.home.display_name}"
+                f"（{game_status}，{score}）"
+            )
+        draft = DraftAnswer(
+            markdown="\n".join(lines),
+            blocks=[
+                AnswerBlock(
+                    type=AnswerBlockType.TABLE,
+                    columns=["北京时间", "客队", "比分", "主队", "状态"],
+                    rows=rows,
+                )
+            ],
+            evidence_state=facts.evidence_state,
+        )
+        try:
+            guarded = self.output_guard.validate(draft, facts)
+        except (OutputGuardError, ValueError, TypeError):
+            return {
+                "status": "failed",
+                "intent": "schedule_result",
+                "query_scope": scope,
+                "answer_markdown": "赛程结果未通过事实校验。",
+                "blocks": [],
+                "evidence_state": "none",
+                "as_of_beijing": as_of,
+            }
+        return {
+            "status": "completed",
+            "intent": "schedule_result",
+            "query_scope": scope,
+            "answer_markdown": guarded.markdown,
+            "blocks": [block.model_dump(mode="json") for block in guarded.blocks],
+            "evidence_state": guarded.evidence_state.value.lower(),
+            "as_of_beijing": as_of,
+        }
+
     async def _call_plan(self, plan: QueryPlan, budget: RequestBudget, token: CancelToken):
         token.raise_if_cancelled()
         method = getattr(self.gateway, plan.operation)
@@ -924,6 +1506,8 @@ class ChatUseCase:
         telemetry: QueryTelemetry,
         user_message: str | None = None,
         intelligence_mode: IntelligenceMode | str | None = None,
+        force_template: bool = False,
+        preserve_fallback: bool = False,
     ) -> DraftAnswer:
         """Select the constrained runtime according to the request mode.
 
@@ -942,6 +1526,12 @@ class ChatUseCase:
             retrieved_at=retrieved_at,
             corrections=corrections,
         )
+        if force_template:
+            if not preserve_fallback:
+                telemetry.composition_mode = "deterministic"
+                telemetry.composition_status = "not_requested"
+                telemetry.composition_latency_ms = 0
+            return base
         # Every request starts with the deterministic answer.  Only an
         # explicitly selected analysis runtime can change this provenance.
         telemetry.composition_mode = "deterministic"

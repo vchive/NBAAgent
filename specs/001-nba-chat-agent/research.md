@@ -1,7 +1,7 @@
 # Research Notes: NBA Chat Agent
 
 **Feature**: [spec.md](spec.md)
-**Date**: 2026-08-26
+**Date**: 2026-08-30
 
 本文件记录 Phase 0 的设计研究。它区分 PDF 明确要求、实测结果和本项目的可撤销
 设计决策。PDF 没有指定厂商、语言、模型、数据库、部署平台或具体时延数字，因此
@@ -31,16 +31,17 @@
 
 ## Decision 2: Separate safety, fact retrieval and generative analysis
 
-**Decision**: 请求管线固定为“安全判定 → 意图/时间解析 → 数据计划 → 取数/归一化
-→ 事实核验/确定性推导 → 回答编排 → 输出安全检查”。安全命中在任何外部检索前
-短路；客观数字由模板或确定性渲染器输出，生成模型只负责有证据的解释、战术和复盘
-语言化。
+**Decision**: 检索前安全判定始终是第一道门。门后提供两条可回退通道：`hybrid` 使用
+“意图/时间解析 → 数据计划 → 取数/归一化 → 事实核验/确定性推导 → 回答编排”；`full`
+由 Agent 先理解问题并选择服务器批准的 NBA 工具，工具内部仍执行同一解析、Provider、核验
+和推导链。客观数字始终由确定性事实链提供，Agent 负责规划、容错理解和基于工具观察组织
+解释。
 
 **Rationale**:
 
 - PDF 2.4 明确要求敏感话题不得先检索再评论。
 - PDF 2.3 要求累计和逐回合事实真实核对，不能凭记忆或让模型心算。
-- 分层后可以对每一段单独测试，并在模型不可用时仍提供事实回答。
+- 分层后可以对每一段单独测试，并在 Agent/模型不可用时仍提供事实回答。
 
 **Alternatives considered**:
 
@@ -99,24 +100,65 @@
 
 **Rationale**: 同时满足可核验性、可观测性和 PDF 2.1 的“不暴露内部技术细节”。
 
-## Decision 7: Opt-in SiliconFlow composer behind the runtime seam
+## Decision 7: SiliconFlow BYOK remains the model transport
 
-**Decision**: 为 F/G 分析增加一个可关闭的 SiliconFlow OpenAI-compatible composer。固定
-使用 `https://api.siliconflow.cn/v1/chat/completions`、Bearer 鉴权、非流式响应和默认模型
-`deepseek-ai/DeepSeek-V4-Flash`（[Chat Completions API 文档](https://api-docs.siliconflow.cn/docs/api/chat-completions-post)）。只有显式 `LLM_MODE=live`、分析 runtime profile 和
-启用的 Hermes-lite mode 才会发起请求；默认 fixture/mock/template 路径完全离线。
+**Decision**: 模型传输继续使用 SiliconFlow OpenAI-compatible Chat Completions、Bearer
+鉴权和默认模型 `deepseek-ai/DeepSeek-V4-Flash`。`hybrid` 可沿用现有单轮 composer；`full`
+由 Hermes Agent 使用同一 BYOK 配置完成 function/tool calling。只有显式 live + Agent 配置
+才发起请求；fixture/mock/template 路径保持离线。
 
 **Rationale**:
 
 - 用户已指定 SiliconFlow API 和模型，OpenAI-compatible 契约可复用现有 runtime port。
-- 模型只负责把已核验事实组织成战术/复盘文字；确定性事实、算术、PBP 选择和 Output
+- 模型可在 `full` 模式规划受控工具调用，但工具返回的确定性事实、算术、PBP 选择和 Output
   Guard 仍由本地代码负责。
 - 缺 key、超时、限流、无效响应或不安全输出时保留模板答案，避免模型成为单点依赖。
 
-**Security boundary**: API 仅发送清理后的问题、意图、风格策略和经白名单过滤的
-`VERIFIED/PARTIAL` 事实投影；不发送原始 Provider JSON、URL、证据/会话 ID、凭据、工具
-调用或思维链。当前实现是 API 进程内 direct BYOK adapter；正式生产 sidecar 仍需独立
-部署与审计，不能把 `embedded_spike` 当作隔离边界。
+**Security boundary**: 模型只接收清理后的问题、当前北京时间、泛化会话上下文、工具 schema
+与清洗后的工具结果；不接收 Provider URL/原始 JSON、证据 ID、凭据或思维链。正式生产
+sidecar 仍需独立部署与审计，不能把进程内嵌入当作隔离边界。
+
+## Decision 8: Integrate the official Hermes Agent package and expose only NBA tools
+
+**Decision**: 面试演示锁定 PyPI `hermes-agent==0.19.0`（MIT，Python 3.11–3.13），使用其
+`run_agent.AIAgent`、自动 tool-calling loop、iteration budget 和 tool registry。进程启动时
+注册独立 `nba` toolset；每次 Agent 仅以 `enabled_toolsets=["nba"]` 启动，并显式关闭内置
+terminal、file、browser、MCP、memory、skills、delegation 和通用 web 工具。首个工具集合为：
+
+- `nba_query`：把自然语言子问题送入现有确定性查询/核验用例；
+- `nba_schedule`：查询带日期表达和可选球队条件的已核验赛程；
+- `nba_news`：通过现有受控新闻/背景 Provider 查询，不接受 URL。
+
+工具 handler 通过 Hermes 提供的 `task_id` 查找一次性 request bridge；bridge 只在请求 deadline
+内可用，调用完成即删除。这样 Hermes 负责规划，NBA API 仍拥有 Provider、缓存、安全、证据
+和会话。
+
+**Rationale**:
+
+- 0.19.0 wheel 暴露可嵌入 `AIAgent(base_url, api_key, model, max_iterations,
+  enabled_toolsets, ...)` 和自定义 `registry.register(...)`，无需复制其 agent loop。
+- SiliconFlow 实测在强制 function choice 下对默认模型返回标准 `tool_calls`，说明传输契约兼容；
+  system prompt 必须提供当前北京时间并明确何时调用工具，避免模型自行假设日期。
+- 官方包依赖与现有 FastAPI/Pydantic/httpx 约束兼容，但体积较大，因此版本锁定并保持可关闭。
+- 一个请求最多 4 个 Agent 迭代、4 次工具调用和一个总 deadline；重复同参工具调用由 bridge
+  去重/拒绝，防止循环和额度失控。
+
+**Alternatives considered**:
+
+- 继续扩展自研 `HermesRuntimeAdapter`：只是模型客户端，无法体现真正 Agent loop，排除。
+- 允许 Hermes 内置 web/browser/terminal：开发快但扩大 SSRF、文件和命令执行面，排除。
+- 立刻拆独立 sidecar：隔离最好，但本轮部署和调试成本更高；保留为生产硬化路径。
+
+## Decision 9: Full mode branches before deterministic parsing and falls back safely
+
+**Decision**: `ChatUseCase` 在认证、安全和会话解析之后检查 `intelligence_mode=full`。全模式先
+调用 Agent；Agent 工具以内部 `deterministic_tool` 标记重入同一用例，禁止再次进入 Agent，
+从而复用所有 Provider/Verifier/Derivation 逻辑且无递归。问候可以零工具回答；空数据工具结果
+携带解析出的日期范围、状态和限制，使 Agent 能解释休赛期/无赛日而非输出通用空模板。
+
+**Fallback**: Agent 包未安装、key 缺失、tool call 无效、超时、重复工具、超预算或输出守卫
+失败时，原请求回到既有 deterministic/hybrid 路径。红线请求在分支之前完成，模型和工具调用
+始终为零。
 
 ## Resolved unknowns and remaining risks
 

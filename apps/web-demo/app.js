@@ -90,6 +90,10 @@
 
   const STORAGE_KEY = "courtside-demo-session-v1";
   const STAGE_COPY = {
+    agent_planning: "Hermes 正在理解问题",
+    agent_tool: "正在调用受控 NBA 数据工具",
+    agent_completing: "Hermes 已完成回答",
+    agent_fallback: "正在回退到已核验事实链路",
     parsing: "正在解析问题",
     retrieving: "正在核对比赛数据",
     verifying: "正在核验事实口径",
@@ -1173,6 +1177,16 @@
   function compositionLabel(value) {
     const mode = String(value?.mode || "deterministic").toLowerCase();
     const status = String(value?.status || "not_requested").toLowerCase();
+    if (mode === "agent" && status === "used") {
+      const latency = Number.isFinite(Number(value?.latency_ms)) && Number(value.latency_ms) > 0
+        ? ` · ${Math.round(Number(value.latency_ms) / 100) / 10}s`
+        : "";
+      return {
+        text: `Hermes Agent · 已调用工具${latency}`,
+        className: "agent",
+        title: "Hermes 已通过受控 NBA 工具完成回答",
+      };
+    }
     if (mode === "model" && status === "used") {
       const latency = Number.isFinite(Number(value?.latency_ms)) && Number(value.latency_ms) > 0
         ? ` · ${Math.round(Number(value.latency_ms) / 100) / 10}s`
@@ -1183,7 +1197,7 @@
       return { text: "确定性模板", className: "fallback", title: "模型未启用，使用已核验模板" };
     }
     if (mode === "fallback") {
-      return { text: "模型回退 · 已核验事实", className: "fallback", title: "模型未完成，已回退到已核验事实" };
+      return { text: "Agent 回退 · 已核验事实", className: "fallback", title: "智能链路未完成，已回退到确定性核验事实" };
     }
     return { text: "确定性事实", className: "deterministic", title: "客观事实由确定性核验链路生成" };
   }

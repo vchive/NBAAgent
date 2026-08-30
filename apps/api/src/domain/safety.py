@@ -652,6 +652,58 @@ class OutputGuard:
                 raise OutputGuardError(message, reasons=("untraceable_number", *unknown[:8]))
         return draft
 
+    @classmethod
+    def validate_agent(
+        cls,
+        answer: DraftAnswer | Mapping[str, Any] | str,
+        observations: Iterable[Mapping[str, Any]],
+        *,
+        require_observation: bool = True,
+    ) -> DraftAnswer:
+        """Validate an Agent answer against its sanitized tool observations.
+
+        The Agent does not receive a canonical ``FactBundle``. Its only factual
+        authority is the provider-neutral observation returned by a server-owned
+        NBA tool, so numeric traceability is checked against that projection.
+        Empty schedule observations count as completed evidence of the bounded
+        query, while failed/duplicate/cancelled calls do not authorize an answer.
+        """
+
+        items = [dict(item) for item in observations if isinstance(item, Mapping)]
+        usable = [
+            item
+            for item in items
+            if str(item.get("status", "")).lower()
+            in {"completed", "no_data", "needs_clarification"}
+        ]
+        if require_observation and not usable:
+            raise OutputGuardError(
+                "事实回答缺少已完成的 NBA 工具观察", reasons=("missing_observation",)
+            )
+        draft = cls.validate(answer, facts=None, allow_unverified_numbers=True)
+        all_text = "\n".join(cls._walk_text(draft.model_dump(mode="python")))
+        if not require_observation and not usable:
+            # A zero-tool turn is permitted only for greetings/capability
+            # introductions. Even dates and list counts are factual claims in
+            # that branch, so the normal date/list exceptions do not apply.
+            if cls._NUMBER_RE.search(all_text) or re.search(
+                r"(?:休赛期|常规赛|季后赛|总决赛|当前赛季|本赛季|北京时间|"
+                r"比分|得分|排名|战绩|冠军)",
+                all_text,
+                re.IGNORECASE,
+            ):
+                raise OutputGuardError(
+                    "零工具问候包含 NBA 事实声明", reasons=("greeting_fact_claim",)
+                )
+        known = cls._numeric_values(usable)
+        unknown = cls._untraceable_numbers(all_text, known)
+        if unknown:
+            raise OutputGuardError(
+                "Agent 回答包含观察中不存在的数字",
+                reasons=("unobserved_number", *unknown[:8]),
+            )
+        return draft
+
     # Compatibility aliases for callers that prefer a predicate or a shorter verb.
     guard = validate
 

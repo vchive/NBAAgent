@@ -9,21 +9,22 @@ Driven Development）流程推进。
 fixture/mock 模式的 FastAPI Agent：同步聊天、POST SSE、会话隔离、事实核验、PBP/系列赛
 确定性推导、安全短路、重试/缓存和“赛事焦点/历史回顾”日期投影均可离线运行。FastAPI
 在仓库包含 Web Demo 时会从同一端口托管 UI，因此可以直接通过一个 `IP:端口` 访问完整演示。
-ESPN、受控 DuckDuckGo 搜索与 Hermes-lite 均为可替换适配器，默认关闭，不需要任何凭据。
+ESPN、受控 DuckDuckGo 搜索与官方 Hermes Agent 均为可替换适配器，默认关闭，不需要任何凭据。
 
 > **SiliconFlow BYOK 状态**：默认仍是完全离线的 `template`/`mock` 模式（不会读取或发送
-> 模型请求）。显式设置 `LLM_MODE=live`、`RUNTIME_PROFILE=hybrid`（或 `hermes`）以及
-> `HERMES_LITE_MODE=embedded_spike` 后，F/G 战术与复盘问题会调用受限的 SiliconFlow
-> OpenAI-compatible Chat Completions（[API 文档](https://api-docs.siliconflow.cn/docs/api/chat-completions-post)）；
-> `FULL_INTELLIGENCE_ENABLED=true` 时，页面可开启“全智能分析”，让已有核验事实的客观题
-> 也进入同一受限表达链路。默认模型为 `deepseek-ai/DeepSeek-V4-Flash`。
-> 这是当前 API 进程内的 direct BYOK adapter，不是已部署的独立 Hermes sidecar；生产环境
-> 应改用隔离 sidecar。Key 仅通过 `SILICONFLOW_API_KEY`（本地）或
+> 模型请求）。live profile 使用锁定的 `hermes-agent==0.19.0` 和
+> `HERMES_LITE_MODE=embedded_agent`；页面开启“全智能分析”后，请求会在 SafetyGuard 与会话
+> 上下文之后、规则 Parser 之前进入官方 `run_agent.AIAgent`。Agent 只能调用
+> `nba_query`、`nba_schedule`、`nba_news` 三个服务端 NBA 工具，不能使用 shell、文件系统、
+> 浏览器、通用搜索、MCP、memory、skills 或子代理。默认模型为
+> `deepseek-ai/DeepSeek-V4-Flash`（[API 文档](https://api-docs.siliconflow.cn/docs/api/chat-completions-post)）。
+> 这是当前 API 进程内的受控面试演示形态，不是已部署的独立 Hermes sidecar；生产环境
+> 应迁移到隔离 sidecar。Key 仅通过 `SILICONFLOW_API_KEY`（本地）或
 > `SILICONFLOW_API_KEY_FILE`（挂载 secret）注入，绝不能提交到仓库、镜像、前端、日志或聊天。
 > `HERMES_LITE_MODE=sidecar` 目前是保守的未实现占位，会保持 not-ready/模板回退，不会
 > 偷换成进程内直连。
-> `LLM_MODE=live` 只切换分析措辞模型，和 `PUBLIC_DATA_MODE` 相互独立；Compose 示例仍使用
-> 本地 fixture 事实。若把 live profile 暴露到公网，任何可访问者都可能消耗 BYOK 额度，必须
+> 模型运行时和 `PUBLIC_DATA_MODE` 相互独立；`make deploy-live` 会叠加 public hybrid 数据
+> profile。若把 live profile 暴露到公网，任何已登录访问者都可能消耗 BYOK 额度，必须
 > 放在认证反代/VPN/受限安全组后，并配置供应商预算与限额。
 
 > **DuckDuckGo 状态**：`DDG_SEARCH_ENABLED=true` 只在 live/hybrid profile 的新闻、背景题中
@@ -91,15 +92,16 @@ make deploy                   # 自动加入 docker-compose.auth.yml
 ```bash
 make configure-app-password
 make configure-siliconflow-key   # 交互式隐藏输入，写入 root:10001 / 0640 secret 文件
-docker compose -f docker-compose.yml -f docker-compose.auth.yml -f docker-compose.siliconflow.yml up -d --build
+make deploy-live
 curl -fsS http://127.0.0.1:8000/readyz
 ```
 
-上述 override 会把 key 和访问密码作为 Docker secret 文件挂载，不会写入镜像层或环境变量。没有
+`make deploy-live` 会组合 base、public、auth、SiliconFlow 四个 Compose 文件，并把 key 和
+访问密码作为 Docker secret 文件挂载，不会写入镜像层或环境变量。没有
 授权 key 时不要切换 live；服务会保持模板回退并在 `/healthz`/`/readyz` 标为 degraded。
-该 profile 的 `PUBLIC_DATA_MODE` 仍为 `fixture`，只验证模型措辞链路；要访问 ESPN 公开数据，
-另行显式设置 `PUBLIC_DATA_MODE=live` 或 `hybrid`，并先审核数据源条款。live profile 不应直接
-暴露未认证的 `8000` 端口。
+`make deploy-live` 使用 public override 的 `PUBLIC_DATA_MODE=hybrid`；只有单独运行
+`make docker-up-silicon` 时事实数据仍为 fixture。live profile 不应直接暴露未认证的 `8000`
+端口。
 
 在云主机上还需要同时放行两层网络策略：本机执行
 `ufw allow 8000/tcp`，并在云厂商安全组添加一条入站 TCP 8000 规则（演示阶段可先限制为
@@ -153,6 +155,6 @@ SpecKit 项目治理原则位于 [.specify/memory/constitution.md](.specify/memo
 ## 交付 profile
 
 方案说明 PDF 已生成在 [`docs/solution.pdf`](docs/solution.pdf)。本地默认仍是 fixture/mock，
-公网交付使用 `make deploy`（hybrid 公开数据 + 受控搜索 + 访问密码）；如需启用 SiliconFlow
-以及页面的全智能模式，再使用 `make deploy-live`。正式隔离 Hermes sidecar 仍是后续可替换部署形态，当前 embedded Spike 只用于
-面试演示和受限模型链路验证。
+公网交付使用 `make deploy`（hybrid 公开数据 + 受控搜索 + 访问密码）；启用 SiliconFlow 和
+官方 Hermes 全智能模式使用 `make deploy-live`。正式隔离 Hermes sidecar 仍是后续可替换
+部署形态，当前 `embedded_agent` 只用于受控面试演示。

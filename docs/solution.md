@@ -3,7 +3,7 @@
 **对应需求**：[spec.md](../specs/001-nba-chat-agent/spec.md)
 **详细设计**：[HLD](../specs/001-nba-chat-agent/hld.md) · [LLD](../specs/001-nba-chat-agent/lld.md)
 **导出 PDF**：[solution.pdf](solution.pdf)
-**状态**：可交付版本。fixture-first Agent 垂直切片、API、离线/在线自适应 UI Demo、
+**状态**：可交付版本。fixture-first 垂直切片、官方 Hermes Agent、API、离线/在线自适应 UI Demo、
 契约/集成测试和方案 PDF 均已提交。公网 profile 使用 hybrid 公开数据并保留 fixture fallback；
 公网端口仍需由部署机配置云安全组/EIP 入站规则。
 
@@ -30,19 +30,19 @@ fixture/mock/template；将
 不进入前端、响应或日志；缺失必需 secret 时服务 fail closed 并在 `/readyz` 标记认证依赖异常。
 
 SiliconFlow / BYOK 需要单独说明：默认交付仍使用 `HERMES_LITE_MODE=off`、`LLM_MODE=mock`，
-完全离线且不需要模型 Key。显式切换 `LLM_MODE=live`、`RUNTIME_PROFILE=hybrid`（或
-`hermes`）和启用的 Hermes-lite mode 后，F/G 分析会进入受限 SiliconFlow
-OpenAI-compatible adapter；当服务端开启 `FULL_INTELLIGENCE_ENABLED=true` 且用户打开
-“全智能分析”时，已有核验事实的其他允许题型也会由同一 runtime 组织语言。默认模型为
-`deepseek-ai/DeepSeek-V4-Flash`。当前实现是 API
-进程内 direct BYOK 出站，`sidecar` 隔离部署尚未交付；生产应迁移到独立、无工具的 sidecar。
+完全离线且不需要模型 Key。live profile 使用 `HERMES_LITE_MODE=embedded_agent`、锁定的
+`hermes-agent==0.19.0` 和官方 `run_agent.AIAgent`。用户打开“全智能分析”后，请求在
+SafetyGuard/会话上下文之后、规则 Parser 之前进入有界 Agent loop。Agent 只能调用
+`nba_query`、`nba_schedule`、`nba_news` 三个服务端工具；不能使用 shell、文件系统、浏览器、
+通用搜索、MCP、memory、skills 或子代理。默认模型为 `deepseek-ai/DeepSeek-V4-Flash`。
+当前实现是 API 进程内受控演示形态，`sidecar` 隔离部署尚未交付；生产应迁移到独立 sidecar。
 Key 只能通过 secret 文件或受控环境注入，不能进入仓库、镜像、前端、telemetry 或日志；
 面试演示的隐藏输入步骤见 [`docs/byok.md`](byok.md)。
 在隔离实现交付前，`HERMES_LITE_MODE=sidecar` 会保持 not-ready/模板回退，不会绕过边界改走
 进程内直连。
 `LLM_MODE=live` 与 `PUBLIC_DATA_MODE` 独立：仅使用 `docker-compose.siliconflow.yml` 时事实仍为
 fixture；公开交付的 `make deploy-live` 会叠加 public profile，先尝试 hybrid 公开数据，再按
-hybrid/full 请求模式把措辞交给模型。若启用真实 key，服务必须置于认证反代/VPN/受限安全组之后，
+hybrid/full 请求模式选择确定性通道或官方 Agent。若启用真实 key，服务必须置于认证反代/VPN/受限安全组之后，
 并设置供应商额度/限流；未认证的公网端口会带来额度消耗风险。
 
 需要单独调试静态页面时，仍可运行 `python3 -m http.server 4173 --directory apps/web-demo`；
@@ -67,7 +67,11 @@ flowchart LR
   UI --> API[版本化 Chat API]
   API --> SG[Safety Guard]
   SG --> CTX[会话/时区上下文]
-  CTX --> PARSE[意图/实体/赛季解析]
+  CTX --> MODE{hybrid / full}
+  MODE -->|hybrid| PARSE[意图/实体/赛季解析]
+  MODE -->|full| HA[Official Hermes Agent]
+  HA --> TOOLS[3 个 NBA 工具]
+  TOOLS --> PARSE
   PARSE --> ADM[准入/截止时间]
   ADM --> PLAN[查询规划]
   PLAN --> PG[Provider Gateway]
@@ -76,9 +80,11 @@ flowchart LR
   SEARCH --> NORM
   NORM --> VERIFY[事实核验]
   VERIFY --> DERIVE[确定性聚合/PBP]
-  DERIVE --> SELECT[模板或 SiliconFlow/Hermes-lite]
-  SELECT --> COMPOSE[回答编排与输出守卫]
-  COMPOSE --> API
+  DERIVE --> TEMPLATE[确定性回答/工具观察]
+  TEMPLATE -->|tool observation| HA
+  TEMPLATE --> GUARD[输出守卫]
+  HA --> GUARD
+  GUARD --> API
   API --> UI
 ```
 
@@ -97,23 +103,23 @@ DuckDuckGo 只作为新闻、背景和长尾问题的补充候选源。适配器
 1. API 校验消息长度、时区和幂等键，并生成 `request_id`/`session_id`。
 2. Safety Guard 使用本地规则/分类器先判定红线。BLOCK 或 `OUT_OF_SCOPE` 直接返回礼貌
    拒答/篮球引导，Provider 和其缓存读取均为 **0**。
-3. 允许请求加载当前会话上下文，解析实体、指标、日期、节次、时间窗和跨年赛季；条件
-   不足时返回澄清问题，不猜测比赛。
-4. 查询规划器调用 typed Provider port。适配器处理超时、限流、格式异常和 fallback，
+3. 允许请求加载当前会话上下文。`hybrid` 进入确定性解析；`full` 在规则 Parser 之前进入官方
+   Hermes Agent。Agent 最多执行 4 次迭代/4 次工具调用，并且只能选择三个 NBA 工具。
+4. NBA 工具或 hybrid 查询规划器调用 typed Provider port。适配器处理超时、限流、格式异常和 fallback，
    Normalizer 将结果映射到统一领域模型并保留缺失值。
 5. Verifier 检查证据可信度、新鲜度、实体/时间一致性和用户前提。系列赛累计、连胜和
    最后 5 秒等结果由确定性 Derivation 从真实比赛/PBP 记录计算，模型不负责算术或选球。
-6. 默认 hybrid 模式下客观题优先由确定性模板渲染；战术/复盘等分析题在事实核验完成后才可选用受限
-   SiliconFlow/Hermes-lite 进行措辞组织。运行时不拥有 Provider、缓存、安全判定、算术或 PBP 选择，且关闭
-   shell、MCP、浏览器、memory、skills 和子代理。其输入只含结构化 FactBundle、规范化问题
-   和风格策略；Output Guard 再检查无证据数字、敏感内容和内部字段泄露。Hermes 不可用时
-   客观题回退模板，分析题只返回已核实事实摘要。可选 full 模式只扩大“组织语言”的路由
-   范围，不改变 SafetyGuard、Provider、Verifier、Derivation 或 Output Guard 的职责；红线、
-   澄清、无数据和技术错误始终零模型调用。
+6. 默认 hybrid 模式下客观题优先由确定性模板渲染；战术/复盘可在核验后使用旧单轮 composer。
+   full 模式由 Hermes 理解错别字、日期和追问，工具返回清洗后的状态/时间范围/事实块，Agent
+   再生成最终回答。shell、通用网络、文件系统、浏览器、MCP、memory、skills 和子代理全部
+   关闭。Output Guard 检查未观察数字、提示注入、敏感内容和内部字段泄露；Hermes 不可用、
+   超时、超预算或输出不合规时回退确定性通道。SafetyGuard、Provider、Verifier、Derivation
+   和 Output Guard 的事实与安全所有权不变。
 
    同步和 SSE 的完成 envelope 还带有 provider-neutral 的 `composition` 标记：客观题为
-   `deterministic`，模型分析被接受时为 `model/used`，模型超时、不可用或未启用时为
-   `fallback`（页面显示“模型回退 · 已核验事实”）。这让评审者能直接确认某次回答是否
+   `deterministic`，官方 Agent 回答被接受时为 `agent/used`，旧 composer 为 `model/used`，
+   超时、不可用或未启用时为 `fallback`。页面会显示 “Hermes Agent · 已调用工具” 或回退
+   状态，让评审者能直接确认某次回答是否
    走过模型链路，同时不暴露模型密钥、端点、提示词或内部证据字段。
 
 同步 HTTP 和 POST SSE 共用同一个用例；SSE 只在核验完成后发送事实增量，完成事件与同步
@@ -153,13 +159,13 @@ Safety Guard 在任何外部检索前运行；一条消息同时包含正常篮�
 - FastAPI 同步聊天、POST SSE、健康检查和日期范围 highlights 接口；
 - 中文意图/实体/赛季解析、事实核验、系列赛与最后 5 秒 PBP 确定性推导；
 - 会话隔离、幂等重放、取消传播、TTL 缓存、重试/fallback、检索前安全短路和脱敏 telemetry；
-- 受限 SiliconFlow/Hermes-lite runtime seam（默认关闭）与模板回退；
-- 受控 DuckDuckGo 新闻/背景搜索，以及会话级“全智能分析（实验）”开关；
+- 官方 Hermes Agent、三个任务级 NBA 工具、旧 composer（默认关闭）与确定性回退；
+- 受控 DuckDuckGo 新闻/背景搜索，以及会话级“全智能分析”开关；
 - 赛事转播风格静态 UI，支持“今日赛事 / 历史回顾”日期切换，并在 API 不可用时离线演示。
 
 当前代码包含事实、模型、安全、日期和认证测试；浏览器 E2E 作为独立 npm profile 提供，
 部署验收使用 `make deploy` / `make deploy-live`。正式 Hermes sidecar 仍可在不改变
-`AgentRuntimePort` 的前提下替换，当前 embedded Spike 不声称是生产 sidecar。
+`AgentOrchestratorPort` 的前提下替换，当前 `embedded_agent` 不声称是生产 sidecar。
 
 ## 7. 设计取舍与未决项
 

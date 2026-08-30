@@ -84,8 +84,12 @@ async def healthz(request: Request):
     gateway = getattr(usecase, "gateway", None)
     store = getattr(usecase, "session_store", None)
     cache = getattr(gateway, "cache", None)
-    hermes_runtime = getattr(usecase, "hermes_runtime", None)
     hermes_mode = str(getattr(settings, "hermes_lite_mode", "off")).lower()
+    hermes_runtime = (
+        getattr(usecase, "agent_runtime", None)
+        if hermes_mode == "embedded_agent"
+        else getattr(usecase, "hermes_runtime", None)
+    )
     session_status = "ok" if store is not None else "degraded"
     cache_status = "ok" if cache is not None else "degraded"
     if hermes_mode == "off":
@@ -137,7 +141,11 @@ async def readyz(request: Request):
     store_ok = getattr(usecase, "session_store", None) is not None
     cache_ok = getattr(getattr(usecase, "gateway", None), "cache", None) is not None
     hermes_mode = str(getattr(settings, "hermes_lite_mode", "off")).lower()
-    hermes_runtime = getattr(usecase, "hermes_runtime", None)
+    hermes_runtime = (
+        getattr(usecase, "agent_runtime", None)
+        if hermes_mode == "embedded_agent"
+        else getattr(usecase, "hermes_runtime", None)
+    )
     if hermes_mode == "off":
         hermes_status = "disabled"
     else:

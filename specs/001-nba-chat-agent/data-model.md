@@ -26,7 +26,9 @@ EvaluationProviderMode = LIVE | FIXTURE | HYBRID
 ErrorCode = INVALID_PAYLOAD | SAFETY_BLOCKED | AMBIGUOUS_ENTITY | MISSING_SLOT | NO_DATA | SERVICE_BUSY | UPSTREAM_TIMEOUT | UPSTREAM_RATE_LIMITED | UPSTREAM_AUTH | INVALID_UPSTREAM_DATA | COMPOSER_UNAVAILABLE | OUTPUT_BLOCKED
 AdmissionResult = ADMITTED | RATE_LIMITED | QUEUE_FULL | DEADLINE_EXCEEDED
 RuntimeProfile = TEMPLATE | HERMES | HYBRID
-HermesLiteMode = OFF | EMBEDDED_SPIKE | SIDECAR
+HermesLiteMode = OFF | EMBEDDED_SPIKE | EMBEDDED_AGENT | SIDECAR
+CompositionMode = DETERMINISTIC | MODEL | AGENT | FALLBACK
+CompositionStatus = NOT_REQUESTED | USED | FALLBACK | DISABLED
 ```
 
 | Object | Required fields | Rules |
@@ -389,6 +391,32 @@ QueryRecord
   hermes_mode: HermesLiteMode?
   hermes_status: OK|TIMEOUT|UNAVAILABLE|UNSAFE|null
   fallback_reason: string?
+  agent_iteration_count: int (>=0; default 0)
+  agent_tool_call_count: int (>=0; default 0)
+  agent_tool_names: string[]          # allow-list names only, no arguments
+  composition_mode: CompositionMode
+  composition_status: CompositionStatus
+
+AgentToolCallRecord
+  observation_id: string              # server generated, not exposed to model as authority
+  request_id: UUID
+  tool_name: NBA_QUERY|NBA_SCHEDULE|NBA_NEWS
+  arguments_hash: string              # never raw user/tool arguments
+  status: OK|EMPTY|PARTIAL|FAILED|DUPLICATE|CANCELLED
+  evidence_state: EvidenceState
+  latency_ms: int
+  created_at_utc: Instant
+
+AgentToolObservation
+  observation_id: string
+  status: COMPLETED|NO_DATA|NEEDS_CLARIFICATION|FAILED
+  intent_name: IntentName?
+  query_start_beijing: date?
+  query_end_beijing: date?
+  answer_markdown: string
+  blocks: AnswerBlock[]
+  evidence_state: EvidenceState
+  as_of_beijing: string?
 
 EvaluationTurn
   turn_index: int (1-based, contiguous within the case)
@@ -484,6 +512,10 @@ VERIFIED/UNVERIFIED → DERIVED（如需要）→ COMPOSED → OUTPUT_GUARDED`�
   Hermes；该分支使用 `SERVICE_BUSY` 或等价的本地过载错误，不能伪装成上游限流。
 - `hermes_mode=OFF` 时不得产生 Hermes 调用；`hermes_status` 和 `fallback_reason` 只用于
   内部 telemetry，不进入用户响应。
+- `agent_tool_names` 只能是 `nba_query`、`nba_schedule`、`nba_news`；BLOCK/OUT_OF_SCOPE
+  时 `agent_iteration_count=agent_tool_call_count=0`。单请求 tool call 不得超过配置上限 4。
+- `AgentToolObservation` 不包含 Provider URL、raw JSON、凭据、canonical/evidence ID 或工具
+  指令；`NO_DATA` 必须尽可能保留确定性解析出的北京时间查询范围。
 - `EvaluationCase.turns` 的 `turn_index` 必须从 1 连续递增；`category=H` 时长度必须为
   3，其他类别默认长度为 1（扩展多轮案例需显式记录理由）。
 - 不同 `session_id` 的 `ConversationContext` 不可互相引用。

@@ -259,10 +259,11 @@ class RuntimeProfile(_UpperStrEnum):
 class IntelligenceMode(_UpperStrEnum):
     """Per-request language composition preference.
 
-    ``HYBRID`` keeps objective answers deterministic and reserves Hermes for
-    analysis intents. ``FULL`` asks the same constrained runtime to organise
-    any answer that has already passed local verification. It never changes
-    safety, retrieval, arithmetic, or PBP ownership.
+    ``HYBRID`` keeps objective answers deterministic and reserves the legacy
+    composer for analysis intents. ``FULL`` enters the bounded Hermes Agent
+    after safety/context and before deterministic parsing. The Agent may only
+    call server-owned NBA tools; verification, arithmetic and PBP ownership
+    remain deterministic.
     """
 
     HYBRID = "HYBRID"
@@ -272,6 +273,7 @@ class IntelligenceMode(_UpperStrEnum):
 class HermesLiteMode(_UpperStrEnum):
     OFF = "OFF"
     EMBEDDED_SPIKE = "EMBEDDED_SPIKE"
+    EMBEDDED_AGENT = "EMBEDDED_AGENT"
     SIDECAR = "SIDECAR"
 
 
@@ -1079,6 +1081,9 @@ class QueryRecord(CanonicalModel):
     hermes_mode: HermesLiteMode | None = None
     hermes_status: HermesStatus | None = None
     fallback_reason: str | None = Field(default=None, max_length=500)
+    agent_iteration_count: int = Field(default=0, ge=0, le=4)
+    agent_tool_call_count: int = Field(default=0, ge=0, le=4)
+    agent_tool_names: list[str] = Field(default_factory=list, max_length=4)
 
     _validate_deadline = field_validator("deadline_at_utc")(_aware)
 
@@ -1088,6 +1093,14 @@ class QueryRecord(CanonicalModel):
         if value is None:
             return None
         return value.upper() if isinstance(value, str) else value
+
+    @field_validator("agent_tool_names")
+    @classmethod
+    def _agent_tool_allowlist(cls, value: list[str]) -> list[str]:
+        allowed = {"nba_query", "nba_schedule", "nba_news"}
+        if any(item not in allowed for item in value):
+            raise ValueError("agent tool names must use the NBA allow-list")
+        return value
 
     @model_validator(mode="after")
     def _lifecycle_invariants(self) -> QueryRecord:
@@ -1123,6 +1136,8 @@ class QueryRecord(CanonicalModel):
                 raise ValueError("short-circuit outcomes cannot access provider/cache")
             if self.evidence_state is not EvidenceState.NONE:
                 raise ValueError("short-circuit outcomes cannot carry evidence")
+            if self.agent_iteration_count or self.agent_tool_call_count or self.agent_tool_names:
+                raise ValueError("short-circuit outcomes cannot call the Agent or its tools")
 
         # An early clarification is also a local short-circuit when no source
         # or cache was touched.  It must not claim a verified/partial bundle.
@@ -1209,6 +1224,10 @@ class QueryRecord(CanonicalModel):
                 and self.provider_call_count == 0
                 and self.cache_read_count == 0
                 and self.cache_write_count == 0
+            ) or (
+                self.hermes_mode is HermesLiteMode.EMBEDDED_AGENT
+                and self.hermes_status is HermesStatus.OK
+                and self.outcome is QueryOutcome.COMPLETED
             )
             if not can_complete_without_parse:
                 raise ValueError("parsed lifecycle phase requires intent fields")
@@ -1223,6 +1242,7 @@ class EvaluationTurn(CanonicalModel):
     reference_facts: Any
     tolerance: Any = None
     safety_expected: SafetyOutcome
+    intelligence_mode: IntelligenceMode | None = None
 
 
 class EvaluationCase(CanonicalModel):

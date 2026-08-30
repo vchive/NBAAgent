@@ -178,6 +178,26 @@ def test_query_intent_category_mapping_is_explicit() -> None:
         confidence=Decimal("0.95"),
     )
     assert query.intent_name.value == "DATA"
+
+
+def test_official_agent_mode_and_tool_telemetry_are_allowlisted() -> None:
+    assert HermesLiteMode.EMBEDDED_AGENT.value == "EMBEDDED_AGENT"
+    record = QueryRecord(
+        request_id=uuid4(),
+        session_id=uuid4(),
+        raw_text_hash="hash",
+        agent_iteration_count=2,
+        agent_tool_call_count=1,
+        agent_tool_names=["nba_schedule"],
+    )
+    assert record.agent_tool_names == ["nba_schedule"]
+    with pytest.raises(ValidationError):
+        QueryRecord(
+            request_id=uuid4(),
+            session_id=uuid4(),
+            raw_text_hash="hash",
+            agent_tool_names=["shell"],
+        )
     with pytest.raises(ValidationError):
         QueryIntent(
             category=Category.A,

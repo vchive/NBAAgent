@@ -40,18 +40,21 @@ set -a; . ./.env; set +a    # Settings 读取进程环境变量，不会自动�
 > `docker-compose.auth.yml` 的启动命令（`make deploy` 或 `make docker-up-silicon`）。登录后
 > 才能访问聊天、赛事焦点和日期接口；`/healthz`、`/readyz`、`/livez` 保持公开探活。
 
-> **BYOK 说明**：默认 profile 不读取或发送模型请求。要启用当前实现的受限 SiliconFlow
-> adapter，必须显式设置 `LLM_MODE=live`、`RUNTIME_PROFILE=hybrid`（或 `hermes`）和
-> `HERMES_LITE_MODE=embedded_spike`（仅本地/演示）；模型默认是
+> **BYOK 说明**：默认 profile 不读取或发送模型请求。live 演示使用
+> `LLM_MODE=live`、`RUNTIME_PROFILE=hybrid`、`HERMES_LITE_MODE=embedded_agent` 和
+> `FULL_INTELLIGENCE_ENABLED=true`；模型默认是
 > `deepseek-ai/DeepSeek-V4-Flash`，接口为 SiliconFlow 的 OpenAI-compatible Chat
-> Completions（参见 [SiliconFlow Chat Completions API 文档](https://api-docs.siliconflow.cn/docs/api/chat-completions-post)）。当前 adapter 在 API 进程内直连 SiliconFlow，并非正式隔离 Hermes sidecar；
-> 生产应迁移到 sidecar。Key 可用 `SILICONFLOW_API_KEY`（本地临时）或
+> Completions（参见 [SiliconFlow Chat Completions API 文档](https://api-docs.siliconflow.cn/docs/api/chat-completions-post)）。当前实现加载锁定的
+> `hermes-agent==0.19.0` 和官方 `run_agent.AIAgent`，只注册 `nba_query`、`nba_schedule`、
+> `nba_news` 三个工具；shell、文件系统、浏览器、通用搜索、MCP、memory、skills 和子代理
+> 全部关闭。它运行在 API 进程内，并非正式隔离 Hermes sidecar；生产应迁移到 sidecar。
+> Key 可用 `SILICONFLOW_API_KEY`（本地临时）或
 > `SILICONFLOW_API_KEY_FILE`（Docker/Kubernetes secret 文件）注入。不要把 Key 写入
 > `.env.example`、Dockerfile、镜像、Git、前端、日志或聊天消息。
 > `HERMES_LITE_MODE=sidecar` 目前仅是未实现占位，会标记为 not-ready 并模板回退，避免误把
 > 进程内直连当成隔离边界。
-> `LLM_MODE=live` 只影响 F/G 分析措辞，和 `PUBLIC_DATA_MODE` 独立；下面的 Compose override
-> 仍使用 fixture 事实。公网启用前必须置于认证反代/VPN/受限安全组后，并设置 SiliconFlow
+> 模型运行时和 `PUBLIC_DATA_MODE` 独立；`make deploy-live` 会组合 public hybrid 数据与
+> auth/SiliconFlow override。公网启用前必须置于认证反代/VPN/受限安全组后，并设置 SiliconFlow
 > 账户预算与限额，避免匿名请求消耗 BYOK 额度。
 >
 > 面试演示建议直接运行仓库内的隐藏输入脚本：`make configure-siliconflow-key`，再按
@@ -79,10 +82,11 @@ API 提供：
 - `GET /api/v1/highlights/availability?from=YYYY-MM-DD&to=YYYY-MM-DD&timezone=Asia/Shanghai`：
   最多 31 天的日期可用性（`available` / `empty` / `unknown`），供历史回顾日历置灰。
 
-全智能分析是会话级实验开关：前端勾选后会在每个请求中发送
-`intelligence_mode=full`。服务端只有在 `FULL_INTELLIGENCE_ENABLED=true` 且请求通过安全检查、
-完成事实核验后才会调用受限 Hermes/SiliconFlow；关闭或模型失败时自动回到确定性模板。
-该模式不会让模型计算比分、筛选 PBP 或决定安全策略。
+全智能分析是会话级开关：前端勾选后会在每个请求中发送 `intelligence_mode=full`。服务端在
+`FULL_INTELLIGENCE_ENABLED=true` 且请求通过 SafetyGuard/上下文加载后、规则 Parser 之前
+进入官方 Hermes Agent。Agent 可自行选择三个 NBA 工具理解错别字、解析日期并组织回答；
+工具内部仍由确定性 Provider/Verifier/Derivation 负责事实、算术和 PBP。模型失败、超时、
+重复调用、超预算或输出不合规时自动回到确定性通道。
 
 ## 4. Optional standalone Web Demo
 
@@ -111,7 +115,7 @@ docker compose up --build
 Compose 会以非 root 用户启动 fixture API 和同源 Web Demo，映射
 `http://<服务器IP>:8000/`，并通过 `/healthz` 做容器健康检查。
 
-停止服务：`docker compose down`。联网数据和 Hermes sidecar 仍需显式配置，不会被镜像
+停止服务：`docker compose down`。联网数据和 Hermes Agent 仍需显式配置，不会被镜像
 默认值悄悄启用。
 
 ### 5.1 云主机 IP + 端口访问
@@ -195,7 +199,7 @@ npm ci && npx playwright install --with-deps chromium && npm run e2e
 检查。
 
 评测 runner、报告模块和独立 CLI 已存在于 `apps/api/src/evaluation/`，黄金集当前包含
-A–I 覆盖和 16 条允许的客观题；完整 A–I 集成回放和 Playwright E2E 可分别通过 pytest 和
+A–I、安全/范围外和 3 条全智能验收题，共 21 条案例；完整集成回放和 Playwright E2E 可分别通过 pytest 和
 `npm run e2e` 验证。
 
 ## 9. Optional live/hybrid profile
@@ -229,20 +233,21 @@ export DDG_MAX_RESULTS=5
 开发期也可用 `PUBLIC_DATA_MODE=hybrid`：先尝试公开源，发生有类型的上游错误后才使用本地
 fixture fallback；权威空结果不会被旧 fixture 覆盖。
 
-`HermesRuntimeAdapter` 目前是受限 runtime seam 和本地 fallback，`embedded_spike` 只适合
-fixture 验证；当前 `LLM_MODE=live` 会使用受限 direct SiliconFlow adapter，正式 sidecar、
-容量和外部 URL 探活仍未完成。没有 key 时 adapter 不发请求并回退模板，`/healthz`/`/readyz`
-会反映配置未就绪。
+full 模式使用官方 `HermesAgentRuntime`，在规则解析之前执行有界 Agent loop；旧
+`HermesRuntimeAdapter` 只保留给 hybrid 战术/复盘的单轮 composer。`embedded_agent` 适合
+受控面试演示，正式 sidecar 隔离仍是后续部署形态。没有 key 时 Agent 不发请求并回退模板，
+`/healthz`/`/readyz` 会反映配置未就绪。
 
 本地 direct BYOK 示例（不要把真实 key 写进 shell 历史或提交文件）：
 
 ```bash
 export LLM_MODE=live
 export RUNTIME_PROFILE=hybrid
-export HERMES_LITE_MODE=embedded_spike
-export HERMES_LITE_TIMEOUT_MS=20000
+export HERMES_LITE_MODE=embedded_agent
+export FULL_INTELLIGENCE_ENABLED=true
+export HERMES_LITE_TIMEOUT_MS=40000
 export LLM_TIMEOUT_SECONDS=20
-export REQUEST_DEADLINE_MS=25000
+export REQUEST_DEADLINE_MS=45000
 ./scripts/configure-siliconflow-key.sh
 export SILICONFLOW_API_KEY_FILE="$PWD/secrets/siliconflow_api_key"
 export SILICONFLOW_BASE_URL=https://api.siliconflow.cn/v1
@@ -253,8 +258,9 @@ uvicorn apps.api.src.main:app --host 0.0.0.0 --port 8000
 容器部署建议使用可选的 `docker-compose.siliconflow.yml`，将单独的
 `secrets/siliconflow_api_key` 挂载到 `SILICONFLOW_API_KEY_FILE`；不要用 `env_file` 把整份
 `.env` 传入容器。启用前验证模型账户可用性、额度、`/readyz`、429/超时/撤 key 回退和
-日志中没有 `Authorization`/token。向第三方发送的内容仅包括清理后的问题、已核验事实投影
-和风格策略，不包括 Provider URL、原始 JSON、证据/会话 ID 或工具调用。
+日志中没有 `Authorization`/token。向第三方发送的内容仅包括清理后的问题、泛化上下文、
+NBA 工具 schema 和清洗后的工具观察，不包括 Provider URL、原始 JSON、
+证据/会话 ID 或凭据。
 该 override 默认不切换 `PUBLIC_DATA_MODE`；如需公开 ESPN 数据，必须另行设置 `live`/`hybrid`
 并审核条款。未配置认证时不要把 live profile 直接暴露给公网用户。
 
@@ -264,12 +270,33 @@ uvicorn apps.api.src.main:app --host 0.0.0.0 --port 8000
 ```bash
 make configure-app-password
 make deploy                 # hybrid 公开数据 + 共享密码
-make deploy-live            # 额外启用 SiliconFlow F/G 分析（需要模型 key）
+make deploy-live            # 额外启用 SiliconFlow + 官方 Hermes Agent（需要模型 key）
 make deploy-status
 ```
 
 面试官访问 `http://<EIP>:8000/` 后输入共享密码；`/healthz`、`/readyz`、`/livez` 保持公开。
 如只需本地离线复现，继续使用基础 `docker-compose.yml`，它不会访问外网。
+
+### 9.2 Public live acceptance evidence (2026-08-30, Asia/Shanghai)
+
+最终交付使用 `make deploy-live` 构建并启动 base + public + auth + SiliconFlow 四层 Compose。
+验收过程中没有输出访问密码或模型 Key：
+
+- 本机与 `http://115.190.174.39:8000/readyz` 均返回 HTTP 200；容器状态为 `healthy`。
+- `/readyz` 显示 `mode=hybrid`、`full_intelligence=true`、`web_search=true`、
+  `hermes=ok`、`auth=ok`。
+- 容器内官方包为 `hermes-agent==0.19.0`；capability self-test 通过，工具集合精确为
+  `nba_news`、`nba_query`、`nba_schedule`。
+- 公网登录成功后，以下请求均显式携带 `intelligence_mode=full`：
+
+| Request | Result | Composition | Acceptance evidence |
+|---|---|---|---|
+| `nihao` | `completed` | `agent/used` | 自然问候，不要求补充查询对象，不声明日期或赛季事实 |
+| `下周有比赛买` | `completed` | `agent/used` | 返回完整北京时间范围 `2026-08-31 至 2026-09-06`，明确没有返回比赛 |
+| `下周有比赛吗` | `completed` | `agent/used` | 同一完整范围和空赛程结论，不推测休赛期原因 |
+| 博彩策略红线 | `blocked` | `deterministic/not_requested` | 1 ms 本地短路，Agent 和工具调用均为 0 |
+
+最终自动化门禁：pytest `291 passed`，Ruff/JS/compileall 通过，Playwright `5 passed`。
 
 ## 10. Delivery checklist
 

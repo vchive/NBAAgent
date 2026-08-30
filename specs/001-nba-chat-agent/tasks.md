@@ -224,3 +224,43 @@ without conflating it with the chat `HISTORY` intent.
 - Every task has an exact path and must be marked `[X]` when complete.
 - Fixture mode is the default; no task may require a real API key to pass local tests.
 - The date switch is a scoreboard projection (`view_date`/`date_range`), not a new chat intent.
+
+## Phase 13: User Story 7 — Official Hermes Agent and bounded NBA tools (Priority: P1)
+
+**Goal**: make full-intelligence mode enter the official Hermes Agent before deterministic parsing,
+allow only bounded NBA query/schedule/news tools, explain empty schedules naturally, and preserve the
+existing deterministic pipeline as the evidence owner and fallback.
+
+**Independent Test**: with full mode enabled, submit `nihao`, `下周有比赛买`, and `下周有比赛吗`;
+the first responds naturally without a tool, the latter two use a bounded schedule tool and return
+the resolved Beijing date range instead of generic clarification/no-data text. A red-line prompt has
+zero Agent/tool calls, and timeout/repeated-tool cases fall back safely.
+
+### Tests for User Story 7
+
+- [X] T070 [P] [US7] Add domain/config contract tests for `EMBEDDED_AGENT`, agent budgets, exact NBA tool allow-list, composition provenance, and invalid settings in `tests/unit/test_models.py`, `tests/unit/test_config.py`, and `tests/contract/test_hermes_agent_runtime.py`.
+- [X] T071 [P] [US7] Add task-bridge tests for tool schemas, request lookup, duplicate argument rejection, deadline/cancellation cleanup, output size bounds, and provider-free errors in `tests/unit/test_agent_tools.py`.
+- [X] T072 [P] [US7] Add integration tests for greeting, typo-tolerant schedule, empty schedule explanation, deterministic fallback, multi-turn hints, and pre-Agent safety zero-call behavior in `tests/integration/test_full_intelligence.py` and `tests/integration/test_agent_safety.py`.
+
+### Implementation for User Story 7
+
+- [X] T073 [US7] Lock the official Hermes dependency and add validated Agent configuration/capability fields in `pyproject.toml`, `apps/api/src/config.py`, `.env.example`, and `docker-compose.siliconflow.yml`.
+- [X] T074 [US7] Implement the process-global schema/task-local bridge for `nba_query`, `nba_schedule`, and `nba_news`, including budgets, deduplication, sanitized observations, ASGI-loop dispatch, and cleanup in `apps/api/src/infrastructure/agent_tools.py`.
+- [X] T075 [US7] Implement the lazy official `run_agent.AIAgent` integration, exact `nba` toolset self-test, server-owned prompt, bounded worker execution, cancellation, usage and result normalization in `apps/api/src/infrastructure/hermes_agent_runtime.py`.
+- [X] T076 [US7] Route full mode after SafetyGuard/context but before deterministic parsing, implement internal-tool non-recursive queries and fallback, and commit bounded context in `apps/api/src/application/chat_use_case.py` and `apps/api/src/application/runtime_selector.py`.
+- [X] T077 [US7] Add Agent output validation, unobserved-number checks, tool/iteration telemetry and provider-neutral `agent/used` projection in `apps/api/src/domain/safety.py`, `apps/api/src/infrastructure/telemetry.py`, `apps/api/src/domain/models.py`, and `apps/api/src/api/schemas.py`.
+- [X] T078 [US7] Update SSE progress/provenance rendering so the UI distinguishes Agent planning, NBA tool lookup, Agent completion and deterministic fallback in `apps/api/src/api/sse_routes.py`, `apps/web-demo/app.js`, and `apps/web-demo/index.html`.
+
+### Delivery and validation for User Story 7
+
+- [X] T079 [P] [US7] Add the three acceptance prompts plus timeout/repeat/injection cases to the golden evaluation and regression coverage in `apps/api/src/evaluation/golden_cases.jsonl`, `tests/evaluation/test_agent_cases.py`, and `tests/e2e/test_chat.spec.ts`.
+- [X] T080 [US7] Update architecture, BYOK, quickstart, deployment and reviewer-facing solution documentation for the official Hermes Agent path in `specs/001-nba-chat-agent/{hld.md,lld.md,quickstart.md}`, `docs/byok.md`, `docs/solution.md`, `README.md`, and `Makefile`.
+- [X] T081 [US7] Run unit/contract/integration/evaluation/E2E gates, rebuild the public live profile, verify `/readyz` plus the three acceptance prompts, and record the deployment evidence in `specs/001-nba-chat-agent/quickstart.md`.
+
+### Phase 13 dependencies
+
+- T070–T072 are test-first and may be prepared in parallel.
+- T073 blocks T075 and the live container build.
+- T074 blocks T075–T076; T075 and T077 must complete before T076 integration is accepted.
+- T078–T080 depend on the response and telemetry contract from T076–T077.
+- T081 is the final gate and requires T070–T080 complete.

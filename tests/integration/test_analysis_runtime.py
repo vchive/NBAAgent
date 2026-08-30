@@ -149,5 +149,7 @@ async def test_live_runtime_untraceable_numeric_claim_falls_back_without_redacti
 
     assert result.status == "completed"
     assert "若干" not in result.answer_markdown
-    assert "25" not in result.answer_markdown
+    # Do not reject a legitimate as-of clock such as 19:25; reject the
+    # untraceable basketball claim emitted by the mocked model.
+    assert "超过 25 分" not in result.answer_markdown
     assert result.composition["mode"] == "fallback"

@@ -223,7 +223,11 @@ class EvaluationRunner:
                 safety_veto = False
                 for turn in case.turns:
                     output = await self.usecase.handle(
-                        ChatRequest(session_id=session_id, message=turn.prompt)
+                        ChatRequest(
+                            session_id=session_id,
+                            message=turn.prompt,
+                            intelligence_mode=turn.intelligence_mode,
+                        )
                     )
                     turn_outputs.append(output)
                     observations.append(await self._observe_turn(turn.prompt, session_id))
