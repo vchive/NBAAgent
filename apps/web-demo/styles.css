@@ -1190,6 +1190,14 @@ p {
   font-size: 12px;
 }
 
+.panel-controls {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 7px;
+}
+
 .connection-state {
   display: inline-flex;
   align-items: center;
@@ -1815,11 +1823,32 @@ p {
 .intelligence-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  margin-left: auto;
-  color: var(--ink-300);
+  gap: 8px;
+  min-height: 34px;
+  padding: 6px 10px;
+  color: var(--ink-200);
+  border: 1px solid rgba(85, 213, 230, 0.2);
+  border-radius: 10px;
+  background: rgba(85, 213, 230, 0.06);
   cursor: pointer;
   user-select: none;
+  transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
+}
+
+.intelligence-toggle:hover {
+  border-color: rgba(85, 213, 230, 0.42);
+  background: rgba(85, 213, 230, 0.1);
+}
+
+.intelligence-toggle:has(input:checked) {
+  border-color: rgba(95, 224, 172, 0.45);
+  background: rgba(95, 224, 172, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(95, 224, 172, 0.06);
+}
+
+.intelligence-toggle:has(input:disabled) {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .intelligence-toggle input {
@@ -1863,14 +1892,15 @@ p {
 
 .toggle-copy {
   display: inline-flex;
-  align-items: baseline;
-  gap: 4px;
+  flex-direction: column;
+  gap: 1px;
   white-space: nowrap;
 }
 
 .toggle-copy strong {
-  font-size: 10px;
-  font-weight: 600;
+  color: var(--ink-100);
+  font-size: 11px;
+  font-weight: 650;
 }
 
 .toggle-copy small {
@@ -2630,6 +2660,19 @@ p {
   .connection-state {
     padding: 6px 7px;
     font-size: 9px;
+  }
+
+  .panel-controls {
+    gap: 5px;
+  }
+
+  .intelligence-toggle {
+    min-height: 30px;
+    padding: 5px 7px;
+  }
+
+  .toggle-copy small {
+    display: none;
   }
 
   .message {

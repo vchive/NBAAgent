@@ -504,7 +504,7 @@
     if (el.intelligenceHelp) {
       el.intelligenceHelp.textContent = el.intelligenceMode.disabled
         ? "服务端未开启"
-        : "让 Hermes 组织回答（实验）";
+        : "Hermes 全量推理";
     }
   }
 

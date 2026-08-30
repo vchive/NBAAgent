@@ -168,9 +168,16 @@
               <h1>问问场边，发生了什么</h1>
               <p class="panel-subtitle">比赛、球员、关键回合与战术复盘，一次问清。</p>
             </div>
-            <div class="connection-state" id="connection-state" data-state="ready" aria-live="polite">
-              <span class="connection-dot" aria-hidden="true"></span>
-              <span id="connection-label">就绪</span>
+            <div class="panel-controls">
+              <label class="intelligence-toggle" for="intelligence-mode" title="开启后，所有问题都交给 Hermes 与大模型组织回答">
+                <input id="intelligence-mode" type="checkbox" role="switch" aria-describedby="intelligence-help" />
+                <span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
+                <span class="toggle-copy"><strong>全智能模式</strong><small id="intelligence-help">Hermes 全量推理</small></span>
+              </label>
+              <div class="connection-state" id="connection-state" data-state="ready" aria-live="polite">
+                <span class="connection-dot" aria-hidden="true"></span>
+                <span id="connection-label">就绪</span>
+              </div>
             </div>
           </div>
 
@@ -217,11 +224,6 @@
             </div>
             <div class="composer-meta" id="composer-help">
               <span>Enter 发送 · Shift + Enter 换行</span>
-              <label class="intelligence-toggle" for="intelligence-mode">
-                <input id="intelligence-mode" type="checkbox" role="switch" aria-describedby="intelligence-help" />
-                <span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
-                <span class="toggle-copy"><strong>全智能分析</strong><small id="intelligence-help">让 Hermes 组织回答（实验）</small></span>
-              </label>
               <span id="char-count">0 / 2000</span>
             </div>
           </form>
