@@ -292,11 +292,12 @@ make deploy-status
 | Request | Result | Composition | Acceptance evidence |
 |---|---|---|---|
 | `nihao` | `completed` | `agent/used` | 自然问候，不要求补充查询对象，不声明日期或赛季事实 |
+| `nishishei` / `你是谁` | `completed` | `agent/used` 或 `deterministic/not_requested` | 身份/能力介绍不进入 NBA 澄清；模型不可用时使用本地能力提示 |
 | `下周有比赛买` | `completed` | `agent/used` | 返回完整北京时间范围 `2026-08-31 至 2026-09-06`，明确没有返回比赛 |
 | `下周有比赛吗` | `completed` | `agent/used` | 同一完整范围和空赛程结论，不推测休赛期原因 |
 | 博彩策略红线 | `blocked` | `deterministic/not_requested` | 1 ms 本地短路，Agent 和工具调用均为 0 |
 
-最终自动化门禁：pytest `291 passed`，Ruff/JS/compileall 通过，Playwright `5 passed`。
+最终自动化门禁：pytest `297 passed`，Ruff/JS/compileall 通过，Playwright `5 passed`。
 
 ## 10. Delivery checklist
 

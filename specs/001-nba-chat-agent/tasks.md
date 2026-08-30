@@ -264,3 +264,11 @@ zero Agent/tool calls, and timeout/repeated-tool cases fall back safely.
 - T074 blocks T075–T076; T075 and T077 must complete before T076 integration is accepted.
 - T078–T080 depend on the response and telemetry contract from T076–T077.
 - T081 is the final gate and requires T070–T080 complete.
+
+## Phase 14: Capability-intent regression hardening
+
+- [X] T082 [US7] Recognize identity/capability questions and common pinyin aliases as
+  zero-tool turns, provide a local capability prompt when Hermes is unavailable, and apply a
+  conservative terminal-`买` → `吗` correction for unambiguous schedule questions in
+  `apps/api/src/application/chat_use_case.py`; add integration coverage in
+  `tests/integration/test_full_intelligence.py`.

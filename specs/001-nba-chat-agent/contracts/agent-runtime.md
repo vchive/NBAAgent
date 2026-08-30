@@ -120,9 +120,11 @@ and credentials are forbidden.
 
 ## 5. Output and fallback
 
-Greetings and capability introductions may complete without a tool and must contain no NBA factual
-claim. Schedule, score, player/team data, history, news, tactical-fact or PBP answers require at
-least one successful observation.
+Greetings and capability introductions (including identity questions and common pinyin/English
+aliases) may complete without a tool and must contain no NBA factual claim. Schedule, score,
+player/team data, history, news, tactical-fact or PBP answers require at least one successful
+observation. If Hermes is unavailable for a capability turn, the API returns a local capability
+prompt with `composition.mode=deterministic,status=not_requested` rather than NBA clarification.
 
 The final guard rejects control text, prompt/tool instructions, internal/provider fields,
 unobserved numeric claims and factual entities unsupported by observations. Server clock values and

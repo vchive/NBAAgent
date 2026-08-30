@@ -100,9 +100,43 @@ _GREETING_RE = re.compile(
     re.IGNORECASE,
 )
 
+# These are conversational capability questions, not NBA lookups.  They are
+# deliberately kept as a small allow-list so that an ordinary question such as
+# “你是谁说的球员” still goes through the normal intent/safety pipeline.  The
+# pinyin aliases cover the common short forms seen in chat input (for example
+# ``nishishei`` from the acceptance demo).
+_CAPABILITY_RE = re.compile(
+    r"^(?:"
+    r"你是谁|你是誰|你叫什么|你是什么助手|你是什么ai|你是什么人工智能|"
+    r"你能做什么|你会什么|你可以做什么|你能干什么|你可以干什么|"
+    r"你能帮我做什么|你可以帮我做什么|你的功能是什么|有什么功能|"
+    r"在吗|who\s+are\s+you|what\s+can\s+you\s+do|are\s+you\s+there|"
+    r"ni\s*shi\s*(?:shei|shui)|nishishei|nishishui"
+    r")(?:[!！,.，。?？\s]*)$",
+    re.IGNORECASE,
+)
+
 
 def _is_model_meta_question(message: str) -> bool:
     return bool(_MODEL_META_RE.search(str(message or "").strip()))
+
+
+def _is_capability_question(message: str) -> bool:
+    """Return whether a turn can be answered without NBA observations.
+
+    Hermes is allowed to answer these turns without a tool, but the same
+    classification is also used by the output guard and the local safety
+    response when Hermes is unavailable.  Keeping the predicate in one place
+    prevents identity/capability questions from falling into the NBA parser.
+    """
+
+    return bool(_CAPABILITY_RE.fullmatch(str(message or "").strip()))
+
+
+def _is_zero_tool_question(message: str) -> bool:
+    return bool(_GREETING_RE.fullmatch(str(message or "").strip())) or _is_capability_question(
+        message
+    )
 
 
 @dataclass(slots=True)
@@ -564,7 +598,7 @@ class ChatUseCase:
                             AgentTurnInput(
                                 request_id=str(request_id),
                                 opaque_session_id=InMemorySessionStore.hash_session(session_id),
-                                sanitized_question=req.message,
+                                sanitized_question=self._agent_question(req.message),
                                 timezone=context.timezone,
                                 now_beijing=format_beijing(self._now()),
                                 context_hint=self._agent_context_hint(context),
@@ -650,14 +684,11 @@ class ChatUseCase:
                         guarded = self.output_guard.validate_agent(
                             draft,
                             agent_turn.observations,
-                            require_observation=not self._is_greeting(req.message),
+                            require_observation=not _is_zero_tool_question(req.message),
                         )
                     except (OutputGuardError, ValueError, TypeError):
-                        if self._is_greeting(req.message) and not agent_turn.observations:
-                            safe_greeting = (
-                                "您好！我是 COURTSIDE，可以帮您查询 NBA 赛程、赛果、"
-                                "球员数据、关键回合和战术复盘。您想先看哪一项？"
-                            )
+                        if _is_zero_tool_question(req.message) and not agent_turn.observations:
+                            safe_greeting = self._capability_answer()
                             guarded = self.output_guard.validate_agent(
                                 DraftAnswer(
                                     markdown=safe_greeting,
@@ -714,6 +745,47 @@ class ChatUseCase:
                             await _emit(sink, "message.delta", {"text": chunk})
                         await _emit(sink, "message.completed", result.to_dict())
                         return result
+                # Capability/identity turns are intentionally useful even when
+                # the model is temporarily unavailable. They contain no NBA
+                # facts, so answer locally instead of sending the user into
+                # the NBA intent parser and a misleading clarification.
+                if _is_zero_tool_question(req.message):
+                    local_answer = self._capability_answer()
+                    local_draft = DraftAnswer(
+                        markdown=local_answer,
+                        blocks=[
+                            AnswerBlock(
+                                type=AnswerBlockType.TEXT,
+                                content=local_answer,
+                            )
+                        ],
+                        evidence_state=EvidenceState.NONE,
+                    )
+                    telemetry.composition_mode = "deterministic"
+                    telemetry.composition_status = "not_requested"
+                    telemetry.fallback_reason = None
+                    telemetry.evidence_state = "none"
+                    telemetry.transition("COMPOSED")
+                    telemetry.transition("OUTPUT_GUARDED")
+                    result = self._result_from_draft(
+                        request_id,
+                        session_id,
+                        "completed",
+                        local_draft,
+                        started,
+                        as_of=None,
+                        composition=self._composition_from_telemetry(telemetry),
+                    )
+                    telemetry.finish(outcome="completed", total_latency_ms=result.latency_ms)
+                    self.telemetry.record(telemetry)
+                    if client_id:
+                        await self.session_store.complete_idempotency(
+                            session_id, client_id, result
+                        )
+                    for chunk in _chunks(local_draft.markdown, 120):
+                        await _emit(sink, "message.delta", {"text": chunk})
+                    await _emit(sink, "message.completed", result.to_dict())
+                    return result
                 if telemetry.fallback_reason is None:
                     telemetry.fallback_reason = agent_turn.finish_reason or "agent_unavailable"
                 telemetry.composition_mode = "fallback"
@@ -1138,6 +1210,33 @@ class ChatUseCase:
     @staticmethod
     def _is_greeting(message: str) -> bool:
         return bool(_GREETING_RE.fullmatch(str(message or "").strip()))
+
+    @staticmethod
+    def _capability_answer() -> str:
+        return (
+            "您好！我是 COURTSIDE，专注于 NBA 篮球问答。"
+            "我可以帮您了解比赛、球队、球员、新闻和战术等内容。"
+            "请直接告诉我想了解的对象或问题。"
+        )
+
+    @staticmethod
+    def _agent_question(message: str) -> str:
+        """Apply only an unambiguous chat typo correction before Hermes.
+
+        Chinese users occasionally type ``下周有比赛买`` when they mean
+        ``下周有比赛吗``.  Correct the terminal character only when the
+        message is clearly a schedule question and does not contain purchase
+        or betting vocabulary; all other wording is passed through unchanged.
+        """
+
+        question = str(message or "").strip()
+        if not question.endswith("买"):
+            return question
+        if not any(token in question for token in ("比赛", "赛程", "赛果")):
+            return question
+        if any(token in question for token in ("买球", "买票", "下注", "投注", "赔率", "盘口")):
+            return question
+        return f"{question[:-1]}吗"
 
     @staticmethod
     def _agent_context_hint(context: Any) -> str | None:

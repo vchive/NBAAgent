@@ -30,7 +30,13 @@ class FakeSmartAgent:
                 finish_reason="test_unavailable",
                 latency_ms=1,
             )
-        if turn.sanitized_question.lower() in {"nihao", "hello"}:
+        if turn.sanitized_question.lower() in {
+            "nihao",
+            "hello",
+            "nishishei",
+            "你是谁",
+            "你能做什么",
+        }:
             return AgentTurnResult(
                 status=RuntimeStatus.OK,
                 answer_markdown="您好！我可以帮您查询 NBA 赛程、比赛和球员表现。",
@@ -74,6 +80,39 @@ async def test_full_agent_handles_greeting_without_tool() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("question", ["nishishei", "你是谁", "nihao", "你能做什么"])
+async def test_capability_questions_do_not_fall_back_to_nba_parser(question: str) -> None:
+    agent = FakeSmartAgent()
+    usecase = ChatUseCase(FixtureProvider(), settings=settings(), agent_runtime=agent)
+    result = await usecase.handle({"message": question, "intelligence_mode": "full"})
+    assert result.status == "completed"
+    assert "请补充查询对象" not in result.answer_markdown
+    assert result.composition["mode"] == "agent"
+    assert result.composition["status"] == "used"
+    assert usecase.telemetry.latest().agent_tool_names == []
+
+
+@pytest.mark.asyncio
+async def test_capability_question_has_local_answer_when_agent_unavailable() -> None:
+    agent = FakeSmartAgent(unavailable=True)
+    usecase = ChatUseCase(FixtureProvider(), settings=settings(), agent_runtime=agent)
+    result = await usecase.handle({"message": "你是谁", "intelligence_mode": "full"})
+    assert result.status == "completed"
+    assert "我是 COURTSIDE" in result.answer_markdown
+    assert "请补充查询对象" not in result.answer_markdown
+    assert result.composition == {
+        "mode": "deterministic",
+        "status": "not_requested",
+        "latency_ms": 1,
+    }
+
+
+def test_obvious_schedule_typo_is_corrected_only_for_hermes() -> None:
+    assert ChatUseCase._agent_question("下周有NBA的比赛买") == "下周有NBA的比赛吗"
+    assert ChatUseCase._agent_question("买球赔率") == "买球赔率"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("question", ["下周有比赛买", "下周有比赛吗"])
 async def test_full_agent_uses_schedule_tool_and_explains_empty_scope(question: str) -> None:
     clock = FixedClock(datetime(2026, 8, 30, 10, 4, tzinfo=UTC))
@@ -88,6 +127,7 @@ async def test_full_agent_uses_schedule_tool_and_explains_empty_scope(question: 
     assert "没有返回 NBA 比赛" in result.answer_markdown
     assert result.composition["mode"] == "agent"
     assert usecase.telemetry.latest().agent_tool_names == ["nba_schedule"]
+    assert agent.turns[-1].sanitized_question.endswith("吗")
 
 
 @pytest.mark.asyncio
