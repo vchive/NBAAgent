@@ -50,6 +50,37 @@ async def test_objective_chat_creates_session_and_returns_traceable_fact() -> No
 
 
 @pytest.mark.asyncio
+async def test_non_full_greeting_is_not_sent_to_nba_clarification() -> None:
+    app = create_app()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post("/api/v1/chat", json={"message": "你好"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "completed"
+    assert "COURTSIDE" in payload["answer_markdown"]
+    assert "请补充查询对象" not in payload["answer_markdown"]
+
+
+@pytest.mark.asyncio
+async def test_empty_today_schedule_explains_the_checked_date() -> None:
+    app = create_app()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post("/api/v1/chat", json={"message": "今天有哪些 NBA 比赛？"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "no_data"
+    assert "北京时间" in payload["answer_markdown"]
+    assert "暂无可核验的 NBA 比赛" in payload["answer_markdown"]
+    assert "精彩回顾" in payload["follow_up"]
+
+
+@pytest.mark.asyncio
 async def test_date_schedule_preserves_all_same_day_games() -> None:
     """A date-scoped schedule must not collapse a normal multi-game slate."""
 

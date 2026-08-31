@@ -97,6 +97,7 @@ PLAYERS: tuple[EntityRef, ...] = (
     ),
     _player("derrick-white", "德里克·怀特", "Derrick White", "D. White", "怀特"),
     _player("lu-dort", "吕冈茨·多尔特", "Luguentz Dort", "L. Dort", "Dort", "多尔特"),
+    _player("kevin-durant", "凯文·杜兰特", "杜兰特", "Kevin Durant", "K. Durant", "KD"),
 )
 GAMES: dict[str, EntityRef] = {
     "2026-finals-g4": EntityRef(
@@ -292,6 +293,9 @@ def _metric_refs(text: str, *, scope: StatScope = StatScope.GAME) -> list[Metric
         ("命中率", "field_goal_percentage", "%"),
         ("战绩", "record", "场"),
         ("排名", "rank", "名"),
+        ("出场", "games", "场"),
+        ("出赛", "games", "场"),
+        ("上场", "games", "场"),
         ("冠军", "championship", "次"),
         ("夺冠", "championship", "次"),
         ("队史", "franchise_record", "次"),
@@ -302,6 +306,14 @@ def _metric_refs(text: str, *, scope: StatScope = StatScope.GAME) -> list[Metric
     if not metrics:
         metrics.append(MetricRef(name="points", unit="分", scope=scope))
     return metrics
+
+
+def _normalize_common_typos(text: str) -> str:
+    """Correct a narrowly scoped typo without changing the user's wording broadly."""
+
+    # “出场” is frequently entered as “出厂”; only normalize it when the
+    # surrounding phrase clearly asks for an appearance count/statistic.
+    return re.sub(r"出厂(?=次数|场次|数|率|记录)", "出场", text)
 
 
 # Standings questions often scope the requested rank to one conference.  Keep
@@ -544,7 +556,7 @@ class IntentParser:
         self.input_timezone = input_timezone
 
     def parse(self, text: str, context: ConversationContext | None = None) -> ParseResult:
-        message = text.strip()
+        message = _normalize_common_typos(text.strip())
         entities = resolve_entities(message)
         # Follow-up pronouns resolve only from the current session.  Keep the
         # shorthand marker around so a new session can explicitly ask for a
@@ -671,9 +683,7 @@ class IntentParser:
                 "记录",
                 "历届",
                 "队史",
-                "次数",
                 "几座",
-                "数量",
             )
         )
         is_schedule = any(
@@ -857,8 +867,13 @@ class IntentParser:
             if not any(slot.name == "game" for slot in missing):
                 missing.append(Slot(name="game", reason="请指定比赛或在同一会话中先选择一场比赛"))
         elif is_pbp and not has_game_entity:
+            reason = (
+                "请从精彩回顾选择最近一场比赛，或补充对阵双方"
+                if re.search(r"(?:最近|上一场|刚刚).{0,4}(?:场比赛|比赛)", message)
+                else "请指定比赛或在同一会话中先选择一场比赛"
+            )
             if not any(slot.name == "game" for slot in missing):
-                missing.append(Slot(name="game", reason="请指定比赛或在同一会话中先选择一场比赛"))
+                missing.append(Slot(name="game", reason=reason))
         if (
             clock_window is not None
             and clock_window.scope is TimeWindowScope.PERIOD_END

@@ -93,7 +93,7 @@ class HighlightsService:
         # review, but must not be presented as today's real schedule.
         if getattr(result, "used_fallback", False) and day == local_today:
             raise HighlightsProviderError(
-                "UPSTREAM_UNAVAILABLE",
+                "SERVICE_BUSY",
                 "今日赛事暂时无法核验，请稍后重试。",
                 True,
                 503,

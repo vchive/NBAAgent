@@ -80,7 +80,7 @@ async def test_hybrid_fallback_is_not_presented_as_today() -> None:
         )
 
     assert response.status_code == 503
-    assert response.json()["error"]["code"] == "UPSTREAM_UNAVAILABLE"
+    assert response.json()["error"]["code"] == "SERVICE_BUSY"
 
 
 @pytest.mark.asyncio

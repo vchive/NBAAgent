@@ -560,6 +560,7 @@ class TemplateComposer:
                     "wins": "胜场",
                     "losses": "负场",
                     "points": "得分",
+                    "games": "出场场次",
                     "championship": "冠军",
                     "franchise_record": "冠军次数",
                     "league_record": "联盟纪录",

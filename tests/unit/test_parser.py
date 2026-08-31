@@ -29,6 +29,15 @@ def test_full_calendar_date_is_not_misread_as_a_season() -> None:
     assert resolve_season_phrase("2026-06-12 有哪些比赛？", clock) is None
 
 
+def test_common_appearance_typo_and_durant_alias_are_understood() -> None:
+    parsed = IntentParser().parse("杜兰特近期出厂次数")
+
+    assert parsed.intent.intent_name is IntentName.DATA
+    assert any(item.canonical_id == "kevin-durant" for item in parsed.intent.entities)
+    assert parsed.intent.metrics[0].name == "games"
+    assert not parsed.missing_slots
+
+
 def test_chinese_last_five_seconds_is_play_by_play() -> None:
     parsed = IntentParser().parse("2025-26 总决赛 G4 最后五秒发生了什么？")
 

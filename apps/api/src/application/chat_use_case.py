@@ -795,6 +795,45 @@ class ChatUseCase:
                     "run.status",
                     {"stage": "agent_fallback", "text": "正在回退到已核验事实链路"},
                 )
+            # Non-full requests do not enter the model loop, but greetings and
+            # capability questions are still complete conversational turns.
+            # Handle them before the NBA parser so they never become a
+            # misleading “请补充查询对象” clarification.
+            if _is_zero_tool_question(req.message):
+                local_answer = self._capability_answer()
+                local_draft = DraftAnswer(
+                    markdown=local_answer,
+                    blocks=[
+                        AnswerBlock(
+                            type=AnswerBlockType.TEXT,
+                            content=local_answer,
+                        )
+                    ],
+                    evidence_state=EvidenceState.NONE,
+                )
+                telemetry.composition_mode = "deterministic"
+                telemetry.composition_status = "not_requested"
+                telemetry.fallback_reason = None
+                telemetry.evidence_state = "none"
+                telemetry.transition("COMPOSED")
+                telemetry.transition("OUTPUT_GUARDED")
+                result = self._result_from_draft(
+                    request_id,
+                    session_id,
+                    "completed",
+                    local_draft,
+                    started,
+                    as_of=None,
+                    composition=self._composition_from_telemetry(telemetry),
+                )
+                telemetry.finish(outcome="completed", total_latency_ms=result.latency_ms)
+                self.telemetry.record(telemetry)
+                if client_id:
+                    await self.session_store.complete_idempotency(session_id, client_id, result)
+                for chunk in _chunks(local_draft.markdown, 120):
+                    await _emit(sink, "message.delta", {"text": chunk})
+                await _emit(sink, "message.completed", result.to_dict())
+                return result
             parser = IntentParser(clock=self.clock, input_timezone=context.timezone)
             try:
                 parsed = parser.parse(req.message, context)
@@ -1012,7 +1051,7 @@ class ChatUseCase:
             telemetry.transition("NORMALIZED")
             data = provider_result.data
             if data is None or data == []:
-                draft = self.template_composer.no_data()
+                draft = self._no_data_draft(parsed)
                 result = self._result_from_draft(
                     request_id,
                     session_id,
@@ -1210,6 +1249,50 @@ class ChatUseCase:
     @staticmethod
     def _is_greeting(message: str) -> bool:
         return bool(_GREETING_RE.fullmatch(str(message or "").strip()))
+
+    def _no_data_draft(self, parsed: ParseResult) -> DraftAnswer:
+        """Turn an empty, valid lookup into a useful scoped answer.
+
+        The old generic copy asked users to add a subject even when the query
+        already had a complete date (for example, an off-season “today”
+        schedule). Keep the deterministic mode honest while explaining what
+        was actually checked and offering the next useful action.
+        """
+
+        intent = parsed.intent
+        if intent.intent_name is IntentName.SCHEDULE_RESULT:
+            date_range = intent.date_range
+            if date_range is not None:
+                start = format_beijing(date_range.start_inclusive).split(" ", 1)[0]
+                end = format_beijing(date_range.end_exclusive - timedelta(microseconds=1)).split(
+                    " ", 1
+                )[0]
+                scope = start if start == end else f"{start} 至 {end}"
+                message = f"北京时间 **{scope}** 暂无可核验的 NBA 比赛。"
+                return self.template_composer.no_data(
+                    message=message,
+                    follow_up="可以换一个日期，或切换左侧“精彩回顾”查看最近 5 场比赛。",
+                )
+            return self.template_composer.no_data(
+                message="暂时没有返回可核验的 NBA 赛程。",
+                follow_up="请指定日期（例如今天、明天或下周），我再帮您查询。",
+            )
+
+        subject = next(
+            (item for item in intent.entities if item.kind in {EntityKind.PLAYER, EntityKind.TEAM}),
+            None,
+        )
+        if intent.intent_name is IntentName.DATA and subject is not None:
+            return self.template_composer.no_data(
+                message=f"暂未找到 **{subject.display_name}** 的公开统计记录。",
+                follow_up="可以补充赛季、比赛或统计范围，我再继续核对。",
+            )
+        if intent.intent_name is IntentName.PLAY_BY_PLAY:
+            return self.template_composer.no_data(
+                message="当前没有找到可用的逐回合记录。",
+                follow_up="请指定具体比赛，或先从左侧“精彩回顾”选择一场比赛。",
+            )
+        return self.template_composer.no_data()
 
     @staticmethod
     def _capability_answer() -> str:
@@ -2117,6 +2200,11 @@ class ChatUseCase:
     def _clarification(parsed: ParseResult) -> str:
         if parsed.ambiguity_reasons:
             return "我找到了多个可能的对象，请补充具体球队、球员或比赛。"
+        if any(
+            slot.name == "game" and "精彩回顾" in slot.reason
+            for slot in parsed.missing_slots
+        ):
+            return "请先从左侧“精彩回顾”选择最近一场比赛，或补充对阵双方，我再帮您核对关键回合。"
         # Slot names are internal parser vocabulary; never expose them in a
         # conversational response (e.g. ``subject``/``game``).  A compact
         # Chinese label also makes shorthand clarifications actionable.
