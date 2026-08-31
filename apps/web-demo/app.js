@@ -2224,7 +2224,9 @@
       if (el.highlightsEmpty) {
         // Reset a transient validation message before rendering a normal
         // empty-date response.
-        el.highlightsEmpty.textContent = "这一天暂无可用比赛记录。";
+        el.highlightsEmpty.textContent = mode === "today" && safeDate === beijingDateString()
+          ? "今天没有 NBA 比赛；切换到“历史回顾”查看已结束比赛。"
+          : "这一天暂无可用比赛记录。";
         el.highlightsEmpty.hidden = false;
       }
       resetHud();
