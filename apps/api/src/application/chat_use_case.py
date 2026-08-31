@@ -930,7 +930,11 @@ class ChatUseCase:
                     markdown=question,
                     blocks=[AnswerBlock(type=AnswerBlockType.TEXT, content=question)],
                     evidence_state=EvidenceState.NONE,
-                    follow_up=question,
+                    # A clarification is already an actionable prompt.  Do
+                    # not render the same sentence as a “继续追问” button:
+                    # clicking that button used to submit the clarification
+                    # back to the parser and create an endless loop.
+                    follow_up=None,
                 )
                 result = self._result_from_draft(
                     request_id,
@@ -960,7 +964,7 @@ class ChatUseCase:
                     markdown=question,
                     blocks=[AnswerBlock(type=AnswerBlockType.TEXT, content=question)],
                     evidence_state=EvidenceState.NONE,
-                    follow_up=question,
+                    follow_up=None,
                 )
                 result = self._result_from_draft(
                     request_id,
