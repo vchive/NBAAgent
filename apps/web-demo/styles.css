@@ -2111,6 +2111,41 @@ p {
   color: var(--cyan-bright);
 }
 
+.leader-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  margin-top: 11px;
+  padding: 8px 9px;
+  border: 1px solid rgba(245, 169, 87, 0.14);
+  border-radius: 7px;
+  background: rgba(245, 169, 87, 0.045);
+  font-size: 10px;
+}
+
+.leader-label {
+  color: var(--orange);
+  font: 600 8px var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.leader-row strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-200);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.leader-row > span:last-child {
+  color: var(--ink-500);
+  font: 500 8px var(--font-mono);
+  white-space: nowrap;
+}
+
 .possession-row {
   display: flex;
   justify-content: space-between;

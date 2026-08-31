@@ -79,6 +79,9 @@
     hudHomeToken: $("#hud-home-token"),
     hudHomeName: $("#hud-home-name"),
     hudHomeRecord: $("#hud-home-record"),
+    hudLeaderRow: $("#hud-leader-row"),
+    hudLeaderName: $("#hud-leader-name"),
+    hudLeaderLine: $("#hud-leader-line"),
     hudPossession: $("#hud-possession"),
     hudPace: $("#hud-pace"),
     toast: $("#toast"),
@@ -188,6 +191,7 @@
         status: "final",
         start_utc: "2026-06-12T01:30:00Z",
         quarter_scores: { Q1: "27–24", Q2: "25–31", Q3: "28–31", Q4: "24–22" },
+        leaders: [{ player_name: "杰伦·布朗", points: 32, rebounds: 8, assists: 5 }],
         pace: "98.4",
       },
       {
@@ -1856,6 +1860,8 @@
     if (el.scoreClock) el.scoreClock.textContent = "—";
     if (el.hudPossession) el.hudPossession.textContent = "最后控球：—";
     if (el.hudPace) el.hudPace.textContent = "节奏 —";
+    if (el.hudLeaderName) el.hudLeaderName.textContent = "—";
+    if (el.hudLeaderLine) el.hudLeaderLine.textContent = "等待比赛详情";
     el.quarterCells.forEach((cell) => {
       const score = $("[data-quarter-score]", cell);
       if (score) score.textContent = "—";
@@ -1881,6 +1887,17 @@
     if (el.hudPossession) el.hudPossession.textContent = "最后控球：—";
     const pace = game.pace ?? fixture?.pace;
     if (el.hudPace) el.hudPace.textContent = pace == null ? "节奏 —" : `节奏 ${pace}`;
+    const detail = state.gameDetails.get(String(game.game_id));
+    const leader = Array.isArray(detail?.leaders)
+      ? detail.leaders[0]
+      : Array.isArray(fixture?.leaders) ? fixture.leaders[0] : null;
+    if (el.hudLeaderName) el.hudLeaderName.textContent = leader?.player_name || "—";
+    if (el.hudLeaderLine) {
+      const points = leader?.points == null ? "—" : `${leader.points} PTS`;
+      const rebounds = leader?.rebounds == null ? "—" : `${leader.rebounds} REB`;
+      const assists = leader?.assists == null ? "—" : `${leader.assists} AST`;
+      el.hudLeaderLine.textContent = leader ? `${points} · ${rebounds} · ${assists}` : "等待比赛详情";
+    }
     if (pbp) {
       const allEvents = Object.values(pbp).flat();
       const last = allEvents[allEvents.length - 1];
