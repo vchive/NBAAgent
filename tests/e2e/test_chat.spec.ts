@@ -59,6 +59,43 @@ test("forwards the selected highlights card as chat context", async ({ page }) =
   expect(selectedGameId).toBe("2026-demo-den-gsw");
 });
 
+test("keeps the first replay card bound to a venue question", async ({ page }) => {
+  let selectedGameId: unknown = null;
+  await page.route("**/api/v1/chat/stream", async (route) => {
+    const body = route.request().postDataJSON() as Record<string, unknown>;
+    selectedGameId = body.selected_game_id;
+    const requestId = "44444444-4444-4444-8444-444444444444";
+    const sessionId = String(body.session_id);
+    const answer = "这场比赛（雷霆 vs 凯尔特人）的场馆暂未在公开记录中提供。";
+    const completed = {
+      request_id: requestId,
+      session_id: sessionId,
+      status: "completed",
+      answer_markdown: answer,
+      blocks: [{ type: "warning", content: answer }],
+      as_of_beijing: null,
+      evidence_state: "partial",
+      corrections: [],
+      follow_up: null,
+      latency_ms: 10,
+    };
+    const sse = [
+      `event: run.started\ndata: ${JSON.stringify({ request_id: requestId, session_id: sessionId })}\n\n`,
+      `event: message.completed\ndata: ${JSON.stringify(completed)}\n\n`,
+    ].join("");
+    await route.fulfill({ status: 200, contentType: "text/event-stream", body: sse });
+  });
+
+  await page.goto("/");
+  await expect(page.locator("#game-list .game-list-card")).toHaveCount(3);
+  await page.locator("#game-list .game-list-card").first().click();
+  await page.locator("#message-input").fill("这场比赛在哪儿举办的？");
+  await page.locator("#message-input").press("Enter");
+  await expect(page.locator(".dynamic-message.assistant-message").last()).toContainText("雷霆");
+  await expect(page.locator(".dynamic-message.assistant-message").last()).toContainText("凯尔特人");
+  expect(selectedGameId).toBe("2026-finals-g4");
+});
+
 test("explicit game mention supersedes a stale selected card for follow-ups", async ({ page }) => {
   const selectedGameIds: unknown[] = [];
   await page.route("**/api/v1/chat/stream", async (route) => {
