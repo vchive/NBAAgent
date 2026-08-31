@@ -2438,7 +2438,7 @@
       description.append(player, action);
       const score = document.createElement("span");
       score.className = "pbp-score";
-      score.textContent = `${event.away}–${event.home}`;
+      score.textContent = `${event.away == null ? "—" : event.away}–${event.home == null ? "—" : event.home}`;
       item.append(clock, token, description, score);
       el.pbpList.append(item);
     });
@@ -2474,8 +2474,8 @@
     el.pbpSlider.value = String(state.pbpIndex);
     el.replayPosition.textContent = `${String(state.pbpIndex + 1).padStart(2, "0")} / ${String(events.length).padStart(2, "0")}`;
     el.selectedPlayText.textContent = `${event.player}：${event.action}。${event.detail}。`;
-    el.awayScore.textContent = String(event.away);
-    el.homeScore.textContent = String(event.home);
+    el.awayScore.textContent = event.away == null ? "—" : String(event.away);
+    el.homeScore.textContent = event.home == null ? "—" : String(event.home);
     el.scoreClock.textContent = `${event.clock} · ${state.currentPeriod}`;
     if (shouldScroll) {
       const active = $(".pbp-event.active", el.pbpList);
