@@ -156,6 +156,12 @@ class TemplateComposer:
             "TACTICAL",
             "FOLLOW_UP",
         } and not multi_game_schedule:
+            if intent.intent_name.value == "FOLLOW_UP":
+                matchup = (
+                    f"对阵双方：**{game.away.display_name}** vs **{game.home.display_name}**。"
+                )
+                blocks.append(AnswerBlock(type=AnswerBlockType.TEXT, content=matchup))
+                lines.append(matchup)
             if game.home_score is not None and game.away_score is not None:
                 winner = (
                     game.home
@@ -472,6 +478,14 @@ class TemplateComposer:
                         focus_parts.append("最新记录后的比分暂无可核验结果。")
                 else:
                     focus_parts.append("最新记录后的比分暂无可核验结果。")
+                if any(
+                    getattr(metric, "name", "") == "shot_location"
+                    for metric in getattr(intent, "metrics", [])
+                ):
+                    # The normalized PBP contract intentionally has no
+                    # coordinate/zone field yet.  Say so plainly instead of
+                    # guessing a court location from the shot type.
+                    focus_parts.append("公开逐回合记录未提供出手位置字段")
                 if focus_parts:
                     focus_text = "；".join(part.rstrip("。") for part in focus_parts) + "。"
                     blocks.append(AnswerBlock(type=AnswerBlockType.TEXT, content=focus_text))

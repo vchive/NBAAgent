@@ -288,6 +288,12 @@ def _metric_refs(text: str, *, scope: StatScope = StatScope.GAME) -> list[Metric
     metrics: list[MetricRef] = []
     if any(token in text for token in ("什么时候", "几点开打", "几点开始", "开赛时间", "比赛时间")):
         metrics.append(MetricRef(name="start_time", unit=None, scope=scope))
+    # Play-by-play feeds in the first release carry the actor/type/score but
+    # do not guarantee shot coordinates or a court-zone label.  Preserve a
+    # typed marker so the renderer can state that limitation explicitly when a
+    # user asks “在什么位置”，instead of silently omitting that part.
+    if any(token in text for token in ("投篮位置", "出手位置", "在什么位置", "哪里出手")):
+        metrics.append(MetricRef(name="shot_location", unit=None, scope=scope))
     if "上篮" in text:
         metrics.append(MetricRef(name="layup", unit=None, scope=scope))
     mapping = (
@@ -612,6 +618,8 @@ class IntentParser:
                 "反超",
                 "扳平",
                 "关键球",
+                "最后谁投",
+                "最后谁出手",
                 "谁助攻",
                 "出手者",
             )
@@ -788,7 +796,18 @@ class IntentParser:
         # Only a shorthand resolved from an active game is a FOLLOW_UP.  An
         # explicit G4/G3 reference wins, and a shorthand without an active
         # game is represented as a missing slot below.
-        if context and shorthand and context.active_game and not explicit_game:
+        # Keep event-level questions as PLAY_BY_PLAY even when the active
+        # game was inherited from context.  A broad clock-only follow-up such
+        # as “每节最后五秒发生了什么” remains FOLLOW_UP, but a direct
+        # question like “最后谁投篮的” must reach the PBP planner so the
+        # renderer can inspect shooter/type/score fields.
+        if (
+            context
+            and shorthand
+            and context.active_game
+            and not explicit_game
+            and not (is_pbp and event_focus)
+        ):
             category, intent_name = Category.H, IntentName.FOLLOW_UP
 
         season_value = resolve_season_phrase(message, self.clock, timezone_name=self.input_timezone)

@@ -93,3 +93,38 @@ async def test_selected_game_handles_matchup_typo_and_last_five_seconds_query() 
     assert result.status == "completed"
     assert "2 个回合" in result.answer_markdown
     assert "106–102" in result.answer_markdown or "108–104" in result.answer_markdown
+
+
+@pytest.mark.asyncio
+async def test_contextual_matchup_and_last_shooter_questions_stay_on_selected_game() -> None:
+    usecase = ChatUseCase(FixtureProvider())
+    first = await usecase.handle(
+        {
+            "message": "2025-26 总决赛 G4 谁得分最高？",
+            "selected_game_id": "2026-finals-g4",
+        }
+    )
+    assert first.status == "completed"
+    second = await usecase.handle(
+        {
+            "session_id": first.session_id,
+            "message": "这场比赛谁打谁？",
+            "selected_game_id": "2026-finals-g4",
+        }
+    )
+    assert second.status == "completed"
+    assert "对阵双方" in second.answer_markdown
+    assert "雷霆" in second.answer_markdown and "凯尔特人" in second.answer_markdown
+    third = await usecase.handle(
+        {
+            "session_id": first.session_id,
+            "message": "最后谁投篮的，在什么位置？",
+            "selected_game_id": "2026-finals-g4",
+        }
+    )
+    assert third.status == "completed"
+    # The terminal fixture row is an end-of-game marker without a shooter;
+    # assert that the event-level answer was rendered instead of a generic
+    # clarification, without requiring a particular missing-data wording.
+    assert "出手者" in third.answer_markdown
+    assert "出手位置字段" in third.answer_markdown

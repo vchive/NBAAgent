@@ -210,6 +210,22 @@ def test_contextual_clock_only_follow_up_inherits_active_game() -> None:
     assert not any(slot.name == "game" for slot in parsed.missing_slots)
 
 
+def test_contextual_last_shooter_question_inherits_active_game() -> None:
+    context = ConversationContext(
+        session_id=uuid4(),
+        active_game={
+            "kind": "GAME",
+            "canonical_id": "2026-finals-g4",
+            "display_name": "2025-26 总决赛 G4",
+        },
+        expires_at_utc=datetime(2026, 8, 28, tzinfo=UTC),
+    )
+    parsed = IntentParser().parse("最后谁投篮的，在什么位置？", context)
+    assert parsed.intent.intent_name is IntentName.PLAY_BY_PLAY
+    assert any(item.canonical_id == "2026-finals-g4" for item in parsed.intent.entities)
+    assert not any(slot.name == "game" for slot in parsed.missing_slots)
+
+
 def test_explicit_non_fixture_season_does_not_bind_fixture_game() -> None:
     parsed = IntentParser().parse("2024-25 总决赛 G4 比赛结果")
     assert parsed.intent.game_number == 4
