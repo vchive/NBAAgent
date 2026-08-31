@@ -587,7 +587,10 @@
   function setWelcomeForTransport(dataMode) {
     if (!el.welcomeMessage) return;
     const normalized = String(dataMode || "fixture").toLowerCase();
-    if (normalized === "fixture") return;
+    if (normalized === "fixture") {
+      setWelcomeForFixtureTransport();
+      return;
+    }
     // Do not present the fixed fixture scoreboard as today's live answer.
     const label = $(".answer-label", el.welcomeMessage);
     const title = $("h3", el.welcomeMessage);
@@ -599,6 +602,50 @@
     if (copy) copy.textContent = "您可以询问赛程、赛果、球员数据、关键回合或战术复盘。";
     if (grid) grid.hidden = true;
     if (foot) foot.textContent = "数据将按北京时间核验 · 等待您的问题";
+  }
+
+  function setWelcomeForFixtureTransport() {
+    if (!el.welcomeMessage) return;
+    const label = $(".answer-label", el.welcomeMessage);
+    const title = $("h3", el.welcomeMessage);
+    const copy = $(".answer-lead p", el.welcomeMessage);
+    const grid = $(".fact-grid", el.welcomeMessage);
+    const foot = $(".answer-foot", el.welcomeMessage);
+    if (label) label.textContent = "演示快照";
+    if (title) title.textContent = "已连接赛事数据演示";
+    if (copy) copy.textContent = "当前为固定比赛快照，可体验赛程、关键回合与战术复盘。";
+    if (grid) grid.hidden = false;
+    if (foot) foot.textContent = "演示日期 2026/06/12 · 不代表今日真实赛程";
+  }
+
+  function setWelcomeLoading(today) {
+    if (!el.welcomeMessage) return;
+    const label = $(".answer-label", el.welcomeMessage);
+    const title = $("h3", el.welcomeMessage);
+    const copy = $(".answer-lead p", el.welcomeMessage);
+    const grid = $(".fact-grid", el.welcomeMessage);
+    const foot = $(".answer-foot", el.welcomeMessage);
+    const divider = $("span", el.dayDivider);
+    if (label) label.textContent = "赛事数据加载中";
+    if (title) title.textContent = "正在获取今天的 NBA 赛程";
+    if (copy) copy.textContent = "正在按北京时间连接公开赛事数据服务，请稍候。";
+    if (grid) grid.hidden = true;
+    if (foot) foot.textContent = "正在拉取数据 · 不会展示过期比赛";
+    if (divider) divider.textContent = `今天 · ${formatShortDate(today)}`;
+  }
+
+  function setWelcomeForOfflineFixture() {
+    if (!el.welcomeMessage) return;
+    const label = $(".answer-label", el.welcomeMessage);
+    const title = $("h3", el.welcomeMessage);
+    const copy = $(".answer-lead p", el.welcomeMessage);
+    const grid = $(".fact-grid", el.welcomeMessage);
+    const foot = $(".answer-foot", el.welcomeMessage);
+    if (label) label.textContent = "离线演示";
+    if (title) title.textContent = "公开赛事数据服务暂时不可用";
+    if (copy) copy.textContent = "当前展示固定演示快照，不代表今天的真实赛程。";
+    if (grid) grid.hidden = true;
+    if (foot) foot.textContent = "离线演示数据 · 演示日期 2026/06/12";
   }
 
   function setComposerBusy(busy) {
@@ -2491,10 +2538,16 @@
       state.historyDate = selectedDate;
     }
     if (state.apiAvailable && window.CourtsideApi) {
-      renderHighlightsLoading(mode === "today" ? "正在拉取今日比赛…" : "正在拉取比赛…");
+      renderHighlightsLoading(mode === "today" ? "正在拉取今日赛事…" : "正在拉取比赛…");
       try {
+        // In live/hybrid deployments send the browser's Beijing date
+        // explicitly. Fixture mode intentionally keeps the unscoped request
+        // so its reproducible demo day remains available offline.
+        const requestedDate = mode === "today" && state.apiDataMode !== "fixture"
+          ? (selectedDate || beijingDateString())
+          : mode === "today" ? null : selectedDate;
         const payload = await window.CourtsideApi.highlights(
-          mode === "today" ? null : selectedDate,
+          requestedDate,
           "Asia/Shanghai",
         );
         if (requestNumber !== state.highlightRequest) return;
@@ -2529,6 +2582,20 @@
           if (mode === "history" && el.highlightDate) {
             el.highlightDate.value = state.highlightDate;
           }
+          return;
+        }
+        // A connected API that cannot answer today's projection must never
+        // silently fall back to the fixed interview snapshot: that would
+        // present an old game as if it were happening today. Keep the empty
+        // state explicit and let the user retry after the service recovers.
+        if (mode === "today") {
+          state.apiAvailable = false;
+          state.apiProbeComplete = true;
+          setTransportLabel(false);
+          clearHighlightProjection("今日赛事暂时无法获取，请稍后重试。\n历史比赛可切换到“精彩回顾”。");
+          setHistoryStatus("拉取失败：今日赛事暂时不可用，请稍后重试。", true, "error");
+          setConnection("error", "今日赛事暂不可用");
+          showToast("今日赛事暂时无法获取，请稍后重试");
           return;
         }
         setTransportLabel(false);
@@ -2592,6 +2659,7 @@
   }
 
   function clearHighlightProjection(message = "这一天暂无可用比赛记录。", options = {}) {
+    state.historyLoading = Boolean(options.loading);
     state.activeGame = null;
     state.activePbp = null;
     state.highlightGames = [];
@@ -2845,6 +2913,15 @@
       } else {
         loadRecentHighlights();
       }
+    } else if (state.highlightMode === "today" && state.historyLoading) {
+      // A static page can briefly render before its API probe completes. Do
+      // not leave the loading placeholder hanging when the service is absent;
+      // switch to the explicitly labelled offline snapshot instead. This is
+      // the only branch allowed to show the fixed fixture date as “today”.
+      state.apiAvailable = false;
+      renderHighlightProjection(fixtureGamesForDate("2026-06-12"), "today", "2026-06-12");
+      setWelcomeForOfflineFixture();
+      setConnection("ready", "离线演示");
     }
   }
 
@@ -3007,6 +3084,10 @@
       el.highlightDate.hidden = true;
     }
     const today = beijingDateString();
+    if (window.CourtsideApi?.baseUrl) {
+      state.highlightDate = today;
+      state.historyDate = today;
+    }
     const weekAgo = new Date(`${today}T00:00:00Z`);
     weekAgo.setUTCDate(weekAgo.getUTCDate() - 6);
     state.historyRangeFrom = weekAgo.toISOString().slice(0, 10);
@@ -3025,7 +3106,17 @@
     if (el.intelligenceMode) el.intelligenceMode.checked = false;
     setIntelligenceCapability(true);
     setTransportLabel(false);
-    renderHighlightProjection(fixtureGamesForDate("2026-06-12"), "today", "2026-06-12");
+    if (window.CourtsideApi?.baseUrl) {
+      // Same-origin/public deployments must resolve the real Beijing date
+      // before painting any cards. The fixed fixture is only rendered after a
+      // failed API probe, never as a transient “today” answer.
+      state.highlightMode = "today";
+      setWelcomeLoading(today);
+      renderHighlightsLoading(`正在拉取今日赛事（${formatShortDate(today)}）…`);
+    } else {
+      renderHighlightProjection(fixtureGamesForDate("2026-06-12"), "today", "2026-06-12");
+      setWelcomeForOfflineFixture();
+    }
     initSseParserDemo();
     bindEvents();
     // Authenticate before probing highlights/chat. If uvicorn is not running,

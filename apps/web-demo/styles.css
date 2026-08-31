@@ -34,6 +34,12 @@
   box-sizing: border-box;
 }
 
+/* Keep the HTML hidden contract authoritative even when a component later
+ * declares a layout display value such as grid or flex. */
+[hidden] {
+  display: none !important;
+}
+
 html {
   min-width: 320px;
   background: var(--ink-950);

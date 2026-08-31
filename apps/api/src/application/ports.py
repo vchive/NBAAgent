@@ -60,6 +60,10 @@ class ProviderResult[T](PortModel):
     data: T | None = None
     evidence: list[Evidence] = Field(default_factory=list, max_length=500)
     partial: bool = False
+    # Set by ProviderGateway when the deterministic fallback provider supplied
+    # the payload. This stays inside the application boundary so callers can
+    # avoid presenting a stale snapshot as a live, date-sensitive answer.
+    used_fallback: bool = False
     error: ProviderError | None = None
     retrieved_at_utc: datetime
 

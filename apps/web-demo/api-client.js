@@ -291,11 +291,15 @@
     if (dateValue) query.set("date", dateValue);
     let response;
     try {
-      response = await fetch(endpoint(`/api/v1/highlights?${query.toString()}`), {
-        method: "GET",
-        headers: { Accept: "application/json" },
-        credentials: "include",
-      });
+      response = await withTimeout(15_000, (signal) => fetch(
+        endpoint(`/api/v1/highlights?${query.toString()}`),
+        {
+          method: "GET",
+          headers: { Accept: "application/json" },
+          credentials: "include",
+          signal,
+        },
+      ));
     } catch (cause) {
       const error = new Error("日期赛事连接暂时不可用。", { cause });
       error.network = true;

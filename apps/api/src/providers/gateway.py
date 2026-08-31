@@ -251,7 +251,7 @@ class ProviderGateway:
                 except Exception:
                     fallback_result = None
                 if isinstance(fallback_result, ProviderResult) and fallback_result.error is None:
-                    last = fallback_result
+                    last = fallback_result.model_copy(update={"used_fallback": True})
                     used_fallback = True
         if (
             last.error is None

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import httpx
 import pytest
 
 from apps.api.src.application.chat_use_case import ChatUseCase
 from apps.api.src.config import Settings
+from apps.api.src.domain.time_policy import FixedClock
 from apps.api.src.infrastructure.cache import InMemoryTTLCache
 from apps.api.src.main import create_app
 from apps.api.src.providers.fixture_provider import FixtureProvider
@@ -54,6 +57,30 @@ async def test_fixture_demo_date_populates_unscoped_today_projection() -> None:
     assert response.status_code == 200
     assert response.json()["date"] == "2026-06-12"
     assert len(response.json()["games"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_hybrid_fallback_is_not_presented_as_today() -> None:
+    """A live-provider outage must not turn an old snapshot into today's slate."""
+
+    primary = FixtureProvider(scenario="timeout")
+    fallback = FixtureProvider()
+    gateway = ProviderGateway(primary, fallback=fallback, max_retries=0)
+    clock = FixedClock(datetime(2026, 6, 12, 12, 0, tzinfo=UTC))
+    settings = Settings(public_data_mode="hybrid")
+    usecase = ChatUseCase(primary, gateway=gateway, clock=clock, settings=settings)
+    app = create_app(settings=settings, usecase=usecase)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(
+            "/api/v1/highlights",
+            params={"timezone": "Asia/Shanghai"},
+        )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "UPSTREAM_UNAVAILABLE"
 
 
 @pytest.mark.asyncio

@@ -88,6 +88,16 @@ class HighlightsService:
             GameFilters(date_range=date_range),
             budget=budget,
         )
+        # Hybrid mode may return a deterministic snapshot after the live
+        # provider is unavailable. That fallback is useful for historical
+        # review, but must not be presented as today's real schedule.
+        if getattr(result, "used_fallback", False) and day == local_today:
+            raise HighlightsProviderError(
+                "UPSTREAM_UNAVAILABLE",
+                "今日赛事暂时无法核验，请稍后重试。",
+                True,
+                503,
+            )
         if result.error is not None:
             kind = getattr(result.error.kind, "value", str(result.error.kind))
             mapping = {
@@ -466,6 +476,12 @@ class HighlightsService:
                 error = getattr(result, "error", None)
                 raw_games = getattr(result, "data", None)
                 partial = bool(getattr(result, "partial", False))
+                if bool(getattr(result, "used_fallback", False)):
+                    # A fixture fallback is not evidence that a live calendar
+                    # day is empty or populated. Keep it unknown so the UI
+                    # never disables/enables a date based on stale data.
+                    had_unknown = True
+                    continue
                 if error is not None or not isinstance(raw_games, list):
                     had_unknown = True
                     continue

@@ -1,5 +1,53 @@
 import { expect, test } from "@playwright/test";
 
+test("resolves today's Beijing date before painting the highlights rail", async ({ page }) => {
+  const today = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+  let requestedDate: string | null = null;
+  await page.route("**/healthz", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        status: "ok",
+        version: "v1",
+        mode: "hybrid",
+        dependencies: { session_store: "ok", cache: "ok", hermes: "ok" },
+        capabilities: { full_intelligence: true },
+      }),
+    });
+  });
+  await page.route("**/api/v1/highlights?*", async (route) => {
+    const url = new URL(route.request().url());
+    requestedDate = url.searchParams.get("date");
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        date: today,
+        timezone: "Asia/Shanghai",
+        games: [],
+        as_of_beijing: null,
+        evidence_state: "none",
+      }),
+    });
+  });
+
+  await page.goto("/");
+  await expect(page.locator("#highlights-empty.is-loading")).toBeVisible();
+  await expect(page.locator("#highlights-empty")).toContainText("正在拉取今日赛事");
+  await expect(page.locator("#featured-game")).toBeHidden();
+  await expect(page.locator("#highlights-empty")).toContainText("今天没有 NBA 比赛");
+  expect(requestedDate).toBe(today);
+  await expect(page.locator("#day-divider")).toContainText(today.replaceAll("-", "/"));
+  await expect(page.locator("#highlights-empty")).not.toContainText("2026-06-12");
+});
+
 test("shows recent five games and supports a custom history range", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("#connection-label")).toHaveText("API 就绪");
