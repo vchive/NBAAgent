@@ -162,6 +162,48 @@ def test_explicit_game_reference_is_not_overridden_by_shorthand() -> None:
     )
 
 
+def test_selected_game_ranked_stat_preserves_data_intent() -> None:
+    """A card-scoped ranking is a box-score query, not a generic follow-up."""
+
+    context = ConversationContext(
+        session_id=uuid4(),
+        active_game={
+            "kind": "GAME",
+            "canonical_id": "2026-finals-g4",
+            "display_name": "2025-26 总决赛 G4",
+        },
+        expires_at_utc=datetime(2026, 8, 28, tzinfo=UTC),
+    )
+    parsed = IntentParser().parse("这场比赛谁是得分第三的选手？", context)
+
+    assert parsed.intent.intent_name is IntentName.DATA
+    assert parsed.intent.metrics[0].name == "points"
+    assert parsed.intent.metrics[0].rank == 3
+    assert any(
+        item.kind is EntityKind.GAME and item.canonical_id == "2026-finals-g4"
+        for item in parsed.intent.entities
+    )
+
+
+def test_selected_game_tactical_question_preserves_tactical_intent() -> None:
+    context = ConversationContext(
+        session_id=uuid4(),
+        active_game={
+            "kind": "GAME",
+            "canonical_id": "2026-finals-g4",
+            "display_name": "2025-26 总决赛 G4",
+        },
+        expires_at_utc=datetime(2026, 8, 28, tzinfo=UTC),
+    )
+    parsed = IntentParser().parse("凯尔特人为什么能赢下这场比赛？", context)
+
+    assert parsed.intent.intent_name is IntentName.TACTICAL
+    assert any(
+        item.kind is EntityKind.GAME and item.canonical_id == "2026-finals-g4"
+        for item in parsed.intent.entities
+    )
+
+
 def test_each_period_clock_window_is_explicit_and_does_not_require_a_period_slot() -> None:
     parsed = IntentParser().parse("总决赛 G4 每节最后五秒发生了什么？")
     assert parsed.intent.clock_window is not None

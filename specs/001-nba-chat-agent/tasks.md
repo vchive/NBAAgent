@@ -331,3 +331,10 @@ zero Agent/tool calls, and timeout/repeated-tool cases fall back safely.
   `apps/api/src/application/chat_use_case.py`, `apps/api/src/application/highlights.py`,
   `apps/api/src/api/highlights_routes.py`, `apps/api/src/main.py`,
   `apps/web-demo/{app.js,api-client.js}`, and the corresponding tests/docs.
+
+## Phase 21: Selected-game answer quality regression
+
+- [X] T092 [US2/US4] Keep clicked-game questions on the verified game snapshot, preserve
+  ranking intent (for example “得分第三”), add bounded final-minute evidence to tactical
+  answers, and state missing terminal shooter/location fields without guessing; cover parser,
+  multi-turn, full-intelligence, HTTP, and browser regression gates.

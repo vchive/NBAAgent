@@ -115,6 +115,7 @@ async def test_contextual_matchup_and_last_shooter_questions_stay_on_selected_ga
     assert second.status == "completed"
     assert "对阵双方" in second.answer_markdown
     assert "雷霆" in second.answer_markdown and "凯尔特人" in second.answer_markdown
+    assert "暂无可核验的逐回合记录" not in second.answer_markdown
     third = await usecase.handle(
         {
             "session_id": first.session_id,
@@ -128,3 +129,41 @@ async def test_contextual_matchup_and_last_shooter_questions_stay_on_selected_ga
     # clarification, without requiring a particular missing-data wording.
     assert "出手者" in third.answer_markdown
     assert "出手位置字段" in third.answer_markdown
+
+
+@pytest.mark.asyncio
+async def test_selected_game_ranking_and_tactical_answers_use_verified_game_detail() -> None:
+    """Selected highlights must carry both stat ranking and late-game evidence."""
+
+    usecase = ChatUseCase(FixtureProvider())
+    selected = "2026-finals-g4"
+
+    ranked = await usecase.handle(
+        {"message": "这场比赛谁是得分第三的选手？", "selected_game_id": selected}
+    )
+    assert ranked.status == "completed"
+    assert "杰森·塔图姆" in ranked.answer_markdown
+    assert "27 分" in ranked.answer_markdown
+
+    tactical = await usecase.handle(
+        {"message": "凯尔特人为什么能赢下这场比赛？", "selected_game_id": selected}
+    )
+    assert tactical.status == "completed"
+    assert "108–104" in tactical.answer_markdown
+    assert "德里克·怀特" in tactical.answer_markdown
+    assert "31秒" in tactical.answer_markdown
+    assert "不能据此断言" in tactical.answer_markdown
+
+
+@pytest.mark.asyncio
+async def test_selected_game_direct_last_shot_answer_is_concise_and_bounded() -> None:
+    usecase = ChatUseCase(FixtureProvider())
+    result = await usecase.handle(
+        {"message": "最后谁投篮的，在什么位置？", "selected_game_id": "2026-finals-g4"}
+    )
+
+    assert result.status == "completed"
+    assert "终场标记" in result.answer_markdown
+    assert "谢伊·吉尔杰斯-亚历山大" in result.answer_markdown
+    assert "出手位置字段" in result.answer_markdown
+    assert "| 节次" not in result.answer_markdown

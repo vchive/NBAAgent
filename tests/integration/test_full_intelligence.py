@@ -177,6 +177,26 @@ async def test_agent_unavailable_falls_back_to_deterministic_path() -> None:
 
 
 @pytest.mark.asyncio
+async def test_full_mode_selected_game_uses_verified_path_before_agent_planning() -> None:
+    """A model must not replace the clicked card's verified game context."""
+
+    agent = FakeSmartAgent(answer_override="错误的自由回答")
+    usecase = ChatUseCase(FixtureProvider(), settings=settings(), agent_runtime=agent)
+    result = await usecase.handle(
+        {
+            "message": "雷霆对凯尔特人谁得分最高？",
+            "selected_game_id": "2026-finals-g4",
+            "intelligence_mode": "full",
+        }
+    )
+
+    assert result.status == "completed"
+    assert "杰伦·布朗" in result.answer_markdown
+    assert "32 分" in result.answer_markdown
+    assert agent.turns == []
+
+
+@pytest.mark.asyncio
 async def test_agent_receives_bounded_multi_turn_hint() -> None:
     agent = FakeSmartAgent()
     usecase = ChatUseCase(FixtureProvider(), settings=settings(), agent_runtime=agent)

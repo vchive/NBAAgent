@@ -448,6 +448,10 @@ class MetricRef(CanonicalModel):
     name: str = Field(min_length=1, max_length=100)
     unit: str | None = Field(default=None, max_length=40)
     scope: StatScope
+    # ``rank`` keeps an ordinal attached to the requested statistic (for
+    # example “得分第三”), rather than asking a renderer to infer it from
+    # the raw message or silently falling back to the points leader.
+    rank: int | None = Field(default=None, ge=1, le=100)
 
 
 class TimeWindow(CanonicalModel):

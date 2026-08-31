@@ -285,7 +285,15 @@ class TemplateComposer:
             ]
             if metric_rows:
                 metric_rows.sort(key=lambda row: row[1], reverse=True)
-                top_name, top_value = metric_rows[0]
+                requested_rank = next(
+                    (
+                        getattr(metric, "rank", None)
+                        for metric in getattr(intent, "metrics", [])
+                        if getattr(metric, "name", "") == requested_metric
+                        and getattr(metric, "rank", None) is not None
+                    ),
+                    None,
+                )
                 labels = {
                     "points": ("得分王", "得分最高", "分"),
                     "rebounds": ("篮板王", "篮板最多", "个"),
@@ -294,36 +302,98 @@ class TemplateComposer:
                     "field_goal_percentage": ("命中率最高", "命中率最高", "%"),
                 }
                 label, phrase, unit = labels[requested_metric]
-                text = f"{phrase}的是 **{top_name}**，{_num(top_value)} {unit}。"
-                blocks.append(
-                    AnswerBlock(
-                        type=AnswerBlockType.FACT,
-                        label=label,
-                        value=top_name,
-                        unit=f"{_num(top_value)} {unit}",
+                if requested_rank is not None:
+                    if requested_rank > len(metric_rows):
+                        text = (
+                            f"当前可核验的 {requested_metric} 记录不足 {requested_rank} 位，"
+                            "无法确认该排名。"
+                        )
+                        blocks.append(AnswerBlock(type=AnswerBlockType.WARNING, content=text))
+                        lines.append(text)
+                        metric_rows = []
+                    else:
+                        top_name, top_value = metric_rows[requested_rank - 1]
+                        ordinal_words = {
+                            1: "一",
+                            2: "二",
+                            3: "三",
+                            4: "四",
+                            5: "五",
+                            6: "六",
+                            7: "七",
+                            8: "八",
+                            9: "九",
+                            10: "十",
+                        }
+                        ordinal = ordinal_words.get(requested_rank, str(requested_rank))
+                        rank_label = f"{label.replace('王', '')}第{ordinal}名"
+                        text = (
+                            f"本场按{label.replace('王', '')}排序第 **{ordinal}** 位的是 "
+                            f"**{top_name}**，{_num(top_value)} {unit}。"
+                        )
+                        blocks.append(
+                            AnswerBlock(
+                                type=AnswerBlockType.FACT,
+                                label=rank_label,
+                                value=top_name,
+                                unit=f"{_num(top_value)} {unit}",
+                            )
+                        )
+                        lines.append(text)
+                        # An ordinal question is already fully answered by the
+                        # requested row. Avoid a noisy whole-table dump.
+                        metric_rows = []
+                else:
+                    top_name, top_value = metric_rows[0]
+                    text = f"{phrase}的是 **{top_name}**，{_num(top_value)} {unit}。"
+                    blocks.append(
+                        AnswerBlock(
+                            type=AnswerBlockType.FACT,
+                            label=label,
+                            value=top_name,
+                            unit=f"{_num(top_value)} {unit}",
+                        )
                     )
-                )
-                blocks.append(
-                    AnswerBlock(
-                        type=AnswerBlockType.TABLE,
-                        columns=["球员", "得分", "篮板", "助攻"],
-                        rows=[
-                            [
-                                line.subject.display_name,
-                                line.metrics.get("points"),
-                                line.metrics.get("rebounds"),
-                                line.metrics.get("assists"),
-                            ]
-                            for line in bundle.leaders
-                        ],
+                    lines.append(text)
+                if metric_rows:
+                    top_name, top_value = metric_rows[0]
+                    blocks.append(
+                        AnswerBlock(
+                            type=AnswerBlockType.TABLE,
+                            columns=["球员", "得分", "篮板", "助攻"],
+                            rows=[
+                                [
+                                    line.subject.display_name,
+                                    line.metrics.get("points"),
+                                    line.metrics.get("rebounds"),
+                                    line.metrics.get("assists"),
+                                ]
+                                for line in bundle.leaders
+                            ],
+                        )
                     )
-                )
-                lines.append(text)
 
         # Follow-up intents can still carry a PBP window (for example “那场最后
         # 5 秒”).  Render the event timeline whenever the deterministic derivation
         # supplied events, rather than relying solely on the top-level intent name.
-        if intent.intent_name.value == "PLAY_BY_PLAY" or getattr(derived, "events", None):
+        direct_last_shot_detail = any(
+            getattr(metric, "name", "") == "last_shot_detail"
+            for metric in getattr(intent, "metrics", [])
+        ) and getattr(intent, "clock_window", None) is None
+        # ``FOLLOW_UP`` is also used for ordinary shorthand such as “这场比
+        # 赛谁打谁”.  Only enter the replay renderer when the turn carries an
+        # actual event/window signal; otherwise a generic matchup answer would
+        # be polluted by a misleading “暂无逐回合记录” warning.
+        follow_up_replay = intent.intent_name.value == "FOLLOW_UP" and (
+            bool(getattr(derived, "events", None))
+            or getattr(intent, "clock_window", None) is not None
+            or any(
+                getattr(metric, "name", "")
+                in {"last_shot_detail", "shot_location", "layup"}
+                for metric in getattr(intent, "metrics", [])
+            )
+        )
+        if intent.intent_name.value == "PLAY_BY_PLAY" or follow_up_replay:
             events = list(getattr(derived, "events", []) or [])
             if events:
                 rows = []
@@ -334,44 +404,45 @@ class TemplateComposer:
                     "NONE": "—",
                     "UNKNOWN": "未标注",
                 }
-                for event in events:
-                    actor = event.shooter.display_name if event.shooter else "未标注"
-                    assister = event.assister.display_name if event.assister else "未标注"
-                    points = "—" if event.points is None else f"{event.points} 分"
-                    shot_type = shot_labels.get(
-                        getattr(getattr(event, "shot_type", None), "value", "UNKNOWN"),
-                        "未标注",
+                if not direct_last_shot_detail:
+                    for event in events:
+                        actor = event.shooter.display_name if event.shooter else "未标注"
+                        assister = event.assister.display_name if event.assister else "未标注"
+                        points = "—" if event.points is None else f"{event.points} 分"
+                        shot_type = shot_labels.get(
+                            getattr(getattr(event, "shot_type", None), "value", "UNKNOWN"),
+                            "未标注",
+                        )
+                        if event.home_score_after is None or event.away_score_after is None:
+                            score_after = "未标注"
+                        else:
+                            score_after = f"{event.home_score_after}–{event.away_score_after}"
+                        rows.append(
+                            [
+                                f"第{event.period}节",
+                                f"{float(event.clock_seconds_remaining):g}秒",
+                                actor,
+                                assister,
+                                shot_type,
+                                points,
+                                score_after,
+                            ]
+                        )
+                    blocks.append(
+                        AnswerBlock(
+                            type=AnswerBlockType.TABLE,
+                            columns=[
+                                "节次",
+                                "剩余时间",
+                                "出手者",
+                                "助攻者",
+                                "类型",
+                                "结果",
+                                "事件后比分",
+                            ],
+                            rows=rows,
+                        )
                     )
-                    if event.home_score_after is None or event.away_score_after is None:
-                        score_after = "未标注"
-                    else:
-                        score_after = f"{event.home_score_after}–{event.away_score_after}"
-                    rows.append(
-                        [
-                            f"第{event.period}节",
-                            f"{float(event.clock_seconds_remaining):g}秒",
-                            actor,
-                            assister,
-                            shot_type,
-                            points,
-                            score_after,
-                        ]
-                    )
-                blocks.append(
-                    AnswerBlock(
-                        type=AnswerBlockType.TABLE,
-                        columns=[
-                            "节次",
-                            "剩余时间",
-                            "出手者",
-                            "助攻者",
-                            "类型",
-                            "结果",
-                            "事件后比分",
-                        ],
-                        rows=rows,
-                    )
-                )
                 window = getattr(intent, "clock_window", None)
                 if getattr(window, "all_periods", False):
                     scope_text = "按每节结束前的时间窗口"
@@ -386,9 +457,10 @@ class TemplateComposer:
                     scope_text = f"按第{intent.period}节结束前的时间窗口"
                 else:
                     scope_text = "按全场结束前的时间窗口"
-                text = f"{scope_text}，共找到 **{len(events)} 个回合**。"
-                blocks.append(AnswerBlock(type=AnswerBlockType.TEXT, content=text))
-                lines.append(text)
+                if not direct_last_shot_detail:
+                    text = f"{scope_text}，共找到 **{len(events)} 个回合**。"
+                    blocks.append(AnswerBlock(type=AnswerBlockType.TEXT, content=text))
+                    lines.append(text)
                 event_lines = []
                 for event in events:
                     actor = event.shooter.display_name if event.shooter else "未标注球员"
@@ -408,7 +480,7 @@ class TemplateComposer:
                         f"第{event.period}节 {float(event.clock_seconds_remaining):g}秒："
                         f"{actor}，{points}，类型 {shot_type}，助攻者 {assister}，{score_after}"
                     )
-                if event_lines:
+                if event_lines and not direct_last_shot_detail:
                     detail = "；".join(event_lines) + "。"
                     blocks.append(AnswerBlock(type=AnswerBlockType.TEXT, content=detail))
                     lines.append(detail)
@@ -451,7 +523,9 @@ class TemplateComposer:
                 else:
                     final_shooter = getattr(final_event, "shooter", None)
                     if final_shooter is None:
-                        focus_parts.append("最后一条记录未标注出手者，最后一投暂无可核验结果。")
+                        focus_parts.append(
+                            "最后一条记录未标注出手者（该记录为终场标记），该条最后一投暂无可核验出手者"
+                        )
                         # Some feeds append a zero-clock terminal marker after
                         # the final shot.  Keep the marker's missing actor
                         # explicit for provenance, while also surfacing the
@@ -478,30 +552,18 @@ class TemplateComposer:
                             )
                             focus_parts.append(
                                 f"终场前最近一条有明确出手者的记录是 **{identified_shooter}**，"
-                                f"第{last_identified.period}节 {identified_clock:g}秒的{identified_type}"
+                                f"第{last_identified.period}节还剩 {identified_clock:g} 秒的{identified_type}"
                             )
                     else:
                         focus_parts.append(
                             f"最后一条记录的出手者是 **{final_shooter.display_name}**"
                         )
 
-                    raw_shot_type = getattr(getattr(final_event, "shot_type", None), "value", None)
-                    if raw_shot_type in shot_labels_by_value:
-                        focus_parts.append(f"投篮类型为{shot_labels_by_value[raw_shot_type]}")
-                    else:
-                        focus_parts.append("最后一条记录未标注投篮类型，暂无可核验结果。")
-
-                    final_assister = getattr(final_event, "assister", None)
-                    if final_assister is None:
-                        focus_parts.append("最后一条记录未标注助攻者")
-                    else:
-                        focus_parts.append(f"助攻者是 **{final_assister.display_name}**")
-
                 if score_fact is not None and isinstance(score_fact.value, Mapping):
                     home = score_fact.value.get("home")
                     away = score_fact.value.get("away")
                     if home is not None and away is not None:
-                        focus_parts.append(f"最新记录后的比分为 **{home}–{away}**")
+                        focus_parts.append(f"终场比分为 **{home}–{away}**")
                     else:
                         focus_parts.append("最新记录后的比分暂无可核验结果。")
                 else:
@@ -523,27 +585,79 @@ class TemplateComposer:
                 blocks.append(AnswerBlock(type=AnswerBlockType.WARNING, content=lines[-1]))
 
         if intent.intent_name.value in {"TACTICAL", "RECAP"}:
-            # Reasons are selected from already verified facts; no model arithmetic.
-            reasons: list[str] = []
-            for fact in facts.facts:
-                if fact.verification in {
-                    VerificationState.VERIFIED,
-                    VerificationState.PARTIAL,
-                } and fact.predicate in {"score", "points", "winner"}:
-                    reasons.append(
-                        f"{fact.subject.display_name}：{fact.predicate} {_num(fact.value)}"
-                    )
-                if len(reasons) >= 3:
-                    break
-            conclusion = "从已核验的比赛记录看，关键差异在于执行质量和末段回合控制。"
-            blocks.append(AnswerBlock(type=AnswerBlockType.ANALYSIS, content=conclusion))
-            lines.append(conclusion)
-            if reasons:
-                reason_text = "；".join(reasons)
-                blocks.append(
-                    AnswerBlock(type=AnswerBlockType.TEXT, content=f"**事实依据**：{reason_text}。")
+            # Keep analysis tied to the bounded, verified final-minute PBP
+            # projection.  It explains the result without inventing an
+            # unobserved scheme such as a pick-and-roll coverage or rotation.
+            events = list(getattr(derived, "events", []) or [])
+            winner = None
+            if game is not None and game.home_score is not None and game.away_score is not None:
+                winner = game.home if game.home_score > game.away_score else game.away
+            candidate_events = [
+                event
+                for event in events
+                if getattr(event, "shooter", None) is not None
+                and getattr(event, "points", None) not in {None, 0}
+                and event.home_score_after is not None
+                and event.away_score_after is not None
+            ]
+            # The PBP contract does not carry player-to-team membership, so
+            # choose the scoring event that created the winner's largest
+            # recorded lead rather than guessing from a player's name.  In
+            # the G4 fixture this selects White's 31-second three (106–101),
+            # while remaining valid for any home or away winner.
+            def winner_margin(event: Any) -> int:
+                if winner is None or game is None:
+                    return -10_000
+                home_margin = event.home_score_after - event.away_score_after
+                return (
+                    home_margin
+                    if winner.canonical_id == game.home.canonical_id
+                    else -home_margin
                 )
-                lines.append(f"**事实依据**：{reason_text}。")
+
+            winner_event = max(
+                candidate_events,
+                key=lambda event: (
+                    winner_margin(event),
+                    -float(event.clock_seconds_remaining),
+                ),
+                default=None,
+            )
+            if winner is not None and winner_event is not None:
+                event_score = (
+                    f"，将比分带到 **{winner_event.home_score_after}–{winner_event.away_score_after}**"
+                    if winner_event.home_score_after is not None
+                    and winner_event.away_score_after is not None
+                    else ""
+                )
+                fact_text = (
+                    f"第四节还剩 {float(winner_event.clock_seconds_remaining):g}秒，"
+                    f"**{winner_event.shooter.display_name}** 得到 {winner_event.points} 分"
+                    f"{event_score}。"
+                )
+                analysis = (
+                    f"{winner.display_name} 能赢下比赛，已核验的直接依据是末节这一回合后"
+                    "建立并守住了领先优势。"
+                )
+                blocks.append(AnswerBlock(type=AnswerBlockType.ANALYSIS, content=analysis))
+                blocks.append(AnswerBlock(type=AnswerBlockType.TEXT, content=f"**事实依据**：{fact_text}"))
+                blocks.append(
+                    AnswerBlock(
+                        type=AnswerBlockType.TEXT,
+                        content="这份数据没有完整战术落位或防守轮转记录，不能据此断言具体战术细节。",
+                    )
+                )
+                lines.extend(
+                    [
+                        analysis,
+                        f"**事实依据**：{fact_text}",
+                        "这份数据没有完整战术落位或防守轮转记录，不能据此断言具体战术细节。",
+                    ]
+                )
+            else:
+                message = "当前只有终场结果，缺少可核验的关键回合，不能据此判断具体战术原因。"
+                blocks.append(AnswerBlock(type=AnswerBlockType.WARNING, content=message))
+                lines.append(message)
 
         if not game and not getattr(derived, "facts", None):
             generic = [

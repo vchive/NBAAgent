@@ -145,6 +145,30 @@ _ORDINAL_DIGITS = {
 }
 
 
+def _ranked_stat_rank(text: str) -> int | None:
+    """Extract a small, explicit ordinal attached to a box-score metric.
+
+    This intentionally does not interpret generic standings wording such as
+    “东部第三”.  It only accepts an ordinal immediately following an
+    individual-game statistic, so “这场得分第三是谁” remains a typed game
+    data lookup instead of becoming a vague follow-up.
+    """
+
+    match = re.search(
+        r"(?:得分|篮板|助攻|三分|命中率)\s*(?:第\s*)?"
+        r"([1-9]\d?|[一二三四五六七八九十])(?:\s*(?:名|位|个|的))?",
+        text,
+    )
+    if match is None:
+        return None
+    value = match.group(1)
+    if value.isdigit():
+        return int(value)
+    if value == "十":
+        return 10
+    return _ORDINAL_DIGITS.get(value)
+
+
 def _contains_alias(text: str, alias: str) -> bool:
     if alias.isascii() and re.fullmatch(r"[A-Za-z0-9 .'-]+", alias):
         return (
@@ -286,6 +310,7 @@ def resolve_entities(text: str) -> list[EntityRef]:
 
 def _metric_refs(text: str, *, scope: StatScope = StatScope.GAME) -> list[MetricRef]:
     metrics: list[MetricRef] = []
+    ranked_stat = _ranked_stat_rank(text)
     if any(token in text for token in ("什么时候", "几点开打", "几点开始", "开赛时间", "比赛时间")):
         metrics.append(MetricRef(name="start_time", unit=None, scope=scope))
     # Play-by-play feeds in the first release carry the actor/type/score but
@@ -296,6 +321,11 @@ def _metric_refs(text: str, *, scope: StatScope = StatScope.GAME) -> list[Metric
         metrics.append(MetricRef(name="shot_location", unit=None, scope=scope))
     if "上篮" in text:
         metrics.append(MetricRef(name="layup", unit=None, scope=scope))
+    if any(
+        token in text
+        for token in ("最后谁投", "最后谁出手", "最后一投", "最后一次投篮", "最后那个球")
+    ):
+        metrics.append(MetricRef(name="last_shot_detail", unit=None, scope=scope))
     mapping = (
         ("得分", "points", "分"),
         ("篮板", "rebounds", "个"),
@@ -313,7 +343,25 @@ def _metric_refs(text: str, *, scope: StatScope = StatScope.GAME) -> list[Metric
     )
     for token, name, unit in mapping:
         if token in text:
-            metrics.append(MetricRef(name=name, unit=unit, scope=scope))
+            metrics.append(
+                MetricRef(
+                    name=name,
+                    unit=unit,
+                    scope=scope,
+                    rank=(
+                        ranked_stat
+                        if name
+                        in {
+                            "points",
+                            "rebounds",
+                            "assists",
+                            "three_pointers",
+                            "field_goal_percentage",
+                        }
+                        else None
+                    ),
+                )
+            )
     if not metrics:
         metrics.append(MetricRef(name="points", unit="分", scope=scope))
     return metrics
@@ -604,6 +652,7 @@ class IntentParser:
                     entities.append(active)
 
         lower = message.lower()
+        ranked_stat = _ranked_stat_rank(message)
         clock_window_hint = _parse_clock_window(message)
         event_focus = any(
             token in message
@@ -708,7 +757,29 @@ class IntentParser:
         )
         is_schedule = any(
             token in message
-            for token in ("赛程", "赛果", "排名", "战绩", "比赛", "系列赛", "大比分")
+            for token in ("赛程", "赛果", "排名", "战绩", "系列赛", "大比分", "比赛结果")
+        ) or (
+            "比赛" in message
+            and any(
+                token in message
+                for token in (
+                    "有",
+                    "哪些",
+                    "哪几",
+                    "几场",
+                    "赛程",
+                    "赛果",
+                    "结果",
+                    "什么时候",
+                    "赢了",
+                    "谁赢",
+                    "获胜",
+                    "赢家",
+                    "胜者",
+                    "取胜",
+                )
+            )
+            and ranked_stat is None
         )
         # A follow-up may omit an explicit pronoun and only narrow the clock
         # window (e.g. after selecting G4, “每节最后五秒”).  Inherit the
@@ -807,6 +878,13 @@ class IntentParser:
             and context.active_game
             and not explicit_game
             and not (is_pbp and event_focus)
+            # “这场得分第三” and “为什么能赢下这场” are both fully
+            # specified queries.  Preserve their DATA/TACTICAL semantics so
+            # the planner can load the box score/PBP instead of rendering a
+            # generic matchup follow-up.
+            and ranked_stat is None
+            and not is_tactical
+            and not is_recap
         ):
             category, intent_name = Category.H, IntentName.FOLLOW_UP
 

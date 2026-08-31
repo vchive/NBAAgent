@@ -66,7 +66,7 @@ from apps.api.src.domain.models import (
     VerificationState,
 )
 from apps.api.src.domain.safety import OutputGuard, OutputGuardError, SafetyGuard
-from apps.api.src.domain.time_policy import SystemClock, format_beijing, now_utc
+from apps.api.src.domain.time_policy import SystemClock, format_beijing, game_end_window, now_utc
 from apps.api.src.domain.verifier import (
     verify_bundle,
     verify_game,
@@ -353,6 +353,19 @@ class ChatUseCase:
             getattr(self.gateway, "provider", None),
             getattr(self.gateway, "fallback", None),
         ):
+            # FixtureProvider loads its snapshot lazily on the first provider
+            # operation.  A card id can arrive before any chat retrieval, so
+            # initialise that server-owned snapshot here; otherwise the
+            # selection is reduced to an id-only reference and team questions
+            # accidentally fall through to season aggregates.
+            loader = getattr(owner, "_load", None)
+            if callable(loader):
+                try:
+                    loader()
+                except Exception:
+                    # Selection must remain best-effort.  The normal provider
+                    # path will report an unavailable/not-found result later.
+                    pass
             for item in list(getattr(owner, "_games", []) or []):
                 if isinstance(item, Game) and item.game_id == value:
                     return item
@@ -711,7 +724,18 @@ class ChatUseCase:
                 context = context.model_copy(update={"active_game": selected_ref})
             telemetry.transition("CONTEXT_RESOLVED")
             agent_attempted = False
-            if not _internal_tool and self._full_agent_requested(req):
+            # A clicked replay card is already a server-resolved, immutable
+            # game scope.  Letting the planning model paraphrase or replace it
+            # can produce exactly the failure the UI must avoid: a response
+            # about a different fixture.  Selected-game facts therefore use
+            # the verified deterministic path in every intelligence mode; the
+            # full Agent remains available for open-ended, unscoped questions.
+            selected_game_verified = selected_ref is not None
+            if (
+                not _internal_tool
+                and not selected_game_verified
+                and self._full_agent_requested(req)
+            ):
                 agent_attempted = True
                 await _emit(
                     sink,
@@ -1284,7 +1308,7 @@ class ChatUseCase:
                 telemetry=telemetry,
                 user_message=req.message,
                 intelligence_mode=req.intelligence_mode,
-                force_template=_internal_tool or agent_attempted,
+                force_template=_internal_tool or agent_attempted or selected_game_verified,
                 preserve_fallback=agent_attempted,
             )
             try:
@@ -2221,11 +2245,22 @@ class ChatUseCase:
             if parsed.intent.intent_name is IntentName.PLAY_BY_PLAY and data.plays:
                 derived = derive_pbp(
                     data.plays,
-                    parsed.intent.clock_window
-                    or __import__(
-                        "apps.api.src.domain.time_policy", fromlist=["game_end_window"]
-                    ).game_end_window(5),
+                    parsed.intent.clock_window or game_end_window(5),
                     period=parsed.intent.period,
+                )
+            elif parsed.intent.intent_name in {IntentName.TACTICAL, IntentName.RECAP} and data.plays:
+                # “为什么能赢” cannot be grounded by a final score alone.
+                # Add a bounded final-minute event window to the same verified
+                # box-score bundle, without claiming tactical detail that the
+                # public PBP record does not contain.
+                pbp = derive_pbp(data.plays, game_end_window(60))
+                totals = derive_game_totals(data.game, [fact.fact_id for fact in facts.facts])
+                leaders = derive_leaders(data)
+                derived = DerivedResult(
+                    facts=[*totals.facts, *leaders.facts, *pbp.facts],
+                    missing=[*totals.missing, *leaders.missing, *pbp.missing],
+                    partial=totals.partial or leaders.partial or pbp.partial,
+                    events=pbp.events,
                 )
             elif (
                 parsed.intent.metrics
@@ -2458,8 +2493,6 @@ class ChatUseCase:
                 )
             return stats, None, None, None
         if hasattr(data, "events"):
-            from apps.api.src.domain.time_policy import game_end_window
-
             derived = derive_pbp(
                 data, parsed.intent.clock_window or game_end_window(5), period=parsed.intent.period
             )
