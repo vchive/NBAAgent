@@ -148,6 +148,30 @@ class TemplateComposer:
 
         if game is None and bundle is not None:
             game = bundle.game
+        requested_game_metrics = {
+            getattr(metric, "name", "")
+            for metric in getattr(intent, "metrics", [])
+        }
+        unavailable_game_metrics = requested_game_metrics & {"venue", "game_duration"}
+        # Venue and elapsed duration are not part of the normalized first
+        # release game payload. Answer those typed requests explicitly and
+        # stop before the generic score/leader renderer can append unrelated
+        # facts. This keeps a missing field honest and prevents a question
+        # such as “在哪儿举办” from becoming a points-leader answer.
+        if game is not None and unavailable_game_metrics and not multi_game_schedule:
+            matchup = f"**{game.away.display_name}** vs **{game.home.display_name}**"
+            labels = []
+            if "venue" in unavailable_game_metrics:
+                labels.append("场馆/举办地点")
+            if "game_duration" in unavailable_game_metrics:
+                labels.append("比赛实际时长")
+            label_text = "和".join(labels)
+            missing_text = (
+                f"这场比赛（{matchup}）的{label_text}"
+                "不在当前公开比赛记录中，暂时无法核验。"
+            )
+            blocks.append(AnswerBlock(type=AnswerBlockType.WARNING, content=missing_text))
+            lines.append(missing_text)
         if game is not None and intent.intent_name.value in {
             "DATA",
             "SCHEDULE_RESULT",
@@ -155,7 +179,7 @@ class TemplateComposer:
             "RECAP",
             "TACTICAL",
             "FOLLOW_UP",
-        } and not multi_game_schedule:
+        } and not multi_game_schedule and not unavailable_game_metrics:
             if intent.intent_name.value == "FOLLOW_UP":
                 matchup = (
                     f"对阵双方：**{game.away.display_name}** vs **{game.home.display_name}**。"

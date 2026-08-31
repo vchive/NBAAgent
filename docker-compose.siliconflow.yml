@@ -1,11 +1,18 @@
 # Opt-in direct SiliconFlow BYOK profile.
 # The base docker-compose.yml remains fixture/mock/offline. This override is
 # intentionally separate so a normal `docker compose up` never requires a key.
-# This override inherits PUBLIC_DATA_MODE=fixture: it enables only model wording,
-# not live NBA data. Put it behind authentication/rate limiting before exposing it.
+# This override enables the bounded public-data adapter as well as model
+# wording. Put it behind the public/auth profile (or equivalent
+# authentication/rate limiting) before exposing it.
 services:
   nba-agent:
     environment:
+      PUBLIC_DATA_MODE: hybrid
+      # SiliconFlow profile should query the current Beijing date.  The base
+      # fixture profile pins 2026-06-12 for offline demos; override it here so
+      # the public/live deployment never presents that stale snapshot as
+      # today's games.
+      HIGHLIGHTS_DEMO_DATE: ""
       LLM_MODE: live
       RUNTIME_PROFILE: hybrid
       HERMES_LITE_MODE: embedded_agent

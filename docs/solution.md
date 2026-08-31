@@ -42,8 +42,8 @@ Key 只能通过 secret 文件或受控环境注入，不能进入仓库、镜�
 验证工具调用、事实守卫和 live 时延。
 在隔离实现交付前，`HERMES_LITE_MODE=sidecar` 会保持 not-ready/模板回退，不会绕过边界改走
 进程内直连。
-`LLM_MODE=live` 与 `PUBLIC_DATA_MODE` 独立：仅使用 `docker-compose.siliconflow.yml` 时事实仍为
-fixture；公开交付的 `make deploy-live` 会叠加 public profile，先尝试 hybrid 公开数据，再按
+`LLM_MODE=live` 与 `PUBLIC_DATA_MODE` 独立：`docker-compose.siliconflow.yml` 已启用 bounded
+hybrid 公开数据；公开交付的 `make deploy-live` 还会叠加 public profile，先尝试 hybrid 公开数据，再按
 hybrid/full 请求模式选择确定性通道或官方 Agent。若启用真实 key，服务必须置于认证反代/VPN/受限安全组之后，
 并设置供应商额度/限流；未认证的公网端口会带来额度消耗风险。
 

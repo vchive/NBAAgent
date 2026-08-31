@@ -204,6 +204,29 @@ def test_selected_game_tactical_question_preserves_tactical_intent() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("question", "metric"),
+    [
+        ("这场比赛在哪儿举办的？", "venue"),
+        ("这场比赛时长多久？", "game_duration"),
+    ],
+)
+def test_game_metadata_questions_are_typed_instead_of_falling_through_to_stats(
+    question: str, metric: str
+) -> None:
+    context = ConversationContext(
+        session_id=uuid4(),
+        active_game={
+            "kind": "GAME",
+            "canonical_id": "2026-finals-g4",
+            "display_name": "2025-26 总决赛 G4",
+        },
+        expires_at_utc=datetime(2026, 8, 28, tzinfo=UTC),
+    )
+    parsed = IntentParser().parse(question, context)
+    assert any(item.name == metric for item in parsed.intent.metrics)
+
+
 def test_each_period_clock_window_is_explicit_and_does_not_require_a_period_slot() -> None:
     parsed = IntentParser().parse("总决赛 G4 每节最后五秒发生了什么？")
     assert parsed.intent.clock_window is not None

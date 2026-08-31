@@ -37,7 +37,8 @@ FULL_INTELLIGENCE_ENABLED=true
 
 ```bash
 make deploy-live
-# 仅在本机使用 fixture 数据验证模型时可运行：make docker-up-silicon
+# 仅在本机验证 SiliconFlow 配置时可运行（仍启用 bounded hybrid 数据）：
+# make docker-up-silicon
 ```
 
 验证本地配置（不会进行付费模型探活）：

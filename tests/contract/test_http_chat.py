@@ -62,6 +62,30 @@ async def test_selected_game_id_is_forwarded_to_sync_and_sse_chat() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    ["这场比赛在哪儿举办的？", "这场比赛时长多久？"],
+)
+async def test_missing_game_metadata_does_not_fall_through_to_unrelated_leader(
+    message: str,
+) -> None:
+    app = create_app()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/v1/chat",
+            json={"message": message, "selected_game_id": "2026-finals-g4"},
+        )
+
+    assert response.status_code == 200
+    answer = response.json()["answer_markdown"]
+    assert "暂时无法核验" in answer
+    assert "得分王" not in answer
+    assert "杰伦·布朗" not in answer
+
+
+@pytest.mark.asyncio
 async def test_red_line_short_circuits_provider_and_cache() -> None:
     app = create_app()
     usecase = app.state.chat_use_case

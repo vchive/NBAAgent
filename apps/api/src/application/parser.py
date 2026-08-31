@@ -313,6 +313,37 @@ def _metric_refs(text: str, *, scope: StatScope = StatScope.GAME) -> list[Metric
     ranked_stat = _ranked_stat_rank(text)
     if any(token in text for token in ("什么时候", "几点开打", "几点开始", "开赛时间", "比赛时间")):
         metrics.append(MetricRef(name="start_time", unit=None, scope=scope))
+    # The first-release game contract does not yet carry venue or elapsed
+    # duration fields. Keep these as explicit typed metrics so the composer
+    # can state that limitation instead of falling through to unrelated box
+    # score facts (for example answering a venue question with a points
+    # leader).
+    if any(
+        token in text
+        for token in (
+            "在哪儿举办",
+            "在哪里举办",
+            "在哪举办",
+            "比赛地点",
+            "举办地",
+            "场馆",
+            "球馆",
+            "主场在哪里",
+        )
+    ):
+        metrics.append(MetricRef(name="venue", unit=None, scope=scope))
+    if any(
+        token in text
+        for token in (
+            "比赛时长",
+            "比赛打了多久",
+            "打了多久",
+            "持续多久",
+            "多长时间",
+            "比赛用了多长时间",
+        )
+    ):
+        metrics.append(MetricRef(name="game_duration", unit=None, scope=scope))
     # Play-by-play feeds in the first release carry the actor/type/score but
     # do not guarantee shot coordinates or a court-zone label.  Preserve a
     # typed marker so the renderer can state that limitation explicitly when a
