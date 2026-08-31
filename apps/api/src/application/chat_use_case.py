@@ -547,7 +547,7 @@ class ChatUseCase:
                 answer = (
                     f"当前配置的模型是 **{configured_model}**，{availability}。"
                     "默认 hybrid 只在战术分析和赛后复盘中使用模型；开启全智能模式后，"
-                    "官方 Hermes Agent 会理解问题并选择受控 NBA 工具。比分、统计、赛程和"
+                    "智能分析会理解问题并选择受控 NBA 工具。比分、统计、赛程和"
                     "逐回合事实仍由工具后的核验与确定性逻辑生成。这个配置查询本身不会再次调用大模型。"
                 )
                 draft = DraftAnswer(
@@ -589,7 +589,7 @@ class ChatUseCase:
                 await _emit(
                     sink,
                     "run.status",
-                    {"stage": "agent_planning", "text": "Hermes 正在理解问题"},
+                    {"stage": "agent_planning", "text": "正在理解问题"},
                 )
                 before_agent = self._gateway_counters()
                 try:
@@ -709,7 +709,7 @@ class ChatUseCase:
                         await _emit(
                             sink,
                             "run.status",
-                            {"stage": "agent_completing", "text": "Hermes 已完成回答"},
+                            {"stage": "agent_completing", "text": "已完成回答"},
                         )
                         telemetry.composition_mode = "agent"
                         telemetry.composition_status = "used"

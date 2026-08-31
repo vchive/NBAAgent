@@ -95,9 +95,9 @@
 
   const STORAGE_KEY = "courtside-demo-session-v1";
   const STAGE_COPY = {
-    agent_planning: "Hermes 正在理解问题",
+    agent_planning: "正在理解问题",
     agent_tool: "正在调用受控 NBA 数据工具",
-    agent_completing: "Hermes 已完成回答",
+    agent_completing: "已完成回答",
     agent_fallback: "正在回退到已核验事实链路",
     parsing: "正在解析问题",
     retrieving: "正在核对比赛数据",
@@ -517,7 +517,7 @@
     if (el.intelligenceHelp) {
       el.intelligenceHelp.textContent = el.intelligenceMode.disabled
         ? "服务端未开启"
-        : "Hermes 全量推理";
+        : "全量智能分析";
     }
   }
 
@@ -1191,9 +1191,9 @@
         ? ` · ${Math.round(Number(value.latency_ms) / 100) / 10}s`
         : "";
       return {
-        text: `Hermes Agent · 已调用工具${latency}`,
+        text: `智能分析 · 已调用工具${latency}`,
         className: "agent",
-        title: "Hermes 已通过受控 NBA 工具完成回答",
+        title: "已通过受控 NBA 数据工具完成回答",
       };
     }
     if (mode === "model" && status === "used") {

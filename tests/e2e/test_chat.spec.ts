@@ -61,7 +61,7 @@ test("full intelligence acceptance prompts render Agent provenance", async ({ pa
     };
     const sse = [
       `event: run.started\ndata: ${JSON.stringify({ request_id: requestId, session_id: sessionId })}\n\n`,
-      `event: run.status\ndata: ${JSON.stringify({ stage: "agent_planning", text: "Hermes 正在理解问题" })}\n\n`,
+      `event: run.status\ndata: ${JSON.stringify({ stage: "agent_planning", text: "正在理解问题" })}\n\n`,
       `event: message.delta\ndata: ${JSON.stringify({ text: answer })}\n\n`,
       `event: message.completed\ndata: ${JSON.stringify(completed)}\n\n`,
     ].join("");
@@ -79,7 +79,8 @@ test("full intelligence acceptance prompts render Agent provenance", async ({ pa
     await expect(page.locator(".dynamic-message.assistant-message").last()).toContainText(
       prompt === "nihao" ? "您好" : "2026-09-06"
     );
-    await expect(page.locator(".composition-chip.agent").last()).toContainText("Hermes Agent");
+    await expect(page.locator(".composition-chip.agent").last()).toContainText("智能分析");
+    await expect(page.locator("body")).not.toContainText("Hermes");
   }
   expect(requestBodies).toHaveLength(3);
   expect(requestBodies.every((body) => body.intelligence_mode === "full")).toBeTruthy();
