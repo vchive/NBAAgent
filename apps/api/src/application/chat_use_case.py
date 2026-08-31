@@ -1286,6 +1286,16 @@ class ChatUseCase:
             (item for item in intent.entities if item.kind in {EntityKind.PLAYER, EntityKind.TEAM}),
             None,
         )
+        metric_names = {
+            str(getattr(metric, "name", "")).casefold()
+            for metric in getattr(intent, "metrics", [])
+        }
+        if "news" in metric_names or "background" in metric_names:
+            subject_name = subject.display_name if subject is not None else "该范围"
+            return self.template_composer.no_data(
+                message=f"暂未找到 **{subject_name}** 的相关新闻或背景资料。",
+                follow_up="可以换一个日期、球队或球员，我再继续查找。",
+            )
         if intent.intent_name is IntentName.DATA and subject is not None:
             return self.template_composer.no_data(
                 message=f"暂未找到 **{subject.display_name}** 的公开统计记录。",
@@ -1641,8 +1651,15 @@ class ChatUseCase:
     async def _call_plan(self, plan: QueryPlan, budget: RequestBudget, token: CancelToken):
         token.raise_if_cancelled()
         method = getattr(self.gateway, plan.operation)
+        kwargs = dict(plan.kwargs)
+        # News/background is the one chat operation where an empty live
+        # archive is commonly caused by a provider's limited historical index.
+        # In a hybrid profile, allow the bounded local snapshot to fill that
+        # gap; ProviderGateway keeps the opt-in scoped to this operation.
+        if plan.operation == "search_news":
+            kwargs.setdefault("fallback_on_empty", True)
         return await self._await_with_cancel(
-            method(*plan.args, **plan.kwargs, budget=budget), token
+            method(*plan.args, **kwargs, budget=budget), token
         )
 
     @staticmethod

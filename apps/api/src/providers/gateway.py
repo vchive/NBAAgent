@@ -82,6 +82,7 @@ class ProviderGateway:
         *args: Any,
         ttl_seconds: int | None = None,
         budget: RequestBudget,
+        fallback_on_empty: bool = False,
         **kwargs: Any,
     ) -> ProviderResult[Any]:
         # Admission/deadline checks happen before *any* cache read.  This keeps
@@ -227,9 +228,14 @@ class ProviderGateway:
         assert last is not None
         # Hybrid mode can provide a deterministic/local source while the live
         # source is unavailable.  Do this only after bounded retries and only
-        # on a typed upstream error; an authoritative empty response is not
-        # silently replaced by stale fixture data.
-        if last.error is not None and self.fallback is not None:
+        # on a typed upstream error by default; an authoritative empty
+        # response is not silently replaced by stale fixture data.  Callers
+        # such as historical highlights/news may explicitly opt in when an
+        # empty live archive is known to be an incomplete view of the bounded
+        # demo snapshot.
+        empty_result = last.error is None and (last.data is None or last.data == [])
+        should_fallback = last.error is not None or (fallback_on_empty and empty_result)
+        if should_fallback and self.fallback is not None:
             fallback_method = getattr(self.fallback, operation, None)
             if fallback_method is not None and budget.remaining_ms() > 0:
                 try:
@@ -251,7 +257,9 @@ class ProviderGateway:
                 except Exception:
                     fallback_result = None
                 if isinstance(fallback_result, ProviderResult) and fallback_result.error is None:
-                    last = fallback_result.model_copy(update={"used_fallback": True})
+                    last = fallback_result.model_copy(
+                        update={"used_fallback": True, "partial": True}
+                    )
                     used_fallback = True
         if (
             last.error is None
@@ -267,8 +275,20 @@ class ProviderGateway:
             )
         return last
 
-    async def search_games(self, filters: Any, budget: RequestBudget) -> ProviderResult[Any]:
-        return await self._invoke("search_games", filters, budget=budget, ttl_seconds=45)
+    async def search_games(
+        self,
+        filters: Any,
+        budget: RequestBudget,
+        *,
+        fallback_on_empty: bool = False,
+    ) -> ProviderResult[Any]:
+        return await self._invoke(
+            "search_games",
+            filters,
+            budget=budget,
+            ttl_seconds=45,
+            fallback_on_empty=fallback_on_empty,
+        )
 
     async def get_game_summary(self, game_id: str, budget: RequestBudget) -> ProviderResult[Any]:
         return await self._invoke("get_game_summary", game_id, budget=budget, ttl_seconds=300)
@@ -314,9 +334,19 @@ class ProviderGateway:
     async def get_history(self, query: Any, budget: RequestBudget) -> ProviderResult[Any]:
         return await self._invoke("get_history", query, budget=budget, ttl_seconds=86_400)
 
-    async def search_news(self, query: Any, budget: RequestBudget) -> ProviderResult[Any]:
+    async def search_news(
+        self,
+        query: Any,
+        budget: RequestBudget,
+        *,
+        fallback_on_empty: bool = False,
+    ) -> ProviderResult[Any]:
         return await self._invoke(
-            "search_news", query, budget=budget, ttl_seconds=self.news_ttl_seconds
+            "search_news",
+            query,
+            budget=budget,
+            ttl_seconds=self.news_ttl_seconds,
+            fallback_on_empty=fallback_on_empty,
         )
 
     def counters(self) -> dict[str, int]:

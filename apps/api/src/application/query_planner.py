@@ -86,7 +86,17 @@ class QueryPlanner:
                 filters = GameFilters(
                     season=intent.season, team_ids=[team.canonical_id] if team else []
                 )
-                return QueryPlan("search_games", (filters,), description="查找相关比赛")
+                return QueryPlan(
+                    "search_games",
+                    (filters,),
+                    # A live scoreboard may return an empty off-season archive
+                    # even though the bounded historical snapshot can ground
+                    # a general tactical/recap answer.  This opt-in is
+                    # consumed by ProviderGateway and does not affect normal
+                    # schedule queries.
+                    kwargs={"fallback_on_empty": True},
+                    description="查找相关比赛",
+                )
             return QueryPlan("get_game_summary", (game.canonical_id,), description="读取比赛摘要")
         # ``news`` is represented as a metric marker rather than a new intent
         # enum so the public category mapping remains backwards compatible.

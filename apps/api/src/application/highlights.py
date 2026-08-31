@@ -172,7 +172,7 @@ class HighlightsService:
             EvidenceState.NONE
             if not public_games
             else EvidenceState.PARTIAL
-            if result.partial
+            if result.partial or getattr(result, "used_fallback", False)
             else EvidenceState.VERIFIED
         )
         as_of = format_beijing(result.retrieved_at_utc) if public_games else None
@@ -309,7 +309,9 @@ class HighlightsService:
                 had_unknown = True
                 continue
             had_success = True
-            had_unknown = had_unknown or bool(result.partial)
+            had_unknown = had_unknown or bool(result.partial) or bool(
+                getattr(result, "used_fallback", False)
+            )
             if isinstance(result.retrieved_at_utc, datetime):
                 retrieved.append(result.retrieved_at_utc)
             for game in result.data:
