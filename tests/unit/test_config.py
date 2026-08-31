@@ -62,6 +62,7 @@ def test_official_agent_settings_are_bounded_and_version_locked() -> None:
     )
     settings.validate()
     assert settings.agent_package_version == "0.19.0"
+    assert settings.agent_reasoning_effort == "none"
 
     with pytest.raises(ValueError, match="AGENT_MAX_ITERATIONS"):
         Settings(agent_max_iterations=5).validate()
@@ -69,3 +70,5 @@ def test_official_agent_settings_are_bounded_and_version_locked() -> None:
         Settings(agent_max_tool_calls=0).validate()
     with pytest.raises(ValueError, match="locked Hermes version"):
         Settings(agent_package_version="latest").validate()
+    with pytest.raises(ValueError, match="AGENT_REASONING_EFFORT"):
+        Settings(agent_reasoning_effort="ultra").validate()

@@ -57,6 +57,20 @@ class FakeSmartAgent:
         )
 
 
+class WrongToolAgent(FakeSmartAgent):
+    async def run(self, turn, *, tool_runner, cancel):
+        observation = dict(await tool_runner("nba_schedule", {"date_expression": "下周"}))
+        return AgentTurnResult(
+            status=RuntimeStatus.OK,
+            answer_markdown=observation["answer_markdown"],
+            evidence_state=observation["evidence_state"],
+            observations=[observation],
+            tool_calls=[AgentToolCall("nba_schedule", "hash", "no_data", 1)],
+            latency_ms=1,
+            iteration_count=1,
+        )
+
+
 def settings() -> Settings:
     return Settings(
         full_intelligence_enabled=True,
@@ -176,3 +190,39 @@ async def test_agent_receives_bounded_multi_turn_hint() -> None:
     )
     assert agent.turns[1].context_hint is not None
     assert "上轮摘要" in agent.turns[1].context_hint
+
+
+@pytest.mark.asyncio
+async def test_wrong_schedule_tool_for_recent_pbp_falls_back_to_verified_replay() -> None:
+    usecase = ChatUseCase(
+        FixtureProvider(), settings=settings(), agent_runtime=WrongToolAgent()
+    )
+    result = await usecase.handle(
+        {"message": "最近一场比赛的关键回合是什么？", "intelligence_mode": "full"}
+    )
+    assert result.status == "completed"
+    assert "2 个回合" in result.answer_markdown
+    assert result.composition["mode"] == "fallback"
+    assert usecase.telemetry.latest().fallback_reason == "agent_tool_mismatch"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "question",
+    [
+        "杜兰特近期出场次数",
+        "凯尔特人为什么能限制对手的挡拆？",
+        "最近的 NBA 新闻是什么？",
+    ],
+)
+async def test_wrong_schedule_tool_does_not_answer_unrelated_question(question: str) -> None:
+    """A schedule observation must not be accepted for another query type."""
+
+    usecase = ChatUseCase(
+        FixtureProvider(), settings=settings(), agent_runtime=WrongToolAgent()
+    )
+    result = await usecase.handle({"message": question, "intelligence_mode": "full"})
+
+    assert result.composition["mode"] == "fallback"
+    assert usecase.telemetry.latest().fallback_reason == "agent_tool_mismatch"
+    assert "2026-09-07 至 2026-09-13" not in result.answer_markdown

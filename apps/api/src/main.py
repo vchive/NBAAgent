@@ -71,8 +71,28 @@ def create_app(*, settings: Settings | None = None, usecase: ChatUseCase | None 
     # dataclass in tests/deploy code may bypass that constructor path.
     config.validate()
     _validate_capacity_limits(config)
-    app = FastAPI(title="NBA Chat Agent", version="v1", docs_url="/docs", redoc_url=None)
+    # API documentation is useful during local development, but exposing
+    # OpenAPI on the public interview endpoint would reveal internal routes
+    # and wire fields that are intentionally hidden from end users. Keep the
+    # public/production profiles closed while retaining the local developer
+    # experience.
+    public_profile = str(getattr(config, "app_env", "local")).lower() in {
+        "public_demo",
+        "production",
+        "prod",
+    }
+    app = FastAPI(
+        title="NBA Chat Agent",
+        version="v1",
+        docs_url=None if public_profile else "/docs",
+        redoc_url=None,
+        openapi_url=None if public_profile else "/openapi.json",
+    )
     app.state.settings = config
+    # Server-owned map of games exposed by the highlights projection. Chat
+    # requests may refer to a selected card by ID; resolving that ID here
+    # prevents the browser from supplying untrusted team/score metadata.
+    app.state.game_registry = {}
     app.state.auth_manager = AuthManager(
         password=getattr(config, "app_password", ""),
         password_file=getattr(config, "app_password_file", ""),
@@ -95,12 +115,26 @@ def create_app(*, settings: Settings | None = None, usecase: ChatUseCase | None 
             max_retries=config.provider_max_retries,
             news_ttl_seconds=getattr(config, "ddg_cache_ttl_seconds", 300),
         )
-        usecase = ChatUseCase(provider, settings=config, gateway=gateway)
+        usecase = ChatUseCase(
+            provider,
+            settings=config,
+            gateway=gateway,
+            game_registry=app.state.game_registry,
+        )
         app.state.provider = provider
         app.state.fallback_provider = fallback
     else:
         app.state.provider = getattr(usecase, "provider", None)
         app.state.fallback_provider = None
+        # Keep injected use cases (tests/embedding) on the same registry used
+        # by the highlights routes so a selected card can still scope chat.
+        try:
+            existing_registry = getattr(usecase, "game_registry", None)
+            if isinstance(existing_registry, dict) and existing_registry:
+                app.state.game_registry.update(existing_registry)
+            usecase.game_registry = app.state.game_registry
+        except (AttributeError, TypeError):
+            pass
     app.state.chat_use_case = usecase
     app.include_router(http_router)
     app.include_router(sse_router)

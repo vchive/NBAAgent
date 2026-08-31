@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 from apps.api.src.application.chat_use_case import ChatUseCase
+from apps.api.src.application.highlights import HighlightsService
 from apps.api.src.config import Settings
 from apps.api.src.domain.time_policy import FixedClock
 from apps.api.src.infrastructure.cache import InMemoryTTLCache
@@ -140,6 +141,33 @@ async def test_highlights_recent_returns_latest_five_games() -> None:
         "2026-finals-g3",
         "2026-finals-g2",
     ]
+
+
+@pytest.mark.asyncio
+async def test_hybrid_recent_fills_offseason_from_snapshot_without_long_live_scan() -> None:
+    """A public off-season review still returns the bounded recent-five view."""
+
+    primary = FixtureProvider(scenario="empty")
+    # Mirror the live ESPN adapter's per-request calendar-slice capability.
+    primary.max_date_slices = 7
+    fallback = FixtureProvider()
+    gateway = ProviderGateway(primary, fallback=fallback, max_retries=0)
+    clock = FixedClock(datetime(2026, 8, 31, 12, 0, tzinfo=UTC))
+    service = HighlightsService(gateway, clock=clock)
+
+    result = await service.recent(limit=5, timezone_name="Asia/Shanghai")
+
+    assert [game.game_id for game in result.games] == [
+        "2026-finals-g4",
+        "2026-demo-den-gsw",
+        "2026-demo-lal-nyk",
+        "2026-finals-g3",
+        "2026-finals-g2",
+    ]
+    assert result.evidence_state == "partial"
+    # The live path only scans the short window; it must not fan out across
+    # the entire 120-day lookback before consulting the bounded snapshot.
+    assert primary.operation_calls.get("search_games", 0) <= 4
 
 
 @pytest.mark.asyncio

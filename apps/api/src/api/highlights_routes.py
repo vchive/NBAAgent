@@ -63,7 +63,11 @@ async def highlights_availability(
             503,
             retryable=True,
         )
-    service = HighlightsService(gateway, clock=getattr(usecase, "clock", None))
+    service = HighlightsService(
+        gateway,
+        clock=getattr(usecase, "clock", None),
+        game_registry=getattr(request.app.state, "game_registry", None),
+    )
     try:
         zone = validate_timezone(timezone_name)
         timezone_name = zone.key
@@ -124,7 +128,11 @@ async def highlights_recent(
             503,
             retryable=True,
         )
-    service = HighlightsService(gateway, clock=getattr(usecase, "clock", None))
+    service = HighlightsService(
+        gateway,
+        clock=getattr(usecase, "clock", None),
+        game_registry=getattr(request.app.state, "game_registry", None),
+    )
     try:
         zone = validate_timezone(timezone_name)
         configured_demo = _fixture_demo_date(request)
@@ -182,7 +190,11 @@ async def highlights_range(
         end = date.fromisoformat(to_date)
     except (ValueError, TypeError):
         return _error_response("INVALID_PAYLOAD", "日期或时区格式不正确。", 400)
-    service = HighlightsService(gateway, clock=getattr(usecase, "clock", None))
+    service = HighlightsService(
+        gateway,
+        clock=getattr(usecase, "clock", None),
+        game_registry=getattr(request.app.state, "game_registry", None),
+    )
     try:
         result = await service.for_range(start, end, timezone_name=zone.key)
     except FutureHighlightsDateError:
@@ -223,7 +235,11 @@ async def highlights(
             503,
             retryable=True,
         )
-    service = HighlightsService(gateway, clock=getattr(usecase, "clock", None))
+    service = HighlightsService(
+        gateway,
+        clock=getattr(usecase, "clock", None),
+        game_registry=getattr(request.app.state, "game_registry", None),
+    )
     try:
         zone = validate_timezone(timezone_name)
         timezone_name = zone.key
@@ -278,7 +294,11 @@ async def highlight_detail(
         )
     if not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", game_id):
         return _error_response("INVALID_PAYLOAD", "比赛标识格式不正确。", 400)
-    service = HighlightsService(gateway, clock=getattr(usecase, "clock", None))
+    service = HighlightsService(
+        gateway,
+        clock=getattr(usecase, "clock", None),
+        game_registry=getattr(request.app.state, "game_registry", None),
+    )
     try:
         timezone_name = validate_timezone(timezone_name).key
         return await service.detail(game_id, timezone_name=timezone_name)

@@ -1512,6 +1512,7 @@
       message: run.message,
       clientMessageId: run.clientMessageId,
       intelligenceMode: run.intelligenceMode,
+      selectedGameId: run.selectedGameId || null,
     };
     if (response.status !== "failed") {
       state.contextRequest = { message: run.message, clientMessageId: run.clientMessageId };
@@ -1630,8 +1631,8 @@
       };
     }
 
-    const contextShorthand = /那场|最后那个球|上一条|刚才/i.test(text);
-    if (contextShorthand && !state.contextRequest) {
+    const contextShorthand = /这场|那场|最后那个球|上一条|刚才/i.test(text);
+    if (contextShorthand && !state.contextRequest && !state.activeGame) {
       return {
         ...base,
         status: "needs_clarification",
@@ -1643,16 +1644,36 @@
       };
     }
 
-    if (contextShorthand && state.contextRequest) {
+    if (contextShorthand && (state.contextRequest || state.activeGame)) {
+      const selected = state.activeGame;
+      const matchup = selected
+        ? `${selected.away_name || "客队"} 对 ${selected.home_name || "主队"}`
+        : "2025-26 总决赛 G4";
+      if (selected && /什么时候|几点|开赛时间|比赛时间/i.test(text)) {
+        return {
+          ...base,
+          status: "completed",
+          answer_markdown: `${matchup}于 **${formatGameStart(selected.start_utc)}**（北京时间）开赛。`,
+          blocks: [{ type: "fact", label: "开赛时间", value: formatGameStart(selected.start_utc), unit: "北京时间" }],
+          follow_up: "还可以问我这场比赛的得分王或关键回合。",
+        };
+      }
       return {
         ...base,
         status: "completed",
-        answer_markdown: "我沿用上一轮的 G4 比赛上下文：凯尔特人以 108–104 击败雷霆，系列赛大比分为 3–1。",
-        blocks: [
-          { type: "text", content: "已沿用上一轮确定的比赛：**2025-26 总决赛 G4**。" },
-          { type: "fact", label: "当前上下文", value: "BOS vs OKC", unit: "FINALS · G4" },
-          { type: "fact", label: "终场比分", value: "108–104", unit: "BOS 胜" },
-        ],
+        answer_markdown: selected
+          ? `我沿用当前选中的 ${matchup}：${selected.home_name || "主队"} ${selected.home_score ?? "—"}–${selected.away_score ?? "—"} ${selected.away_name || "客队"}。`
+          : "我沿用上一轮的 G4 比赛上下文：凯尔特人以 108–104 击败雷霆，系列赛大比分为 3–1。",
+        blocks: selected
+          ? [
+            { type: "text", content: `已沿用当前选中的比赛：**${matchup}**。` },
+            { type: "fact", label: "终场比分", value: `${selected.home_score ?? "—"}–${selected.away_score ?? "—"}`, unit: `${selected.home_abbreviation || "主队"} 主场` },
+          ]
+          : [
+            { type: "text", content: "已沿用上一轮确定的比赛：**2025-26 总决赛 G4**。" },
+            { type: "fact", label: "当前上下文", value: "BOS vs OKC", unit: "FINALS · G4" },
+            { type: "fact", label: "终场比分", value: "108–104", unit: "BOS 胜" },
+          ],
         follow_up: "请回放全场最后 5 秒发生了什么？",
       };
     }
@@ -1745,6 +1766,7 @@
       started: false,
       branch: null,
       intelligenceMode,
+      selectedGameId: state.activeGame?.game_id ? String(state.activeGame.game_id) : null,
     };
     state.run = run;
     setComposerBusy(true);
@@ -1809,6 +1831,7 @@
       live: true,
       abortController: controller,
       intelligenceMode,
+      selectedGameId: state.activeGame?.game_id ? String(state.activeGame.game_id) : null,
     };
     state.run = run;
     setComposerBusy(true);
@@ -1829,6 +1852,7 @@
       sessionId: state.sessionId,
       clientMessageId,
       intelligenceMode,
+      selectedGameId: run.selectedGameId,
       signal: controller.signal,
       onEvent: (eventName, payload) => handleStreamEvent(eventName, payload),
     }).then(() => {
@@ -1928,6 +1952,7 @@
       reuseUser: true,
       clientMessageId: state.lastRequest.clientMessageId,
       intelligenceMode: state.lastRequest.intelligenceMode || state.intelligenceMode,
+      selectedGameId: state.lastRequest.selectedGameId || state.activeGame?.game_id || null,
       // Let the offline demo demonstrate a successful recovery while still
       // preserving the same idempotency key exposed by the real contract.
       forceSuccess: state.retryCount > 0,
@@ -2284,9 +2309,19 @@
     applyGameToHud(game);
     renderPbp(defaultPbpPeriod(state.activePbp));
     loadGameDetail(game);
+    // Keep quick prompts aligned with the card the user just selected; a
+    // prompt generated for the previous game must not silently query a new
+    // card with stale team names.
+    if (el.recommendations && !el.recommendations.hidden) {
+      renderRecommendations({ follow_up: null });
+    }
     if (options.announce) {
       const matchup = `${game.away_name || "客队"} · ${game.home_name || "主队"}`;
-      showToast(state.activePbp ? `已切换至 ${matchup}，可查看文字回放` : `已切换至 ${matchup}，该场暂无可用文字回放`);
+      showToast(
+        state.activePbp
+          ? `已切换至 ${matchup}，聊天将关联本场，可查看文字回放`
+          : `已切换至 ${matchup}，聊天将关联本场，该场暂无可用文字回放`,
+      );
     }
     return true;
   }
@@ -2334,7 +2369,7 @@
     const listLabel = options.listLabel
       || (mode === "history" ? (state.historyView === "range" ? "时间区间比赛" : "最近 5 场比赛") : "当日比赛");
     if (el.highlightsTitle) {
-      el.highlightsTitle.textContent = mode === "history" ? historyTitle : "今日看点";
+      el.highlightsTitle.textContent = mode === "history" ? historyTitle : "今日赛事";
     }
     if (el.dayDivider) {
       const dividerText = mode === "history"
@@ -2377,6 +2412,9 @@
     applyGameToHud(game);
     renderPbp(defaultPbpPeriod(state.activePbp));
     loadGameDetail(game);
+    if (el.recommendations && !el.recommendations.hidden && String(previousId || "") !== String(game.game_id)) {
+      renderRecommendations({ follow_up: null });
+    }
   }
 
   function sortedHistoryGames(games) {

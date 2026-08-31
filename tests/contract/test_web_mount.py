@@ -2,6 +2,7 @@
 
 from fastapi.testclient import TestClient
 
+from apps.api.src.config import Settings
 from apps.api.src.main import create_app
 
 
@@ -56,3 +57,12 @@ def test_web_demo_keeps_stream_status_hidden_until_a_request_starts() -> None:
     assert styles.status_code == 200
     assert ".stream-status[hidden]" in styles.text
     assert "display: none" in styles.text[styles.text.index(".stream-status[hidden]"):]
+
+
+def test_public_profile_does_not_expose_openapi_or_swagger() -> None:
+    with TestClient(create_app(settings=Settings(app_env="public_demo"))) as client:
+        docs = client.get("/docs")
+        schema = client.get("/openapi.json")
+
+    assert docs.status_code == 404
+    assert schema.status_code == 404

@@ -23,6 +23,7 @@ from apps.api.src.domain.time_policy import (
     period_end_window,
     previous_completed_season,
     resolve_relative_date,
+    resolve_relative_date_range,
     season_label_for_date,
     select_pbp_window,
     to_utc,
@@ -85,6 +86,18 @@ def test_parse_and_resolve_relative_season_dates() -> None:
     assert resolve_relative_date("昨天赛果", clock) == date(2026, 6, 11)
     assert resolve_relative_date("2025-10-31 赛程", clock) == date(2025, 10, 31)
     assert resolve_relative_date("下周", clock) is None
+
+
+def test_schedule_relative_ranges_are_half_open_and_timezone_aware() -> None:
+    clock = FixedClock(datetime(2026, 8, 30, 10, tzinfo=UTC))  # Sunday Beijing
+    next_week = resolve_relative_date_range("下周有比赛吗", clock)
+    assert next_week is not None
+    assert next_week.start_inclusive == datetime(2026, 8, 30, 16, tzinfo=UTC)
+    assert next_week.end_exclusive == datetime(2026, 9, 6, 16, tzinfo=UTC)
+    future = resolve_relative_date_range("未来 3 天有比赛吗", clock)
+    assert future is not None
+    assert future.start_inclusive == datetime(2026, 8, 29, 16, tzinfo=UTC)
+    assert future.end_exclusive == datetime(2026, 9, 1, 16, tzinfo=UTC)
 
 
 def test_game_end_window_chooses_overtime_final_period() -> None:

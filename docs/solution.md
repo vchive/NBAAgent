@@ -38,6 +38,8 @@ SafetyGuard/会话上下文之后、规则 Parser 之前进入有界 Agent loop�
 当前实现是 API 进程内受控演示形态，`sidecar` 隔离部署尚未交付；生产应迁移到独立 sidecar。
 Key 只能通过 secret 文件或受控环境注入，不能进入仓库、镜像、前端、telemetry 或日志；
 面试演示的隐藏输入步骤见 [`docs/byok.md`](byok.md)。
+默认 `AGENT_REASONING_EFFORT=none`，并向固定模型显式关闭隐藏思考；如调整推理档位，需重新
+验证工具调用、事实守卫和 live 时延。
 在隔离实现交付前，`HERMES_LITE_MODE=sidecar` 会保持 not-ready/模板回退，不会绕过边界改走
 进程内直连。
 `LLM_MODE=live` 与 `PUBLIC_DATA_MODE` 独立：仅使用 `docker-compose.siliconflow.yml` 时事实仍为
@@ -116,11 +118,14 @@ DuckDuckGo 只作为新闻、背景和长尾问题的补充候选源。适配器
    超时、超预算或输出不合规时回退确定性通道。SafetyGuard、Provider、Verifier、Derivation
    和 Output Guard 的事实与安全所有权不变。
 
+   如果模型选择了与问题类型不符的工具（例如用赛程空结果回答球员数据或战术问题），服务端
+   会拒绝该 Agent 结果并回退到对应的核验流程，避免“工具调用成功但答非所问”。
+
    同步和 SSE 的完成 envelope 还带有 provider-neutral 的 `composition` 标记：客观题为
    `deterministic`，官方 Agent 回答被接受时为 `agent/used`，旧 composer 为 `model/used`，
-   超时、不可用或未启用时为 `fallback`。页面会显示 “Hermes Agent · 已调用工具” 或回退
-   状态，让评审者能直接确认某次回答是否
-   走过模型链路，同时不暴露模型密钥、端点、提示词或内部证据字段。
+   超时、不可用或未启用时为 `fallback`。页面只显示“智能分析/已核验事实”等产品化状态，
+   不展示内部运行时名称、模型密钥、端点、提示词或内部证据字段；评审者可通过脱敏完成
+   envelope 和内部 telemetry 确认是否走过模型链路。
 
 同步 HTTP 和 POST SSE 共用同一个用例；SSE 只在核验完成后发送事实增量，完成事件与同步
 响应使用同一最终 envelope。断线会取消下游任务；重复 `client_message_id` 在同一会话
@@ -177,7 +182,7 @@ API + 零依赖静态 Web Demo（后续可替换为 React/Next.js）、ESPN-firs
 查询 5 秒内的目标均是可替换的工程决策，不是题目硬性承诺。上线前必须重新核查公开数据
 源的条款、robots、访问频率和稳定性。
 
-“今日看点”与“精彩回顾”是左侧 scoreboard/highlights 的日期投影，不会占用聊天的
+“今日赛事”与“精彩回顾”是左侧 scoreboard/highlights 的日期投影，不会占用聊天的
 `HISTORY` 意图：精彩回顾默认调用 `GET /api/v1/highlights/recent?limit=5`，自定义时间调用
 `GET /api/v1/highlights/range`（最多连续 93 天）；查询期间前端显示明确的“正在拉取”状态，
 未来日期、逆序日期和超长区间会被拒绝，空区间显示明确空状态。月历可用性接口仍保留给需要

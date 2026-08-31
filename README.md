@@ -7,7 +7,7 @@ Driven Development）流程推进。
 
 已完成需求规格、研究记录、HLD、LLD、数据模型、接口契约和验收指南，并打通了默认
 fixture/mock 模式的 FastAPI Agent：同步聊天、POST SSE、会话隔离、事实核验、PBP/系列赛
-确定性推导、安全短路、重试/缓存和“赛事焦点/历史回顾”日期投影均可离线运行。FastAPI
+确定性推导、安全短路、重试/缓存和“赛事焦点/精彩回顾”日期投影均可离线运行。FastAPI
 在仓库包含 Web Demo 时会从同一端口托管 UI，因此可以直接通过一个 `IP:端口` 访问完整演示。
 ESPN、受控 DuckDuckGo 搜索与官方 Hermes Agent 均为可替换适配器，默认关闭，不需要任何凭据。
 

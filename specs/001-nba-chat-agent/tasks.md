@@ -168,7 +168,7 @@ without conflating it with the chat `HISTORY` intent.
 
 ## Phase 11: Access control for public demo
 
-- [X] T061 Add shared-password settings, Docker secret loader, opaque HttpOnly Cookie sessions,
+- [X] T089 Add shared-password settings, Docker secret loader, opaque HttpOnly Cookie sessions,
   constant-time comparison, login-failure rate limiting, and fail-closed configuration in
   `apps/api/src/config.py` and `apps/api/src/infrastructure/auth.py`.
 - [X] T062 Add login/status/logout routes and protect chat/highlights APIs while keeping static
@@ -276,3 +276,58 @@ zero Agent/tool calls, and timeout/repeated-tool cases fall back safely.
   conservative terminal-`买` → `吗` correction for unambiguous schedule questions in
   `apps/api/src/application/chat_use_case.py`; add integration coverage in
   `tests/integration/test_full_intelligence.py`.
+
+## Phase 15: Regression convergence
+
+- [X] T083 [US1] Resolve `本周`、`下周` and bounded `未来 N 天` schedule scopes as
+  Beijing-time half-open date ranges per FR-009 and SC-015 (partial) in
+  `apps/api/src/domain/time_policy.py` and `apps/api/src/application/parser.py`, with parser/time
+  policy regression coverage.
+- [X] T084 [US2] Resolve “最近一场比赛的关键回合” through the latest completed game and its
+  verified play-by-play without requiring a manual card selection per FR-016 and US2/AC2
+  (partial) in `apps/api/src/application/{parser.py,query_planner.py,chat_use_case.py}`, with
+  unit and integration coverage.
+- [X] T085 [US7] Add a validated low-latency reasoning policy for the fixed SiliconFlow Hermes
+  runtime, disable unnecessary model thinking by default, and verify the official runtime request
+  contract plus live timeout/fallback behavior per SC-007 and SC-016 (partial) in
+  `apps/api/src/{config.py,infrastructure/hermes_agent_runtime.py}`, deployment configuration,
+  documentation, and contract tests.
+
+## Phase 16: Agent tool-result consistency
+
+- [X] T086 [US7] Reject a successful full-mode answer when its observations are semantically
+  unrelated to a high-risk play-by-play request (for example, an empty schedule result for
+  “最近一场关键回合”), then fall back to the verified deterministic path per FR-016 and SC-016
+  (partial) in `apps/api/src/application/chat_use_case.py`, with integration regression coverage.
+
+## Phase 17: General Agent observation consistency
+
+- [X] T087 [US7] Extend Agent observation relevance checks from play-by-play-only to schedule,
+  news, player/stat and tactical/recap questions; reject schedule/news-only observations for an
+  unrelated request and fall back to the deterministic fact pipeline. Add integration coverage for
+  wrong-tool answers and document the guard in the feature artifacts.
+
+## Phase 18: Provider composition regression
+
+- [X] T088 [US1] Preserve wrapped provider calendar-slice capabilities and optional standings/news
+  call signatures so the public search composition can classify empty calendar days correctly and
+  keep gateway fallbacks compatible per FR-027/FR-029 (partial); add provider-composition contract
+  coverage in `apps/api/src/providers/search_augmented_provider.py` and
+  `tests/contract/test_provider_composition.py`.
+
+## Phase 19: Recent highlights latency and completeness
+
+- [X] T090 [US1] Bound live recent-game scanning to a short window, fill an off-season recent-five
+  projection from the configured historical snapshot, and filter the result to completed games per
+  FR-027/SC-011 (partial); add hybrid regression coverage in
+  `apps/api/src/application/highlights.py` and `tests/contract/test_highlights.py`.
+
+## Phase 20: Selected-game chat context convergence
+
+- [X] T091 [US4/US6] Propagate the selected highlights card as a validated `selected_game_id` on
+  sync/SSE chat requests; resolve it through the server-owned highlights registry, bind shorthand
+  and matching-team questions to that game, preserve explicit-game precedence, and add API,
+  integration, and time-query coverage in `apps/api/src/domain/models.py`,
+  `apps/api/src/application/chat_use_case.py`, `apps/api/src/application/highlights.py`,
+  `apps/api/src/api/highlights_routes.py`, `apps/api/src/main.py`,
+  `apps/web-demo/{app.js,api-client.js}`, and the corresponding tests/docs.

@@ -48,6 +48,10 @@ class QueryPlanner:
         metric_names = {str(getattr(metric, "name", "")).casefold() for metric in intent.metrics}
         if intent.intent_name in {IntentName.PLAY_BY_PLAY}:
             if game is None:
+                if getattr(intent, "recent_game", False):
+                    return QueryPlan(
+                        "get_recent_play_by_play", description="查找最近一场比赛并读取逐回合"
+                    )
                 return None
             return QueryPlan("get_play_by_play", (game.canonical_id,), description="读取逐回合事件")
         if intent.intent_name in {IntentName.FACT_CHECK, IntentName.TACTICAL, IntentName.RECAP}:

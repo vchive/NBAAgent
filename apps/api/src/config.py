@@ -121,6 +121,10 @@ class Settings:
     agent_max_tool_result_bytes: int = 16_384
     agent_max_output_bytes: int = 20_000
     agent_package_version: str = "0.19.0"
+    # This bounded three-tool workflow does not need a hidden reasoning pass
+    # by default. Make the policy explicit so a provider default cannot spend
+    # most of the request deadline before returning a tool decision.
+    agent_reasoning_effort: str = "none"
     max_request_bytes: int = 32_768
     max_event_bytes: int = 16_384
     max_response_bytes: int = 262_144
@@ -210,6 +214,7 @@ class Settings:
             agent_max_tool_result_bytes=_int("AGENT_MAX_TOOL_RESULT_BYTES", 16_384),
             agent_max_output_bytes=_int("AGENT_MAX_OUTPUT_BYTES", 20_000),
             agent_package_version=os.getenv("AGENT_PACKAGE_VERSION", "0.19.0").strip(),
+            agent_reasoning_effort=os.getenv("AGENT_REASONING_EFFORT", "none").lower(),
             max_request_bytes=_int("MAX_REQUEST_BYTES", 32_768),
             max_event_bytes=_int("MAX_EVENT_BYTES", 16_384),
             max_response_bytes=_int("MAX_RESPONSE_BYTES", 262_144),
@@ -325,6 +330,10 @@ class Settings:
             raise ValueError("AGENT_MAX_OUTPUT_BYTES must be <= 65536")
         if self.agent_package_version != "0.19.0":
             raise ValueError("AGENT_PACKAGE_VERSION must match the locked Hermes version 0.19.0")
+        if self.agent_reasoning_effort not in {"none", "minimal", "low", "medium", "high"}:
+            raise ValueError(
+                "AGENT_REASONING_EFFORT must be none, minimal, low, medium, or high"
+            )
         if not self.espn_base_url:
             raise ValueError("ESPN_BASE_URL must not be empty")
         if not self.espn_allowed_hosts:

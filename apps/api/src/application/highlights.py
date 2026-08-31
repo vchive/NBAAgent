@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import MutableMapping
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -22,6 +23,7 @@ from apps.api.src.domain.models import (
     Game,
     GameBundle,
     GameFilters,
+    GameStatus,
     PlayEvent,
     PlayEventType,
     ShotType,
@@ -48,6 +50,12 @@ MAX_AVAILABILITY_DAYS = 31
 # daily provider requests from the public demo.
 MAX_HIGHLIGHTS_RANGE_DAYS = 93
 RECENT_HIGHLIGHTS_LOOKBACK_DAYS = 120
+# A live scoreboard adapter usually needs one bounded request per provider
+# date.  Scanning the full 120-day off-season window can consume the endpoint
+# deadline before it reaches the last completed games.  In hybrid deployments
+# scan a short, current window first, then use the explicitly configured local
+# historical snapshot to fill the remaining recent-five slots.
+RECENT_LIVE_LOOKBACK_DAYS = 21
 
 
 class HighlightsProviderError(RuntimeError):
@@ -60,9 +68,25 @@ class HighlightsProviderError(RuntimeError):
 
 
 class HighlightsService:
-    def __init__(self, gateway: Any, *, clock: Any | None = None) -> None:
+    def __init__(
+        self,
+        gateway: Any,
+        *,
+        clock: Any | None = None,
+        game_registry: MutableMapping[str, Game] | None = None,
+    ) -> None:
         self.gateway = gateway
         self.clock = clock
+        self.game_registry = game_registry
+
+    def _remember_games(self, games: Any) -> None:
+        """Keep typed highlight games available for a subsequent chat turn."""
+
+        if self.game_registry is None:
+            return
+        for game in list(games or []):
+            if isinstance(game, Game):
+                self.game_registry[game.game_id] = game
 
     def _now(self) -> datetime:
         if self.clock is None:
@@ -167,6 +191,7 @@ class HighlightsService:
             )
             raise HighlightsProviderError(code, message, retryable, status_code)
         games = result.data or []
+        self._remember_games(games)
         public_games = [self._public_game(game) for game in games if isinstance(game, Game)]
         evidence_state = (
             EvidenceState.NONE
@@ -223,13 +248,78 @@ class HighlightsService:
         zone = validate_timezone(timezone_name)
         end_day = reference_day or self._now().astimezone(zone).date()
         start_day = end_day - timedelta(days=RECENT_HIGHLIGHTS_LOOKBACK_DAYS - 1)
-        return await self._range(
-            start_day,
+        fallback = getattr(self.gateway, "fallback", None)
+        live_start = (
+            max(start_day, end_day - timedelta(days=RECENT_LIVE_LOOKBACK_DAYS - 1))
+            if fallback is not None
+            else start_day
+        )
+        live_result = await self._range(
+            live_start,
             end_day,
             timezone_name=zone.key,
             limit=limit,
             newest_first=True,
-            max_days=RECENT_HIGHLIGHTS_LOOKBACK_DAYS,
+            max_days=(
+                RECENT_LIVE_LOOKBACK_DAYS
+                if fallback is not None
+                else RECENT_HIGHLIGHTS_LOOKBACK_DAYS
+            ),
+            final_only=True,
+        )
+        if fallback is None or len(live_result.games) >= limit:
+            return live_result
+
+        fallback_method = getattr(fallback, "search_games", None)
+        if fallback_method is None:
+            return live_result
+        first = local_date_range(start_day, zone.key)
+        last = local_date_range(end_day, zone.key)
+        date_range = DateRange(
+            start_inclusive=first.start_inclusive,
+            end_exclusive=last.end_exclusive,
+        )
+        budget = RequestBudget(
+            self._now().replace(microsecond=0) + timedelta(seconds=3),
+            max_provider_operations=2,
+            max_retries_per_operation=0,
+            clock=self.clock,
+        )
+        try:
+            snapshot = await fallback_method(
+                GameFilters(date_range=date_range, status=GameStatus.FINAL),
+                budget=budget,
+            )
+        except Exception:
+            return live_result
+        if snapshot.error is not None or not isinstance(snapshot.data, list):
+            return live_result
+
+        combined = {game.game_id: game for game in live_result.games}
+        for game in snapshot.data:
+            if not isinstance(game, Game) or game.status is not GameStatus.FINAL:
+                continue
+            game_day = game.start_utc.astimezone(zone).date()
+            if start_day <= game_day <= end_day:
+                self._remember_games([game])
+                public = self._public_game(game)
+                combined.setdefault(public.game_id, public)
+        games = sorted(combined.values(), key=lambda item: item.start_utc, reverse=True)[:limit]
+        if len(games) == len(live_result.games):
+            return live_result
+        fallback_as_of = (
+            format_beijing(snapshot.retrieved_at_utc)
+            if isinstance(snapshot.retrieved_at_utc, datetime)
+            else None
+        )
+        as_of_values = [value for value in (live_result.as_of_beijing, fallback_as_of) if value]
+        return HighlightsRangeResponse(
+            timezone=zone.key,
+            from_date=start_day.isoformat(),
+            to_date=end_day.isoformat(),
+            games=games,
+            as_of_beijing=max(as_of_values) if as_of_values else None,
+            evidence_state=EvidenceState.PARTIAL.value.lower(),
         )
 
     async def _range(
@@ -241,6 +331,7 @@ class HighlightsService:
         limit: int | None,
         newest_first: bool = False,
         max_days: int = MAX_HIGHLIGHTS_RANGE_DAYS,
+        final_only: bool = False,
     ) -> HighlightsRangeResponse:
         zone = validate_timezone(timezone_name)
         timezone_name = zone.key
@@ -297,7 +388,10 @@ class HighlightsService:
             )
             try:
                 result = await self._search_games(
-                    GameFilters(date_range=date_range),
+                    GameFilters(
+                        date_range=date_range,
+                        status=GameStatus.FINAL if final_only else None,
+                    ),
                     budget=budget,
                     allow_empty_fallback=True,
                 )
@@ -346,6 +440,7 @@ class HighlightsService:
         if limit is not None:
             games = games[:limit]
         public_games = [self._public_game(game) for game in games]
+        self._remember_games(games)
         evidence_state = (
             EvidenceState.PARTIAL
             if had_unknown
@@ -403,6 +498,7 @@ class HighlightsService:
             raise HighlightsProviderError(
                 "INVALID_UPSTREAM_DATA", "公开数据格式异常，暂时无法核验。", False, 502
             )
+        self._remember_games([bundle.game])
         plays = self._public_plays(bundle)
         leaders = self._public_leaders(bundle.leaders or bundle.stat_lines)
         evidence_state = EvidenceState.PARTIAL if result.partial else EvidenceState.VERIFIED

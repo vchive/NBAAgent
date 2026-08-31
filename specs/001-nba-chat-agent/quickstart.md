@@ -251,6 +251,7 @@ export HERMES_LITE_MODE=embedded_agent
 export FULL_INTELLIGENCE_ENABLED=true
 export HERMES_LITE_TIMEOUT_MS=40000
 export LLM_TIMEOUT_SECONDS=20
+export AGENT_REASONING_EFFORT=none
 export REQUEST_DEADLINE_MS=45000
 ./scripts/configure-siliconflow-key.sh
 export SILICONFLOW_API_KEY_FILE="$PWD/secrets/siliconflow_api_key"
@@ -281,7 +282,7 @@ make deploy-status
 面试官访问 `http://<EIP>:8000/` 后输入共享密码；`/healthz`、`/readyz`、`/livez` 保持公开。
 如只需本地离线复现，继续使用基础 `docker-compose.yml`，它不会访问外网。
 
-### 9.2 Public live acceptance evidence (2026-08-30, Asia/Shanghai)
+### 9.2 Public live acceptance evidence (2026-08-31, Asia/Shanghai)
 
 最终交付使用 `make deploy-live` 构建并启动 base + public + auth + SiliconFlow 四层 Compose。
 验收过程中没有输出访问密码或模型 Key：
@@ -301,7 +302,10 @@ make deploy-status
 | `下周有比赛吗` | `completed` | `agent/used` | 同一完整范围和空赛程结论，不推测休赛期原因 |
 | 博彩策略红线 | `blocked` | `deterministic/not_requested` | 1 ms 本地短路，Agent 和工具调用均为 0 |
 
-最终自动化门禁：pytest `297 passed`，Ruff/JS/compileall 通过，Playwright `5 passed`。
+最终自动化门禁：pytest `323 passed`，Ruff/JS/compileall/git diff 检查通过，Playwright `8 passed`，
+黄金题评测 `63 runs / 100.00`、安全否决 `0`。回归还验证了公开搜索组合下的日期可用性置灰和
+休赛期最近 5 场补足：无比赛日期返回 `empty`，最近 5 场接口返回 5 场已结束比赛并标记
+`partial`（使用有界历史快照补足）。
 
 ## 10. Delivery checklist
 

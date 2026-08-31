@@ -31,6 +31,12 @@ class SearchAugmentedProvider:
         self.primary = primary
         self.search_provider = search_provider
         self.calls = 0
+        # Preserve adapter capabilities used by date-scoped projections.  The
+        # ESPN adapter limits one request to a bounded number of provider
+        # calendar slices; hiding that limit here makes the highlights
+        # availability service send an over-wide Beijing interval and turn a
+        # known empty day into ``unknown``.
+        self.max_date_slices = getattr(primary, "max_date_slices", None)
 
     async def search_games(
         self, filters: GameFilters, budget: RequestBudget
@@ -60,7 +66,17 @@ class SearchAugmentedProvider:
     async def get_standings(
         self, season: SeasonLabel, budget: RequestBudget, *, conference: str | None = None
     ) -> ProviderResult[list[Standing]]:
-        return await self.primary.get_standings(season, budget)
+        # Keep optional conference scoping intact when the wrapped provider
+        # advertises that keyword.  The built-in ESPN/fixture adapters retain
+        # the legacy season-only signature because ProviderGateway applies the
+        # typed conference projection itself; avoid passing ``None`` (or an
+        # unsupported keyword) into those adapters.
+        if conference is None:
+            return await self.primary.get_standings(season, budget)
+        try:
+            return await self.primary.get_standings(season, budget, conference=conference)
+        except TypeError:
+            return await self.primary.get_standings(season, budget)
 
     async def get_history(
         self, query: HistoryQuery, budget: RequestBudget
@@ -68,9 +84,22 @@ class SearchAugmentedProvider:
         return await self.primary.get_history(query, budget)
 
     async def search_news(
-        self, query: NewsQuery, budget: RequestBudget
+        self,
+        query: NewsQuery,
+        budget: RequestBudget,
+        *,
+        fallback_on_empty: bool = False,
     ) -> ProviderResult[list[NewsItem]]:
-        primary_result = await self.primary.search_news(query, budget)
+        # ``fallback_on_empty`` is accepted for ProviderGateway parity.  The
+        # primary/search composition remains authoritative about empty news;
+        # the flag is intentionally forwarded only when the wrapped provider
+        # explicitly supports it.
+        try:
+            primary_result = await self.primary.search_news(
+                query, budget, fallback_on_empty=fallback_on_empty
+            )
+        except TypeError:
+            primary_result = await self.primary.search_news(query, budget)
         if self.search_provider is None or budget.remaining_ms() <= 0:
             return primary_result
         # Search is supplementary. If the NBA source has a hard error, still

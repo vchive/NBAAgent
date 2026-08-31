@@ -659,6 +659,11 @@ class ChatRequest(CanonicalModel):
     client_timezone: str | None = None
     client_message_id: str | None = Field(default=None, max_length=128)
     intelligence_mode: IntelligenceMode | None = None
+    # Optional scoreboard selection supplied by the web demo.  This is only a
+    # context hint: the application resolves it against server-known game
+    # records before using it for planning, and never trusts client-provided
+    # scores/team names.
+    selected_game_id: str | None = Field(default=None, max_length=128)
 
     @field_validator("intelligence_mode", mode="before")
     @classmethod
@@ -698,6 +703,16 @@ class ChatRequest(CanonicalModel):
             raise ValueError("control characters are not allowed")
         return value
 
+    @field_validator("selected_game_id")
+    @classmethod
+    def _selected_game_id_valid(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value or not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", value):
+            raise ValueError("selected_game_id format is invalid")
+        return value
+
     @field_validator("client_timezone")
     @classmethod
     def _timezone_valid(cls, value: str | None) -> str | None:
@@ -724,6 +739,10 @@ class QueryIntent(CanonicalModel):
     operation: Operation = Operation.LOOKUP
     premise_claims: list[Claim] = Field(default_factory=list, max_length=32)
     missing_slots: list[Slot] = Field(default_factory=list, max_length=16)
+    # “最近一场比赛的关键回合” is uniquely resolvable even though it has
+    # no explicit game ID. The planner uses this hint for a bounded latest
+    # completed-game lookup before loading play-by-play data.
+    recent_game: bool = False
 
     _CATEGORY_INTENT: ClassVar[dict[Category, IntentName]] = {
         Category.A: IntentName.DATA,

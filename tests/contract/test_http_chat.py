@@ -36,6 +36,32 @@ async def test_chat_and_sse_share_public_envelope() -> None:
 
 
 @pytest.mark.asyncio
+async def test_selected_game_id_is_forwarded_to_sync_and_sse_chat() -> None:
+    app = create_app()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        sync = await client.post(
+            "/api/v1/chat",
+            json={
+                "message": "这场比赛什么时候打的？",
+                "selected_game_id": "2026-finals-g4",
+            },
+        )
+        stream = await client.post(
+            "/api/v1/chat/stream",
+            json={
+                "message": "雷霆 对 凯尔特人 谁得分最高？",
+                "selected_game_id": "2026-finals-g4",
+            },
+        )
+    assert sync.status_code == 200
+    assert "2026-06-12 09:30" in sync.json()["answer_markdown"]
+    assert stream.status_code == 200
+    assert "杰伦·布朗" in stream.text
+
+
+@pytest.mark.asyncio
 async def test_red_line_short_circuits_provider_and_cache() -> None:
     app = create_app()
     usecase = app.state.chat_use_case

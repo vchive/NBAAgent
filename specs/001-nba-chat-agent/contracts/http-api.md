@@ -80,7 +80,8 @@ Request:
   "message": "2025-26 总决赛 G4 谁得分最高？",
   "client_timezone": "Asia/Shanghai",
   "client_message_id": "optional idempotency key",
-  "intelligence_mode": "hybrid|full|auto (optional)"
+  "intelligence_mode": "hybrid|full|auto (optional)",
+  "selected_game_id": "optional highlights card ID"
 }
 ```
 
@@ -225,7 +226,11 @@ limited to the requested count.
 `GET /api/v1/highlights/range?from=YYYY-MM-DD&to=YYYY-MM-DD&timezone=...` returns every normalized
 game whose local start date falls in the inclusive interval. Custom ranges are limited to 93 days;
 missing, reversed, future or oversized ranges return `400 INVALID_PAYLOAD`. Both endpoints keep
-the response provider-free and do not alter chat session context:
+the response provider-free. A subsequent chat request MAY include the selected card's
+`selected_game_id`; the server resolves that ID against its own highlights registry and uses it as
+the current session game context. Client-supplied scores/team names are ignored, explicit game
+entities in the message take precedence, and an unknown/unverified ID is never used to fabricate
+facts:
 
 ```json
 {

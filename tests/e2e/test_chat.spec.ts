@@ -23,6 +23,42 @@ test("supports cancellation and a follow-up in the same session", async ({ page 
   await expect(page.locator(".dynamic-message.assistant-message").last()).toContainText("2 个回合");
 });
 
+test("forwards the selected highlights card as chat context", async ({ page }) => {
+  let selectedGameId: unknown = null;
+  await page.route("**/api/v1/chat/stream", async (route) => {
+    const body = route.request().postDataJSON() as Record<string, unknown>;
+    selectedGameId = body.selected_game_id;
+    const requestId = "22222222-2222-4222-8222-222222222222";
+    const sessionId = String(body.session_id);
+    const answer = "开赛时间：2026-06-12 09:30（北京时间）。";
+    const completed = {
+      request_id: requestId,
+      session_id: sessionId,
+      status: "completed",
+      answer_markdown: answer,
+      blocks: [{ type: "text", content: answer }],
+      as_of_beijing: null,
+      evidence_state: "verified",
+      corrections: [],
+      follow_up: null,
+      latency_ms: 10,
+    };
+    const sse = [
+      `event: run.started\ndata: ${JSON.stringify({ request_id: requestId, session_id: sessionId })}\n\n`,
+      `event: message.completed\ndata: ${JSON.stringify(completed)}\n\n`,
+    ].join("");
+    await route.fulfill({ status: 200, contentType: "text/event-stream", body: sse });
+  });
+
+  await page.goto("/");
+  await expect(page.locator("#game-list .game-list-card")).toHaveCount(3);
+  await page.locator("#game-list .game-list-card").nth(1).click();
+  await page.locator("#message-input").fill("这场比赛什么时候打的？");
+  await page.locator("#message-input").press("Enter");
+  await expect(page.locator(".dynamic-message.assistant-message").last()).toContainText("09:30");
+  expect(selectedGameId).toBe("2026-demo-den-gsw");
+});
+
 test("full intelligence acceptance prompts render Agent provenance", async ({ page }) => {
   const requestBodies: Array<Record<string, unknown>> = [];
   await page.route("**/healthz", async (route) => {

@@ -88,6 +88,11 @@ async def test_official_runtime_exposes_only_nba_tools_and_normalises_result() -
     assert captured["skip_context_files"] is True
     assert captured["skip_memory"] is True
     assert captured["save_trajectories"] is False
+    assert captured["reasoning_config"] == {"enabled": False, "effort": "none"}
+    assert captured["request_overrides"]["extra_body"] == {
+        "enable_thinking": False
+    }
+    assert 0 < captured["request_overrides"]["timeout"] <= 20
     assert result.status is RuntimeStatus.OK
     assert len(result.tool_calls) == 1
     assert result.tool_calls[0].tool_name == "nba_schedule"
@@ -108,3 +113,8 @@ def test_runtime_self_test_fails_closed_without_key() -> None:
 def test_runtime_rejects_unlocked_package_version() -> None:
     with pytest.raises(ValueError, match="package version"):
         HermesAgentRuntime(package_version="0.20.0")
+
+
+def test_runtime_rejects_invalid_reasoning_effort() -> None:
+    with pytest.raises(ValueError, match="reasoning effort"):
+        HermesAgentRuntime(reasoning_effort="ultra")

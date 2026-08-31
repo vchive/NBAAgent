@@ -574,6 +574,9 @@ AgentOutputGuard 执行：长度/控制字符、提示注入/供应商字段、�
 `mode=agent,status=used`；所有失败统一为 `mode=fallback,status=fallback`，内部 telemetry
 才记录具体 finish reason。
 
+进入 AgentOutputGuard 前，`ChatUseCase` 还执行窄范围的观察相关性检查：赛程/新闻工具不得
+单独满足球员数据、战术、复盘或 PBP 问题；不相关结果统一回退确定性通道。
+
 #### 4.5.3 Cancellation and execution model
 
 Hermes `run_conversation` 是同步调用，应用通过有界 worker thread 执行并将 `CancelToken`/
@@ -728,6 +731,17 @@ keeping non-future unknown days retryable. This endpoint does not alter chat ses
 
 ### 9.3 Recent and custom-range highlights
 
+#### 9.3.1 Selected-game chat binding
+
+The browser sends the selected card as the optional `selected_game_id` field on both sync and
+SSE chat requests. The application validates the identifier format, resolves it from the
+server-owned highlights registry (or the local fixture catalog), and overlays the resulting
+`EntityRef(GAME)` on the session context before parsing. Pronouns such as “这场” therefore resolve
+to the card. When the parsed message names teams, the overlay is applied only if all named teams
+belong to the resolved game's home/away pair; unrelated matchups retain their normal broad query
+semantics. Explicit G4/G3 entities always win. The context is committed with the turn so switching
+cards replaces the active game on the next request without sharing state across sessions.
+
 The left rail labels the historical projection as “精彩回顾”. The default view calls
 `GET /api/v1/highlights/recent?limit=5&timezone=...`; the service scans bounded provider date
 slices from newest to oldest and stops after five normalized games. The browser sorts the returned
@@ -853,6 +867,7 @@ AGENT_TOOL_TIMEOUT_MS=12000
 AGENT_MAX_TOOL_RESULT_BYTES=16384
 AGENT_MAX_OUTPUT_BYTES=20000
 AGENT_PACKAGE_VERSION=0.19.0
+AGENT_REASONING_EFFORT=none          # 默认关闭隐藏思考，降低工具规划时延
 MAX_REQUEST_BYTES=32768
 MAX_EVENT_BYTES=16384
 MAX_RESPONSE_BYTES=262144

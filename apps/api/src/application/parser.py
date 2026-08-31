@@ -36,6 +36,7 @@ from apps.api.src.domain.time_policy import (
     make_season_label,
     parse_season_label,
     resolve_relative_date,
+    resolve_relative_date_range,
     resolve_season_phrase,
     season_label_for_date,
 )
@@ -285,6 +286,10 @@ def resolve_entities(text: str) -> list[EntityRef]:
 
 def _metric_refs(text: str, *, scope: StatScope = StatScope.GAME) -> list[MetricRef]:
     metrics: list[MetricRef] = []
+    if any(token in text for token in ("什么时候", "几点开打", "几点开始", "开赛时间", "比赛时间")):
+        metrics.append(MetricRef(name="start_time", unit=None, scope=scope))
+    if "上篮" in text:
+        metrics.append(MetricRef(name="layup", unit=None, scope=scope))
     mapping = (
         ("得分", "points", "分"),
         ("篮板", "rebounds", "个"),
@@ -313,7 +318,14 @@ def _normalize_common_typos(text: str) -> str:
 
     # “出场” is frequently entered as “出厂”; only normalize it when the
     # surrounding phrase clearly asks for an appearance count/statistic.
-    return re.sub(r"出厂(?=次数|场次|数|率|记录)", "出场", text)
+    value = re.sub(r"出厂(?=次数|场次|数|率|记录)", "出场", text)
+    # Mobile input methods occasionally produce “堆栈” for “对阵”. Restrict
+    # this correction to sentences that already contain at least two known
+    # team names, so technical/out-of-scope uses of “堆栈” remain untouched.
+    team_aliases = ("凯尔特人", "雷霆", "湖人", "勇士", "掘金", "尼克斯", "马刺")
+    if "堆栈" in value and sum(alias in value for alias in team_aliases) >= 2:
+        value = value.replace("堆栈", "对阵")
+    return value
 
 
 # Standings questions often scope the requested rank to one conference.  Keep
@@ -809,6 +821,13 @@ class IntentParser:
         )
         if relative_date is not None:
             date_range = local_date_range(relative_date, self.input_timezone)
+        else:
+            # ``本周``/``下周``/``未来 N 天`` are complete schedule scopes,
+            # not missing subjects. Keep them typed so deterministic mode
+            # cannot silently fall back to an all-history provider search.
+            date_range = resolve_relative_date_range(
+                message, self.clock, timezone_name=self.input_timezone
+            )
         # A standings request without an explicit season is interpreted in the
         # current NBA-season context.  If a concrete calendar date was supplied,
         # derive its cross-calendar season; otherwise use the injected clock so
@@ -851,11 +870,16 @@ class IntentParser:
                     scope=TimeWindowScope.PERIOD_END,
                 )
         missing: list[Slot] = []
+        has_game_entity = any(item.kind is EntityKind.GAME for item in entities)
+        recent_game_request = bool(
+            is_pbp
+            and not has_game_entity
+            and re.search(r"(?:最近|上一场|上场|刚刚).{0,6}(?:场比赛|比赛)", message)
+        )
         # Keep an explicit game number in the parsed intent for telemetry even
         # when this fixture has no corresponding entity.  Without a missing
         # slot, a request such as “1999 G4 赛果” would fall through to a broad
         # search and could return the newest unrelated fixture.
-        has_game_entity = any(item.kind is EntityKind.GAME for item in entities)
         if game_number is not None and not has_game_entity:
             missing.append(
                 Slot(
@@ -866,7 +890,7 @@ class IntentParser:
         if (shorthand or unspecified_game) and not has_game_entity:
             if not any(slot.name == "game" for slot in missing):
                 missing.append(Slot(name="game", reason="请指定比赛或在同一会话中先选择一场比赛"))
-        elif is_pbp and not has_game_entity:
+        elif is_pbp and not has_game_entity and not recent_game_request:
             reason = (
                 "请从精彩回顾选择最近一场比赛，或补充对阵双方"
                 if re.search(r"(?:最近|上一场|刚刚).{0,4}(?:场比赛|比赛)", message)
@@ -993,6 +1017,7 @@ class IntentParser:
             operation=operation,
             premise_claims=claims,
             missing_slots=missing,
+            recent_game=recent_game_request,
         )
         ambiguity: list[str] = []
         if len(

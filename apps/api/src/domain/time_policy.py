@@ -335,6 +335,58 @@ def resolve_relative_date(
     return None
 
 
+def resolve_relative_date_range(
+    phrase: str,
+    clock: Clock | None = None,
+    *,
+    timezone_name: str = DEFAULT_INPUT_TIMEZONE,
+) -> DateRange | None:
+    """Resolve date expressions that may span more than one local day.
+
+    ``resolve_relative_date`` intentionally keeps its historical single-day
+    contract. Schedule questions, however, commonly use ``本周``/``下周`` or
+    ``未来 3 天``; leaving those phrases unresolved makes the planner search
+    the entire provider archive. This companion keeps the old API stable
+    while giving the parser an exact, half-open local-date interval.
+    """
+
+    text = " ".join(str(phrase or "").strip().split()).lower()
+    if not text:
+        return None
+    single = resolve_relative_date(text, clock, timezone_name=timezone_name)
+    if single is not None:
+        return local_date_range(single, timezone_name)
+    base = to_timezone(now_utc(clock), timezone_name).date()
+    if re.search(r"(?:^|\s)(?:本周|这周|this week)(?:\s|$)|本周|这周", text):
+        start = base - timedelta(days=base.weekday())
+        return DateRange(
+            start_inclusive=local_date_range(start, timezone_name).start_inclusive,
+            end_exclusive=local_date_range(
+                start + timedelta(days=7), timezone_name
+            ).start_inclusive,
+        )
+    if re.search(r"(?:下周|下个星期|next week)", text):
+        start = base + timedelta(days=7 - base.weekday())
+        return DateRange(
+            start_inclusive=local_date_range(start, timezone_name).start_inclusive,
+            end_exclusive=local_date_range(
+                start + timedelta(days=7), timezone_name
+            ).start_inclusive,
+        )
+    match = re.search(r"(?:未来|接下来)\s*(\d{1,2})\s*天", text)
+    if match:
+        days = int(match.group(1))
+        if not 1 <= days <= 31:
+            raise ValueError("date range must contain 1..31 days")
+        return DateRange(
+            start_inclusive=local_date_range(base, timezone_name).start_inclusive,
+            end_exclusive=local_date_range(
+                base + timedelta(days=days), timezone_name
+            ).start_inclusive,
+        )
+    return None
+
+
 def build_time_context(
     instant: datetime,
     *,
@@ -478,6 +530,7 @@ __all__ = [
     "period_end_window",
     "previous_completed_season",
     "resolve_relative_date",
+    "resolve_relative_date_range",
     "resolve_season_phrase",
     "season_label_for_date",
     "select_last_seconds",

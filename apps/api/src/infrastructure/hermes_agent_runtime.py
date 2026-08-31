@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import importlib.metadata
 import inspect
+import math
 import re
 import time
 from collections.abc import Awaitable, Callable, Mapping
@@ -110,6 +111,8 @@ class HermesAgentRuntime:
         max_tool_result_bytes: int = 16_384,
         max_output_bytes: int = 20_000,
         package_version: str = LOCKED_HERMES_VERSION,
+        reasoning_effort: str = "none",
+        model_timeout_seconds: float = 20.0,
         agent_factory: Callable[..., Any] | None = None,
         registry: Any | None = None,
     ) -> None:
@@ -127,6 +130,8 @@ class HermesAgentRuntime:
         self.max_tool_result_bytes = max_tool_result_bytes
         self.max_output_bytes = max_output_bytes
         self.package_version = package_version
+        self.reasoning_effort = str(reasoning_effort).lower()
+        self.model_timeout_seconds = model_timeout_seconds
         self._agent_factory = agent_factory
         self._registry = registry
         self.manifest = AgentCapabilityManifest(version=package_version)
@@ -151,6 +156,15 @@ class HermesAgentRuntime:
             raise ValueError("Agent output limits must be positive")
         if not self.model or _CONTROL_RE.search(self.model):
             raise ValueError("Agent model is invalid")
+        if self.reasoning_effort not in {"none", "minimal", "low", "medium", "high"}:
+            raise ValueError("Agent reasoning effort is invalid")
+        if (
+            isinstance(self.model_timeout_seconds, bool)
+            or not isinstance(self.model_timeout_seconds, (int, float))
+            or not math.isfinite(float(self.model_timeout_seconds))
+            or self.model_timeout_seconds <= 0
+        ):
+            raise ValueError("Agent model timeout must be positive")
 
     def _load_key(self) -> str:
         if self.api_key:
@@ -228,6 +242,22 @@ class HermesAgentRuntime:
 
     def _run_sync(self, turn: AgentTurnInput, task_id: str, key: str) -> Mapping[str, Any]:
         factory, _ = self._load_official()
+        remaining_seconds = max(
+            (turn.deadline_at_utc - datetime.now(turn.deadline_at_utc.tzinfo)).total_seconds(),
+            0.001,
+        )
+        model_timeout = min(
+            float(self.model_timeout_seconds),
+            max(self.timeout_ms, 1) / 1000,
+            remaining_seconds,
+        )
+        reasoning_enabled = self.reasoning_effort != "none"
+        request_overrides: dict[str, Any] = {"timeout": model_timeout}
+        if not reasoning_enabled:
+            # SiliconFlow exposes this explicit wire switch for DeepSeek
+            # thinking. Hermes also receives its generic reasoning policy so
+            # both layers agree on the same low-latency behavior.
+            request_overrides["extra_body"] = {"enable_thinking": False}
         kwargs = {
             "base_url": self.base_url,
             "api_key": key,
@@ -243,6 +273,11 @@ class HermesAgentRuntime:
             "tool_progress_mode": "none",
             "ephemeral_system_prompt": self._system_prompt(turn),
             "max_tokens": self.max_tokens,
+            "reasoning_config": {
+                "enabled": reasoning_enabled,
+                "effort": self.reasoning_effort,
+            },
+            "request_overrides": request_overrides,
             "session_id": task_id,
             "platform": "api",
             "skip_context_files": True,

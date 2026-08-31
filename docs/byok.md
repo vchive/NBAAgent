@@ -66,6 +66,7 @@ export HERMES_LITE_MODE=embedded_agent
 export FULL_INTELLIGENCE_ENABLED=true
 export HERMES_LITE_TIMEOUT_MS=40000
 export LLM_TIMEOUT_SECONDS=20
+export AGENT_REASONING_EFFORT=none
 export REQUEST_DEADLINE_MS=45000
 export SILICONFLOW_API_KEY_FILE="$PWD/secrets/siliconflow_api_key"
 uvicorn apps.api.src.main:app --host 0.0.0.0 --port 8000
@@ -102,6 +103,7 @@ uvicorn apps.api.src.main:app --host 0.0.0.0 --port 8000
 | 容器内读取 secret 报 `Permission denied` | Compose file secret 是 bind mount；执行 `chown root:10001 secrets/siliconflow_api_key && chmod 640 secrets/siliconflow_api_key`，再重新创建容器。不要改成 644。 |
 | 容器内 `cat /run/secrets/siliconflow_api_key` 报 `Permission denied` | Compose file secret 是 bind mount；执行 `chown root:10001 secrets/siliconflow_api_key && chmod 640 secrets/siliconflow_api_key`，再重新创建容器。不要把权限改成 644。 |
 | 全智能回答仍是模板/回退 | 确认页面开关已启用、请求携带 `intelligence_mode=full`，再检查 key、`embedded_agent`、超时和输出守卫；完成响应的 `composition` 应为 `agent/used`。 |
+| 全智能请求长时间停在理解/整理阶段 | 保持 `AGENT_REASONING_EFFORT=none`；系统会同时向固定 SiliconFlow 模型发送关闭隐藏思考的请求参数，并用 `LLM_TIMEOUT_SECONDS` 限制单次模型调用。修改推理档位后需重新做 live 时延回归。 |
 | 首次请求返回认证错误 | SiliconFlow token 无效/过期，重新生成并运行配置脚本；不要把 token 粘贴进聊天。 |
 | 返回限流/额度错误 | 检查 SiliconFlow 账户余额、模型权限和预算限额；不要通过重试绕过限流。 |
 

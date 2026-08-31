@@ -29,6 +29,17 @@ def test_full_calendar_date_is_not_misread_as_a_season() -> None:
     assert resolve_season_phrase("2026-06-12 有哪些比赛？", clock) is None
 
 
+def test_schedule_week_phrases_produce_a_bounded_date_range() -> None:
+    clock = FixedClock(datetime(2026, 8, 30, 10, tzinfo=UTC))
+    parsed = IntentParser(clock=clock).parse("下周有比赛吗？")
+    assert parsed.intent.intent_name is IntentName.SCHEDULE_RESULT
+    assert parsed.intent.date_range is not None
+    assert parsed.intent.date_range.start_inclusive == datetime(2026, 8, 30, 16, tzinfo=UTC)
+    assert parsed.intent.date_range.end_exclusive == datetime(2026, 9, 6, 16, tzinfo=UTC)
+    plan = QueryPlanner().build(parsed.intent)
+    assert plan is not None and plan.operation == "search_games"
+
+
 def test_common_appearance_typo_and_durant_alias_are_understood() -> None:
     parsed = IntentParser().parse("杜兰特近期出厂次数")
 
@@ -36,6 +47,18 @@ def test_common_appearance_typo_and_durant_alias_are_understood() -> None:
     assert any(item.canonical_id == "kevin-durant" for item in parsed.intent.entities)
     assert parsed.intent.metrics[0].name == "games"
     assert not parsed.missing_slots
+
+
+def test_matchup_typo_is_normalized_when_two_teams_are_present() -> None:
+    parsed = IntentParser().parse("雷霆堆栈凯尔特人最后 5 秒那个上篮是谁投的？")
+
+    assert parsed.intent.intent_name is IntentName.PLAY_BY_PLAY
+    team_ids = {
+        item.canonical_id
+        for item in parsed.intent.entities
+        if item.kind is EntityKind.TEAM
+    }
+    assert team_ids == {"okc", "bos"}
 
 
 def test_chinese_last_five_seconds_is_play_by_play() -> None:
@@ -104,6 +127,15 @@ def test_game_specific_schedule_result_uses_summary_lookup() -> None:
 def test_shorthand_without_active_game_requires_clarification() -> None:
     parsed = IntentParser().parse("那场比分如何？")
     assert any(slot.name == "game" for slot in parsed.missing_slots)
+
+
+def test_recent_game_play_by_play_is_resolved_without_manual_card_selection() -> None:
+    parsed = IntentParser().parse("最近一场比赛的关键回合是什么？")
+    assert parsed.intent.intent_name is IntentName.PLAY_BY_PLAY
+    assert parsed.intent.recent_game is True
+    assert not parsed.intent.missing_slots
+    plan = QueryPlanner().build(parsed.intent)
+    assert plan is not None and plan.operation == "get_recent_play_by_play"
 
 
 def test_unspecified_game_reference_requires_clarification() -> None:

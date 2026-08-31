@@ -14,7 +14,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from apps.api.src.application.context_manager import ContextManager
-from apps.api.src.application.parser import IntentParser, ParseResult, resolve_entities
+from apps.api.src.application.parser import GAMES, IntentParser, ParseResult, resolve_entities
 from apps.api.src.application.ports import (
     CancelToken,
     ComposerInput,
@@ -49,6 +49,7 @@ from apps.api.src.domain.models import (
     Game,
     GameBundle,
     GameFilters,
+    GameStatus,
     HistoryRecord,
     IntelligenceMode,
     IntentName,
@@ -231,6 +232,7 @@ class ChatUseCase:
         siliconflow_client: Any | None = None,
         gateway: Any | None = None,
         admission: AdmissionController | None = None,
+        game_registry: Mapping[str, Game] | None = None,
     ) -> None:
         self.settings = settings
         self.clock = clock or SystemClock()
@@ -261,6 +263,11 @@ class ChatUseCase:
             )
         self.gateway = gateway
         self.provider = provider
+        # Highlights requests populate this server-owned registry.  It lets a
+        # later chat turn resolve a clicked live/ESPN game without trusting
+        # client-supplied team names or scores.  Fixture IDs are also resolved
+        # from the parser catalog for direct use-case tests.
+        self.game_registry = game_registry if game_registry is not None else {}
         self.parser = IntentParser(clock=self.clock)
         self.planner = QueryPlanner()
         self.template_composer = TemplateComposer()
@@ -306,6 +313,8 @@ class ChatUseCase:
             max_tool_result_bytes=getattr(settings, "agent_max_tool_result_bytes", 16_384),
             max_output_bytes=getattr(settings, "agent_max_output_bytes", 20_000),
             package_version=getattr(settings, "agent_package_version", "0.19.0"),
+            reasoning_effort=getattr(settings, "agent_reasoning_effort", "none"),
+            model_timeout_seconds=getattr(settings, "llm_timeout_seconds", 20.0),
         )
         self.runtime_selector = RuntimeSelector(
             template_runtime=self.runtime,
@@ -323,6 +332,111 @@ class ChatUseCase:
 
     def _now(self) -> datetime:
         return now_utc(self.clock)
+
+    def _selected_game(self, game_id: str | None) -> Game | None:
+        """Resolve a scoreboard selection from server-owned game records."""
+
+        if not game_id:
+            return None
+        value = str(game_id).strip()
+        if not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", value):
+            return None
+        found = self.game_registry.get(value)
+        if isinstance(found, Game):
+            return found
+        # Direct use-case tests and offline callers may not go through the
+        # highlights route first.  The fixture provider keeps typed games in
+        # a private list; reading that server-owned list is safe and avoids
+        # making a duplicate provider request just to establish context.
+        for owner in (
+            self.provider,
+            getattr(self.gateway, "provider", None),
+            getattr(self.gateway, "fallback", None),
+        ):
+            for item in list(getattr(owner, "_games", []) or []):
+                if isinstance(item, Game) and item.game_id == value:
+                    return item
+        return None
+
+    @staticmethod
+    def _selected_game_ref(game_id: str, game: Game | None) -> EntityRef:
+        if game is not None:
+            return EntityRef(
+                kind=EntityKind.GAME,
+                canonical_id=game.game_id,
+                display_name=(
+                    f"{game.season.label} 总决赛 G{game.series_game_number}"
+                    if game.series_game_number and game.series_id
+                    else f"{game.away.display_name} 对 {game.home.display_name}"
+                ),
+                aliases=[
+                    alias
+                    for alias in (
+                        f"G{game.series_game_number}" if game.series_game_number else None,
+                        game.home.display_name,
+                        game.away.display_name,
+                    )
+                    if alias
+                ],
+                confidence=1,
+            )
+        fixture_ref = GAMES.get(game_id)
+        if fixture_ref is not None:
+            return fixture_ref
+        return EntityRef(
+            kind=EntityKind.GAME,
+            canonical_id=game_id,
+            display_name="当前选中比赛",
+            confidence=1,
+        )
+
+    @staticmethod
+    def _attach_selected_game(
+        parsed: ParseResult,
+        selected_game: Game | None,
+        selected_ref: EntityRef | None,
+    ) -> ParseResult:
+        """Bind a clicked game for matching-team questions.
+
+        Pronouns/PBP are already resolved by ``IntentParser`` through the
+        active context.  This extra pass handles explicit matchup wording
+        such as “雷霆 对 凯尔特人 谁得分最高？”, but only when both sides
+        belong to the server-resolved selected game.  Unrelated teams never
+        inherit the card and continue through the normal broad lookup.
+        """
+
+        if selected_game is None or selected_ref is None:
+            return parsed
+        if any(item.kind is EntityKind.GAME for item in parsed.intent.entities):
+            return parsed
+        # A concrete calendar scope is an explicit user condition. Do not
+        # turn “今天/下周某队有哪些比赛” into the previously selected
+        # single-game summary just because one team name overlaps.
+        if parsed.intent.date_range is not None:
+            return parsed
+        team_ids = {
+            item.canonical_id
+            for item in parsed.intent.entities
+            if item.kind is EntityKind.TEAM
+        }
+        selected_ids = {selected_game.home.canonical_id, selected_game.away.canonical_id}
+        if not team_ids or not team_ids.issubset(selected_ids):
+            return parsed
+        # Avoid mutating the parser's list in place: ParseResult is reused by
+        # telemetry/evaluation code and a copy keeps that boundary explicit.
+        intent = parsed.intent.model_copy(
+            update={"entities": [*parsed.intent.entities, selected_ref]}
+        )
+        missing = [slot for slot in parsed.missing_slots if slot.name != "game"]
+        intent = intent.model_copy(update={"missing_slots": missing})
+        return ParseResult(
+            intent=intent,
+            entity_candidates=parsed.entity_candidates,
+            normalized_filters=parsed.normalized_filters,
+            missing_slots=missing,
+            ambiguity_reasons=parsed.ambiguity_reasons,
+            confidence=parsed.confidence,
+        )
 
     async def _classify(self, text: str):
         value = self.safety_guard.classify(text)
@@ -582,6 +696,19 @@ class ChatUseCase:
                 and context.timezone != req.client_timezone
             ):
                 context = context.model_copy(update={"timezone": req.client_timezone})
+            selected_game = self._selected_game(req.selected_game_id)
+            selected_ref = (
+                self._selected_game_ref(req.selected_game_id, selected_game)
+                if req.selected_game_id
+                and (selected_game is not None or req.selected_game_id in GAMES)
+                else None
+            )
+            if selected_ref is not None:
+                # Treat a card selection as the current session's active game
+                # for this request.  Explicit G4/G3 entities parsed from the
+                # message still take precedence, and a later card replaces
+                # the previous active game on the next committed turn.
+                context = context.model_copy(update={"active_game": selected_ref})
             telemetry.transition("CONTEXT_RESOLVED")
             agent_attempted = False
             if not _internal_tool and self._full_agent_requested(req):
@@ -609,6 +736,7 @@ class ChatUseCase:
                             tool_runner=self._agent_tool_runner(
                                 session_id=session_id,
                                 context=context,
+                                selected_game_id=req.selected_game_id,
                                 deadline_at_utc=telemetry.deadline_at_utc,
                                 token=token,
                                 sink=sink,
@@ -659,92 +787,103 @@ class ChatUseCase:
                     agent_turn.status is RuntimeStatus.OK
                     and agent_turn.answer_markdown
                 ):
-                    agent_answer = self._ground_agent_answer(
-                        agent_turn.answer_markdown,
-                        agent_turn.observations,
-                    )
-                    evidence_value = str(agent_turn.evidence_state).upper()
-                    evidence = (
-                        EvidenceState(evidence_value)
-                        if evidence_value in {"VERIFIED", "PARTIAL", "NONE"}
-                        else EvidenceState.NONE
-                    )
-                    draft = DraftAnswer(
-                        markdown=agent_answer,
-                        blocks=[
-                            AnswerBlock(
-                                type=AnswerBlockType.TEXT,
-                                content=agent_answer,
-                            )
-                        ],
-                        evidence_state=evidence,
-                    )
-                    guarded: DraftAnswer | None = None
-                    try:
-                        guarded = self.output_guard.validate_agent(
-                            draft,
+                    # Hermes is responsible for planning, but a valid-looking
+                    # answer from the wrong NBA tool is still incorrect.  The
+                    # most dangerous case is a recent play-by-play question
+                    # answered with an empty schedule observation.  Detect
+                    # this narrow semantic mismatch before OutputGuard and
+                    # let the deterministic parser recover the verified PBP.
+                    if not self._agent_result_relevant(req.message, agent_turn):
+                        telemetry.fallback_reason = "agent_tool_mismatch"
+                    else:
+                        agent_answer = self._ground_agent_answer(
+                            agent_turn.answer_markdown,
                             agent_turn.observations,
-                            require_observation=not _is_zero_tool_question(req.message),
                         )
-                    except (OutputGuardError, ValueError, TypeError):
-                        if _is_zero_tool_question(req.message) and not agent_turn.observations:
-                            safe_greeting = self._capability_answer()
-                            guarded = self.output_guard.validate_agent(
-                                DraftAnswer(
-                                    markdown=safe_greeting,
-                                    blocks=[
-                                        AnswerBlock(
-                                            type=AnswerBlockType.TEXT,
-                                            content=safe_greeting,
-                                        )
-                                    ],
-                                    evidence_state=EvidenceState.NONE,
-                                ),
-                                [],
-                                require_observation=False,
-                            )
-                        else:
-                            telemetry.fallback_reason = "agent_output_guard"
-                    if guarded is not None:
-                        await _emit(
-                            sink,
-                            "run.status",
-                            {"stage": "agent_completing", "text": "已完成回答"},
+                        evidence_value = str(agent_turn.evidence_state).upper()
+                        evidence = (
+                            EvidenceState(evidence_value)
+                            if evidence_value in {"VERIFIED", "PARTIAL", "NONE"}
+                            else EvidenceState.NONE
                         )
-                        telemetry.composition_mode = "agent"
-                        telemetry.composition_status = "used"
-                        telemetry.evidence_state = evidence.value.lower()
-                        telemetry.transition("COMPOSED")
-                        telemetry.transition("OUTPUT_GUARDED")
+                        draft = DraftAnswer(
+                            markdown=agent_answer,
+                            blocks=[
+                                AnswerBlock(
+                                    type=AnswerBlockType.TEXT,
+                                    content=agent_answer,
+                                )
+                            ],
+                            evidence_state=evidence,
+                        )
+                        guarded: DraftAnswer | None = None
                         try:
-                            await self.context_manager.commit(
-                                context,
-                                intent=self._agent_summary_intent(),
-                                facts=FactBundle(facts=[], evidence_state=EvidenceState.NONE),
-                                answer=guarded.markdown,
+                            guarded = self.output_guard.validate_agent(
+                                draft,
+                                agent_turn.observations,
+                                require_observation=not _is_zero_tool_question(req.message),
                             )
-                        except Exception:
-                            pass
-                        as_of = self._agent_as_of(agent_turn.observations)
-                        result = self._result_from_draft(
-                            request_id,
-                            session_id,
-                            "completed",
-                            guarded,
-                            started,
-                            as_of=as_of,
-                            composition=self._composition_from_telemetry(telemetry),
-                        )
-                        telemetry.finish(outcome="completed", total_latency_ms=result.latency_ms)
-                        self.telemetry.record(telemetry)
-                        if client_id:
-                            await self.session_store.complete_idempotency(
-                                session_id, client_id, result
+                        except (OutputGuardError, ValueError, TypeError):
+                            if _is_zero_tool_question(req.message) and not agent_turn.observations:
+                                safe_greeting = self._capability_answer()
+                                guarded = self.output_guard.validate_agent(
+                                    DraftAnswer(
+                                        markdown=safe_greeting,
+                                        blocks=[
+                                            AnswerBlock(
+                                                type=AnswerBlockType.TEXT,
+                                                content=safe_greeting,
+                                            )
+                                        ],
+                                        evidence_state=EvidenceState.NONE,
+                                    ),
+                                    [],
+                                    require_observation=False,
+                                )
+                            else:
+                                telemetry.fallback_reason = "agent_output_guard"
+                        if guarded is not None:
+                            await _emit(
+                                sink,
+                                "run.status",
+                                {"stage": "agent_completing", "text": "已完成回答"},
                             )
-                        for chunk in _chunks(guarded.markdown, 120):
-                            await _emit(sink, "message.delta", {"text": chunk})
-                        await _emit(sink, "message.completed", result.to_dict())
-                        return result
+                            telemetry.composition_mode = "agent"
+                            telemetry.composition_status = "used"
+                            telemetry.evidence_state = evidence.value.lower()
+                            telemetry.transition("COMPOSED")
+                            telemetry.transition("OUTPUT_GUARDED")
+                            try:
+                                await self.context_manager.commit(
+                                    context,
+                                    intent=self._agent_summary_intent(),
+                                    facts=FactBundle(facts=[], evidence_state=EvidenceState.NONE),
+                                    answer=guarded.markdown,
+                                )
+                            except Exception:
+                                pass
+                            as_of = self._agent_as_of(agent_turn.observations)
+                            result = self._result_from_draft(
+                                request_id,
+                                session_id,
+                                "completed",
+                                guarded,
+                                started,
+                                as_of=as_of,
+                                composition=self._composition_from_telemetry(telemetry),
+                            )
+                            telemetry.finish(
+                                outcome="completed", total_latency_ms=result.latency_ms
+                            )
+                            self.telemetry.record(telemetry)
+                            if client_id:
+                                await self.session_store.complete_idempotency(
+                                    session_id, client_id, result
+                                )
+                            for chunk in _chunks(guarded.markdown, 120):
+                                await _emit(sink, "message.delta", {"text": chunk})
+                            await _emit(sink, "message.completed", result.to_dict())
+                            return result
                 # Capability/identity turns are intentionally useful even when
                 # the model is temporarily unavailable. They contain no NBA
                 # facts, so answer locally instead of sending the user into
@@ -776,7 +915,9 @@ class ChatUseCase:
                         as_of=None,
                         composition=self._composition_from_telemetry(telemetry),
                     )
-                    telemetry.finish(outcome="completed", total_latency_ms=result.latency_ms)
+                    telemetry.finish(
+                        outcome="completed", total_latency_ms=result.latency_ms
+                    )
                     self.telemetry.record(telemetry)
                     if client_id:
                         await self.session_store.complete_idempotency(
@@ -859,6 +1000,10 @@ class ChatUseCase:
                     sink,
                     client_id,
                     code="INVALID_PAYLOAD",
+                )
+            if selected_ref is not None:
+                parsed = self._attach_selected_game(
+                    parsed, selected_game, selected_ref
                 )
             telemetry.intent_category = parsed.intent.category.value
             telemetry.intent_name = parsed.intent.intent_name.value
@@ -1376,6 +1521,99 @@ class ChatUseCase:
         return max(values) if values else None
 
     @staticmethod
+    def _agent_result_relevant(question: str, result: AgentTurnResult) -> bool:
+        """Reject a successful Agent turn whose observations answer another task.
+
+        Hermes owns intent understanding, but a successful-looking answer is
+        still incorrect when every observation came from an unrelated tool
+        (for example, a schedule ``no_data`` result for a player-stat or
+        tactical question).  This guard is intentionally narrow: it only
+        rejects tool-only mismatches and leaves wording/quality to the model
+        and the output guard.
+        """
+
+        text = str(question or "")
+        observations = [
+            item
+            for item in result.observations
+            if isinstance(item, Mapping)
+            and str(item.get("status", "")).lower()
+            in {"completed", "no_data", "needs_clarification"}
+        ]
+        if not observations:
+            # OutputGuard will reject fact turns without observations.  Keep
+            # this helper permissive for zero-tool greetings/capability turns.
+            return _is_zero_tool_question(text)
+
+        tool_names = {
+            str(getattr(call, "tool_name", "")).lower()
+            for call in result.tool_calls
+            if str(getattr(call, "status", "")).lower()
+            not in {"duplicate", "failed", "cancelled"}
+        }
+        observed_intents = {
+            str(item.get("intent", "")).lower() for item in observations
+        }
+        answers = "\n".join(str(item.get("answer_markdown") or "") for item in observations)
+        # Schedule observations are authoritative only for schedule wording.
+        # A tool-call list may be unavailable in a test double, so inspect the
+        # sanitized observation intent as a second signal.
+        schedule_question = bool(
+            re.search(
+                r"(?:赛程|赛果|今天|明天|后天|昨天|本周|下周|未来\s*\d+\s*天|"
+                r"接下来\s*\d+\s*天|哪天有比赛|有哪些比赛|有比赛吗)",
+                text,
+                re.IGNORECASE,
+            )
+        )
+        schedule_only = (
+            bool(observations)
+            and (tool_names and tool_names <= {"nba_schedule"}
+                 or not tool_names and observed_intents <= {"schedule_result"})
+        )
+        if schedule_only and not schedule_question:
+            return False
+
+        # News observations should not satisfy a numeric/PBP/tactical request
+        # unless the answer itself clearly carries the requested analysis.
+        news_question = bool(
+            re.search(r"(?:新闻|消息|资讯|报道|动态|近况|背景|\bnews\b|\bheadline\b)", text, re.I)
+        )
+        news_only = (
+            bool(observations)
+            and (tool_names and tool_names <= {"nba_news"}
+                 or not tool_names and observed_intents <= {"nba_news"})
+        )
+        if news_only and not news_question:
+            return False
+
+        # Event-level questions require an observation that actually mentions
+        # event/PBP facts.  This prevents an empty schedule from being painted
+        # as the answer to “最近一场关键回合”。
+        pbp_question = bool(
+            re.search(
+                r"(?:关键回合|逐回合|最后\s*[0-9一二三四五六七八九十]+\s*秒|最后一攻|"
+                r"最后那个球|最后一球|最后一投|回放|出手者|谁助攻)",
+                text,
+            )
+        )
+        if pbp_question and not re.search(r"(?:回合|逐回合|最后一攻|出手|投篮|罚球|回放)", answers):
+            return False
+
+        # Tactical/recap and player/history questions must not accept a
+        # schedule-only observation (handled above), and an apparently empty
+        # non-schedule answer without a domain marker is also suspicious when
+        # the Agent never used the general NBA query tool.
+        analytical_question = bool(
+            re.search(r"(?:战术|挡拆|防守策略|为什么能|怎么限制|复盘|关键转折|表现如何|评价)", text)
+        )
+        if analytical_question and tool_names and tool_names <= {"nba_schedule", "nba_news"}:
+            if not re.search(r"(?:战术|挡拆|防守|轮转|复盘|转折|执行|对位|篮板)", answers):
+                return False
+
+        return True
+
+    @staticmethod
     def _ground_agent_answer(
         answer: str,
         observations: list[dict[str, Any]],
@@ -1416,6 +1654,7 @@ class ChatUseCase:
         *,
         session_id: UUID,
         context: Any,
+        selected_game_id: str | None,
         deadline_at_utc: datetime,
         token: CancelToken,
         sink: Any,
@@ -1460,6 +1699,7 @@ class ChatUseCase:
                     message=message,
                     client_timezone=context.timezone,
                     intelligence_mode=IntelligenceMode.HYBRID,
+                    selected_game_id=selected_game_id,
                 ),
                 cancel=token,
                 _internal_tool=True,
@@ -1650,6 +1890,34 @@ class ChatUseCase:
 
     async def _call_plan(self, plan: QueryPlan, budget: RequestBudget, token: CancelToken):
         token.raise_if_cancelled()
+        if plan.operation == "get_recent_play_by_play":
+            # Resolve “最近一场” at the typed provider boundary. Restrict to
+            # completed games and allow a hybrid snapshot to fill an empty
+            # live archive; never guess from a stale UI card.
+            try:
+                lookup = self.gateway.search_games(
+                    GameFilters(status=GameStatus.FINAL),
+                    budget=budget,
+                    fallback_on_empty=True,
+                )
+            except TypeError:
+                # Keep custom/legacy gateway implementations compatible with
+                # this additive plan operation; the typed status filter still
+                # prevents scheduled games from being treated as “recent”.
+                lookup = self.gateway.search_games(
+                    GameFilters(status=GameStatus.FINAL), budget=budget
+                )
+            recent = await self._await_with_cancel(lookup, token)
+            if recent.error is not None or not recent.data:
+                return recent
+            games = [item for item in recent.data if isinstance(item, Game)]
+            if not games:
+                return recent.model_copy(update={"data": []})
+            games.sort(key=lambda item: item.start_utc, reverse=True)
+            return await self._await_with_cancel(
+                self.gateway.get_game_summary(games[0].game_id, budget=budget),
+                token,
+            )
         method = getattr(self.gateway, plan.operation)
         kwargs = dict(plan.kwargs)
         # News/background is the one chat operation where an empty live

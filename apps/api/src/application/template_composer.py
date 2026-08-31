@@ -186,6 +186,21 @@ class TemplateComposer:
                 )
                 lines.append("比分尚未完成核验。")
 
+            if any(
+                getattr(metric, "name", "") == "start_time"
+                for metric in getattr(intent, "metrics", [])
+            ):
+                start_text = f"开赛时间：**{format_beijing(game.start_utc)}**（北京时间）。"
+                blocks.append(
+                    AnswerBlock(
+                        type=AnswerBlockType.FACT,
+                        label="开赛时间",
+                        value=format_beijing(game.start_utc),
+                        unit="北京时间",
+                    )
+                )
+                lines.append(start_text)
+
         if multi_game_schedule:
             # Keep a broad date/scoreboard question complete when the provider
             # returns a normal NBA slate.  The single-game lead above is
@@ -415,6 +430,16 @@ class TemplateComposer:
                 }
                 focus_parts: list[str] = []
                 final_event = events[-1] if events else None
+                if any(
+                    getattr(metric, "name", "") == "layup"
+                    for metric in getattr(intent, "metrics", [])
+                ) and not any(
+                    getattr(getattr(event, "shot_type", None), "value", None) == "TWO_POINT"
+                    for event in events
+                ):
+                    focus_parts.append(
+                        "核验到的该时间窗口没有上篮事件；5秒处记录为罚球，0秒处为终场记录"
+                    )
                 if final_event is None:
                     focus_parts.append("没有可核验的最后一条回合记录。")
                 else:
