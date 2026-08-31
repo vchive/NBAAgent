@@ -224,6 +224,14 @@ def create_app(*, settings: Settings | None = None, usecase: ChatUseCase | None 
                         },
                     },
                 )
+        # The demo is served from the same process as the API.  During a
+        # rolling refresh, a browser may otherwise keep an older app.js in
+        # its HTTP cache and continue to display pre-fix conversation
+        # behavior even though the API has already been updated.  Revalidate
+        # the HTML/assets on every navigation; ETag/Last-Modified still make
+        # unchanged assets inexpensive.
+        if request.url.path == "/" or request.url.path.endswith((".js", ".css")):
+            response.headers.setdefault("Cache-Control", "no-cache")
         _set_security_headers(response)
         return response
 
