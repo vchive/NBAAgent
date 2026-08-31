@@ -778,7 +778,15 @@ class TemplateComposer:
                 )
                 lines.append(f"{fact.subject.display_name}：{label} **{fact.value}**。")
 
-        if derived is not None and getattr(derived, "facts", None):
+        # A typed missing-field answer (venue/duration) is complete on its
+        # own.  Derived score facts belong to other questions and must not be
+        # appended here; doing so makes a user asking “在哪里举办” receive a
+        # misleading answer about margin/total points.
+        if (
+            derived is not None
+            and getattr(derived, "facts", None)
+            and not unavailable_game_metrics
+        ):
             series_facts = [fact for fact in derived.facts if fact.predicate == "series_wins"]
             if (
                 series_facts

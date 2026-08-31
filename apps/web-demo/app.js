@@ -1766,7 +1766,7 @@
       started: false,
       branch: null,
       intelligenceMode,
-      selectedGameId: state.activeGame?.game_id ? String(state.activeGame.game_id) : null,
+      selectedGameId: selectedGameIdForRequest(),
     };
     state.run = run;
     setComposerBusy(true);
@@ -1831,7 +1831,7 @@
       live: true,
       abortController: controller,
       intelligenceMode,
-      selectedGameId: state.activeGame?.game_id ? String(state.activeGame.game_id) : null,
+      selectedGameId: selectedGameIdForRequest(),
     };
     state.run = run;
     setComposerBusy(true);
@@ -1915,6 +1915,7 @@
     // stale card ID is sent on every turn and can make a follow-up resolve to
     // an unrelated game.
     syncActiveGameToQuestion(message);
+    syncSelectedGameState();
     if (!options.forceDemo && state.apiAvailable && window.CourtsideApi) {
       return startApiRun(message, options);
     }
@@ -1957,7 +1958,7 @@
       reuseUser: true,
       clientMessageId: state.lastRequest.clientMessageId,
       intelligenceMode: state.lastRequest.intelligenceMode || state.intelligenceMode,
-      selectedGameId: state.lastRequest.selectedGameId || state.activeGame?.game_id || null,
+      selectedGameId: selectedGameIdForRequest() || state.lastRequest.selectedGameId || null,
       // Let the offline demo demonstrate a successful recovery while still
       // preserving the same idempotency key exposed by the real contract.
       forceSuccess: state.retryCount > 0,
@@ -2102,9 +2103,12 @@
     if (!state.apiAvailable || !window.CourtsideApi?.highlightDetail || !game) return;
     const gameId = String(game.game_id || "");
     if (!gameId) return;
+    // Do not let an old detail request mutate the newly selected card.
+    if (selectedGameIdForRequest() !== gameId) return;
     const cached = state.gameDetails.get(gameId);
     if (cached) {
-      if (state.activeGame && String(state.activeGame.game_id) === gameId) {
+      if (selectedGameIdForRequest() === gameId) {
+        state.selectedGameId = gameId;
         state.activeGame = { ...state.activeGame, ...(cached.game || {}) };
         state.activePbp = pbpFromDetail(cached) || {};
         applyGameToHud(state.activeGame);
@@ -2124,8 +2128,9 @@
       const detail = await window.CourtsideApi.highlightDetail(gameId, "Asia/Shanghai");
       if (requestNumber !== state.detailRequest) return;
       state.gameDetails.set(gameId, detail || {});
-      if (!state.activeGame || String(state.activeGame.game_id) !== gameId) return;
+      if (selectedGameIdForRequest() !== gameId) return;
       state.detailLoadingGameId = null;
+      state.selectedGameId = gameId;
       state.activeGame = { ...state.activeGame, ...(detail?.game || {}) };
       state.activePbp = pbpFromDetail(detail) || {};
       applyGameToHud(state.activeGame);
@@ -2138,7 +2143,7 @@
         requireLogin("登录已失效，请重新登录。");
         return;
       }
-      if (state.activeGame && String(state.activeGame.game_id) === gameId) {
+      if (selectedGameIdForRequest() === gameId) {
         state.detailLoadingGameId = null;
         state.activePbp = {};
         renderPbp("Q4");
@@ -2392,6 +2397,39 @@
     // Use the same selection reducer as a card click, but avoid a toast that
     // would interrupt the answer flow while the user is typing.
     selectActiveGame(String(game.game_id));
+  }
+
+  // The selected card ID is the request's source of truth.  Chat previously
+  // read activeGame directly while the visual selection was driven by
+  // selectedGameId; an async list/detail refresh could render one matchup
+  // and send another game's ID.  Only keep an ID that still belongs to the
+  // current list so switching dates cannot leak a stale selection.
+  function selectedGameIdForRequest() {
+    const selectedId = String(state.selectedGameId || "").trim();
+    const activeId = String(state.activeGame?.game_id || "").trim();
+    const isCurrent = (id) => id && (
+      !state.highlightGames.length
+      || state.highlightGames.some((game) => String(game?.game_id || "") === id)
+    );
+    if (isCurrent(selectedId)) return selectedId;
+    if (isCurrent(activeId)) return activeId;
+    return null;
+  }
+
+  function syncSelectedGameState() {
+    const id = selectedGameIdForRequest();
+    if (!id) {
+      state.selectedGameId = null;
+      return null;
+    }
+    state.selectedGameId = id;
+    const listed = state.highlightGames.find(
+      (game) => String(game?.game_id || "") === id,
+    );
+    if (listed && String(state.activeGame?.game_id || "") !== id) {
+      state.activeGame = listed;
+    }
+    return id;
   }
 
   function renderHighlightProjection(games, mode, dateValue, options = {}) {
@@ -3125,6 +3163,10 @@
     });
     el.featuredGame.addEventListener("click", () => {
       if (!state.activeGame) return;
+      // The featured card is also a selectable replay entry.  Make the
+      // selection explicit before opening the HUD so the next “这场比赛”
+      // question is scoped to the card the user just clicked.
+      selectActiveGame(String(state.activeGame.game_id));
       renderPbp("Q4");
       document.querySelector(".pbp-card")?.scrollIntoView({ behavior: "smooth", block: "center" });
       const gameNumber = state.activeGame.series_game_number ? `G${state.activeGame.series_game_number}` : "该场";
