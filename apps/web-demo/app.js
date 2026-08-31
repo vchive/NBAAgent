@@ -1910,6 +1910,11 @@
       requireLogin();
       return false;
     }
+    // An explicit game reference in the new question supersedes whichever
+    // highlights card was selected earlier.  Without this reconciliation the
+    // stale card ID is sent on every turn and can make a follow-up resolve to
+    // an unrelated game.
+    syncActiveGameToQuestion(message);
     if (!options.forceDemo && state.apiAvailable && window.CourtsideApi) {
       return startApiRun(message, options);
     }
@@ -2324,6 +2329,69 @@
       );
     }
     return true;
+  }
+
+  function explicitGameForQuestion(text) {
+    const value = String(text || "").trim();
+    if (!value || !state.highlightGames.length) return null;
+
+    // A concrete game number is stronger than the card that happened to be
+    // selected before the user started typing.  This keeps a follow-up such
+    // as “这场比赛谁打谁” anchored to the explicitly mentioned G4 rather
+    // than to a stale card from another game.
+    const gameNumber = value.match(/(?:总决赛|季后赛|决赛)?\s*G\s*([1-7])\b/i);
+    if (gameNumber) {
+      const number = Number(gameNumber[1]);
+      const candidates = state.highlightGames.filter(
+        (game) => Number(game?.series_game_number) === number,
+      );
+      if (candidates.length === 1) return candidates[0];
+      if (candidates.length > 1) {
+        // If more than one series is present, use any explicitly named team
+        // to disambiguate; otherwise retain the current card when possible.
+        const narrowed = candidates.filter((game) => gameMentionsMatchup(value, game));
+        if (narrowed.length === 1) return narrowed[0];
+        const current = candidates.find(
+          (game) => String(game?.game_id) === String(state.activeGame?.game_id || ""),
+        );
+        return current || candidates[0];
+      }
+    }
+
+    // Explicit “雷霆 对 凯尔特人”/“BOS vs OKC” wording is also enough to
+    // move the active card.  Generic questions without a matchup continue to
+    // use the user's selected card unchanged.
+    const matchup = state.highlightGames.filter((game) => gameMentionsMatchup(value, game));
+    return matchup.length === 1 ? matchup[0] : null;
+  }
+
+  function gameMentionsMatchup(text, game) {
+    if (!game) return false;
+    if (!/(?:对阵|对|vs\.?|v\.?|堆栈)/i.test(text)) return false;
+    const aliases = (team) => [team?.display_name, team?.name, team?.abbreviation]
+      .map((item) => String(item || "").trim())
+      .filter(Boolean);
+    const homeAliases = aliases({
+      display_name: game.home_name,
+      abbreviation: game.home_abbreviation,
+    });
+    const awayAliases = aliases({
+      display_name: game.away_name,
+      abbreviation: game.away_abbreviation,
+    });
+    const includesAlias = (items) => items.some((item) => {
+      const escaped = item.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      return new RegExp(escaped, "i").test(text);
+    });
+    return includesAlias(homeAliases) && includesAlias(awayAliases);
+  }
+
+  function syncActiveGameToQuestion(text) {
+    const game = explicitGameForQuestion(text);
+    if (!game || String(game.game_id) === String(state.activeGame?.game_id || "")) return;
+    // Use the same selection reducer as a card click, but avoid a toast that
+    // would interrupt the answer flow while the user is typing.
+    selectActiveGame(String(game.game_id));
   }
 
   function renderHighlightProjection(games, mode, dateValue, options = {}) {

@@ -59,6 +59,50 @@ test("forwards the selected highlights card as chat context", async ({ page }) =
   expect(selectedGameId).toBe("2026-demo-den-gsw");
 });
 
+test("explicit game mention supersedes a stale selected card for follow-ups", async ({ page }) => {
+  const selectedGameIds: unknown[] = [];
+  await page.route("**/api/v1/chat/stream", async (route) => {
+    const body = route.request().postDataJSON() as Record<string, unknown>;
+    selectedGameIds.push(body.selected_game_id);
+    const requestId = `33333333-3333-4333-8333-${String(selectedGameIds.length).padStart(12, "0")}`;
+    const sessionId = String(body.session_id);
+    const answer = String(body.message).includes("G4")
+      ? "杰伦·布朗得到 32 分。"
+      : "这场比赛是雷霆对凯尔特人。";
+    const completed = {
+      request_id: requestId,
+      session_id: sessionId,
+      status: "completed",
+      answer_markdown: answer,
+      blocks: [{ type: "text", content: answer }],
+      as_of_beijing: null,
+      evidence_state: "verified",
+      corrections: [],
+      follow_up: null,
+      latency_ms: 10,
+    };
+    const sse = [
+      `event: run.started\ndata: ${JSON.stringify({ request_id: requestId, session_id: sessionId })}\n\n`,
+      `event: message.completed\ndata: ${JSON.stringify(completed)}\n\n`,
+    ].join("");
+    await route.fulfill({ status: 200, contentType: "text/event-stream", body: sse });
+  });
+
+  await page.goto("/");
+  await expect(page.locator("#game-list .game-list-card")).toHaveCount(3);
+  // Pick the second card first, then explicitly ask about G4.  The next
+  // pronoun turn must follow G4 rather than the stale second-card selection.
+  await page.locator("#game-list .game-list-card").nth(1).click();
+  const input = page.locator("#message-input");
+  await input.fill("2025-26 总决赛 G4 谁得分最高？");
+  await input.press("Enter");
+  await expect(page.locator(".dynamic-message.assistant-message").last()).toContainText("32");
+  await input.fill("这场比赛谁打谁");
+  await input.press("Enter");
+  await expect(page.locator(".dynamic-message.assistant-message").last()).toContainText("雷霆对凯尔特人");
+  expect(selectedGameIds).toEqual(["2026-finals-g4", "2026-finals-g4"]);
+});
+
 test("full intelligence acceptance prompts render Agent provenance", async ({ page }) => {
   const requestBodies: Array<Record<string, unknown>> = [];
   await page.route("**/healthz", async (route) => {
