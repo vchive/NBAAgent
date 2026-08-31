@@ -29,8 +29,17 @@
     gamesSection: $("#games-section"),
     gameList: $("#game-list"),
     gameListCount: $("#game-list-count"),
+    gamesSectionTitle: $("#games-section-title"),
     highlightsTitle: $("#highlights-title"),
     highlightModes: $$("[data-highlight-mode]"),
+    historyControls: $("#history-controls"),
+    historyRecent: $("#history-recent"),
+    historyCustom: $("#history-custom"),
+    historyRangePicker: $("#history-range-picker"),
+    historyFrom: $("#history-from"),
+    historyTo: $("#history-to"),
+    historyRangeApply: $("#history-range-apply"),
+    historyStatus: $("#history-status"),
     highlightDateLabel: $("#highlight-date-label"),
     highlightDate: $("#highlight-date"),
     highlightDatePicker: $("#highlight-date-picker"),
@@ -146,6 +155,10 @@
     highlightMode: "today",
     highlightDate: "2026-06-12",
     historyDate: "2026-06-12",
+    historyView: "recent",
+    historyRangeFrom: "",
+    historyRangeTo: "",
+    historyLoading: false,
     activeGame: null,
     activePbp: PBP,
     highlightGames: [],
@@ -374,6 +387,56 @@
     state.toastTimer = window.setTimeout(() => {
       el.toast.hidden = true;
     }, 2800);
+  }
+
+  function setHistoryControls(mode, view = state.historyView) {
+    const visible = mode === "history";
+    const busy = visible && state.historyLoading;
+    if (el.historyControls) el.historyControls.hidden = !visible;
+    if (el.historyRecent) {
+      const active = visible && view === "recent";
+      el.historyRecent.classList.toggle("active", active);
+      el.historyRecent.setAttribute("aria-pressed", active ? "true" : "false");
+      el.historyRecent.disabled = false;
+    }
+    if (el.historyCustom) {
+      const active = visible && view === "range";
+      el.historyCustom.classList.toggle("active", active);
+      el.historyCustom.setAttribute("aria-pressed", active ? "true" : "false");
+      el.historyCustom.disabled = false;
+    }
+    if (el.historyRangePicker) el.historyRangePicker.hidden = !visible || view !== "range";
+    if (el.historyRangeApply) el.historyRangeApply.disabled = busy;
+  }
+
+  function setHistoryStatus(message = "", visible = Boolean(message), tone = "info") {
+    if (!el.historyStatus) return;
+    el.historyStatus.textContent = message;
+    el.historyStatus.hidden = !visible;
+    el.historyStatus.dataset.state = tone;
+  }
+
+  function setHistoryRangeDefaults() {
+    const today = beijingDateString();
+    const end = isIsoDate(state.historyRangeTo) && state.historyRangeTo <= today
+      ? state.historyRangeTo
+      : today;
+    const startDate = new Date(`${end}T00:00:00Z`);
+    startDate.setUTCDate(startDate.getUTCDate() - 6);
+    const start = isIsoDate(state.historyRangeFrom) && state.historyRangeFrom <= end
+      ? state.historyRangeFrom
+      : startDate.toISOString().slice(0, 10);
+    state.historyRangeFrom = start;
+    state.historyRangeTo = end;
+    if (el.historyFrom) el.historyFrom.value = start;
+    if (el.historyTo) el.historyTo.value = end;
+  }
+
+  function renderHighlightsLoading(message) {
+    state.historyLoading = true;
+    setHistoryControls(state.highlightMode, state.historyView);
+    setHistoryStatus(message, true, "loading");
+    clearHighlightProjection(message, { loading: true });
   }
 
   function nearBottom() {
@@ -2054,10 +2117,14 @@
     });
   }
 
-  function renderGameList(games) {
+  function renderGameList(games, listLabel = "") {
     if (!el.gameList) return;
     const values = normalizeHighlightGames(games);
     el.gameList.textContent = "";
+    const resolvedLabel = listLabel || (state.highlightMode === "history"
+      ? state.historyView === "range" ? "时间区间比赛" : "最近 5 场比赛"
+      : "当日比赛");
+    if (el.gamesSectionTitle) el.gamesSectionTitle.textContent = resolvedLabel;
     if (el.gameListCount) el.gameListCount.textContent = `${String(values.length).padStart(2, "0")} 场`;
     if (el.gamesSection) el.gamesSection.hidden = !values.length;
     if (!values.length) return;
@@ -2130,7 +2197,7 @@
     updateGameListSelection();
   }
 
-  function renderFeaturedGame(game, mode, dateValue) {
+  function renderFeaturedGame(game, mode, dateValue, options = {}) {
     if (!game || !el.featuredGame) return;
     const safeDate = dateValue || state.highlightDate || "";
     el.featuredGame.hidden = false;
@@ -2153,7 +2220,8 @@
     if (scores[1]) scores[1].textContent = game.away_score == null ? "—" : String(game.away_score);
     if (el.featuredGameFoot) {
       const todayLabel = safeDate === beijingDateString() ? "今日赛事" : "演示赛事";
-      el.featuredGameFoot.textContent = `${formatShortDate(safeDate)} · ${mode === "history" ? "历史回顾" : todayLabel}`;
+      const historyLabel = options.historyLabel || "精彩回顾";
+      el.featuredGameFoot.textContent = `${formatShortDate(safeDate)} · ${mode === "history" ? historyLabel : todayLabel}`;
     }
   }
 
@@ -2176,18 +2244,26 @@
     return true;
   }
 
-  function renderHighlightProjection(games, mode, dateValue) {
+  function renderHighlightProjection(games, mode, dateValue, options = {}) {
     const values = normalizeHighlightGames(games);
     const previousId = state.selectedGameId;
     const game = values.find((item) => String(item.game_id) === String(previousId || "")) || values[0];
     state.highlightGames = values;
     state.highlightMode = mode;
-    state.highlightDate = dateValue;
+    state.historyLoading = false;
+    if (mode === "history") {
+      state.historyView = options.historyView || state.historyView || "recent";
+      if (options.rangeFrom) state.historyRangeFrom = options.rangeFrom;
+      if (options.rangeTo) state.historyRangeTo = options.rangeTo;
+    }
+    state.highlightDate = dateValue || state.highlightDate;
     el.highlightModes.forEach((button) => {
       const active = button.dataset.highlightMode === mode;
       button.classList.toggle("active", active);
       button.setAttribute("aria-pressed", active ? "true" : "false");
     });
+    setHistoryControls(mode, state.historyView);
+    setHistoryStatus();
     const todayButton = el.highlightModes.find((button) => button.dataset.highlightMode === "today");
     const todayStatus = state.apiAvailable ? availabilityForDate(beijingDateString()) : "available";
     if (todayButton) {
@@ -2203,12 +2279,19 @@
     }
     const safeDate = dateValue || state.highlightDate || "";
     syncHighlightDatePicker(mode, safeDate);
+    const historyTitle = options.historyTitle
+      || (state.historyView === "range" && options.rangeFrom && options.rangeTo
+        ? `精彩回顾 · ${formatShortDate(options.rangeFrom)}—${formatShortDate(options.rangeTo)}`
+        : "精彩回顾 · 最近 5 场");
+    const historyDivider = options.historyTitle || historyTitle;
+    const listLabel = options.listLabel
+      || (mode === "history" ? (state.historyView === "range" ? "时间区间比赛" : "最近 5 场比赛") : "当日比赛");
     if (el.highlightsTitle) {
-      el.highlightsTitle.textContent = mode === "history" ? `历史回顾 · ${formatShortDate(safeDate)}` : "今日看点";
+      el.highlightsTitle.textContent = mode === "history" ? historyTitle : "今日看点";
     }
     if (el.dayDivider) {
       const dividerText = mode === "history"
-        ? `历史回顾 · ${formatShortDate(safeDate)}`
+        ? historyDivider
         : (state.apiAvailable && safeDate === beijingDateString()
           ? `今天 · ${formatShortDate(safeDate)}`
           : `演示日期 · ${formatShortDate(safeDate)}`);
@@ -2220,14 +2303,17 @@
       state.selectedGameId = null;
       state.activePbp = null;
       el.featuredGame.hidden = true;
-      renderGameList([]);
+      renderGameList([], listLabel);
       if (el.highlightsEmpty) {
         // Reset a transient validation message before rendering a normal
         // empty-date response.
         el.highlightsEmpty.textContent = mode === "today" && safeDate === beijingDateString()
-          ? "今天没有 NBA 比赛；切换到“历史回顾”查看已结束比赛。"
-          : "这一天暂无可用比赛记录。";
+          ? "今天没有 NBA 比赛；切换到“精彩回顾”查看已结束比赛。"
+          : options.emptyMessage || (state.historyView === "range"
+            ? "该时间范围暂无可用比赛记录。"
+            : "最近暂无可用比赛记录。");
         el.highlightsEmpty.hidden = false;
+        el.highlightsEmpty.classList.remove("is-loading");
       }
       resetHud();
       renderPbp("Q4");
@@ -2236,12 +2322,162 @@
     state.activeGame = game;
     state.selectedGameId = String(game.game_id);
     state.activePbp = state.apiAvailable ? null : pbpForGame(game.game_id);
-    renderGameList(values);
-    renderFeaturedGame(game, mode, dateValue);
+    renderGameList(values, listLabel);
+    renderFeaturedGame(game, mode, dateValue, {
+      historyLabel: state.historyView === "range" ? "自定义时间" : "最近 5 场",
+    });
     if (el.highlightsEmpty) el.highlightsEmpty.hidden = true;
     applyGameToHud(game);
     renderPbp(defaultPbpPeriod(state.activePbp));
     loadGameDetail(game);
+  }
+
+  function sortedHistoryGames(games) {
+    return normalizeHighlightGames(games).sort((left, right) => {
+      const leftTime = Date.parse(left?.start_utc || "") || 0;
+      const rightTime = Date.parse(right?.start_utc || "") || 0;
+      return rightTime - leftTime;
+    });
+  }
+
+  function fixtureGamesInRange(fromDate, toDate, limit = null) {
+    const values = sortedHistoryGames(allFixtureGames().filter((game) => {
+      const day = String(game?.date || game?.start_utc || "").slice(0, 10);
+      return isIsoDate(day) && day >= fromDate && day <= toDate;
+    }));
+    return limit == null ? values : values.slice(0, limit);
+  }
+
+  async function loadRecentHighlights() {
+    const requestNumber = ++state.highlightRequest;
+    state.highlightMode = "history";
+    state.historyView = "recent";
+    setHistoryControls("history", "recent");
+    renderHighlightsLoading("正在拉取最近 5 场比赛…");
+    if (state.apiAvailable && window.CourtsideApi?.highlightsRecent) {
+      try {
+        const payload = await window.CourtsideApi.highlightsRecent(5, "Asia/Shanghai");
+        if (requestNumber !== state.highlightRequest) return;
+        const toDate = payload?.to || beijingDateString();
+        renderHighlightProjection(payload?.games || [], "history", toDate, {
+          historyView: "recent",
+          historyTitle: "精彩回顾 · 最近 5 场",
+          listLabel: "最近 5 场比赛",
+        });
+        if (!payload?.games?.length) setHistoryStatus("已完成核验，最近暂无比赛记录。", true, "empty");
+        return;
+      } catch (error) {
+        if (requestNumber !== state.highlightRequest) return;
+        if (error?.authRequired) {
+          requireLogin("登录已失效，请重新登录。");
+          state.historyLoading = false;
+          setHistoryControls("history", state.historyView);
+          clearHighlightProjection("请登录后查看赛事数据。");
+          setHistoryStatus("需要登录后才能拉取历史比赛。", true, "error");
+          return;
+        }
+        if (error?.network === false) {
+          const message = error?.publicPayload?.error?.message || "历史比赛暂时不可用。";
+          state.historyLoading = false;
+          setHistoryControls("history", state.historyView);
+          clearHighlightProjection(message);
+          setHistoryStatus(`拉取失败：${message}`, true, "error");
+          return;
+        }
+        setTransportLabel(false);
+        state.apiAvailable = false;
+      }
+    }
+    if (requestNumber !== state.highlightRequest) return;
+    const fallback = fixtureGamesInRange("1900-01-01", beijingDateString(), 5);
+    const endDate = fallback[0]?.date || beijingDateString();
+    renderHighlightProjection(fallback, "history", endDate, {
+      historyView: "recent",
+      historyTitle: "精彩回顾 · 最近 5 场",
+      listLabel: "最近 5 场比赛",
+    });
+    if (!state.apiProbeComplete || !state.apiAvailable) {
+      setConnection("ready", "离线演示");
+      setHistoryStatus("已展示最近 5 场演示数据。", true, "offline");
+    }
+  }
+
+  async function loadHistoryRange(fromDate, toDate) {
+    if (!isIsoDate(fromDate) || !isIsoDate(toDate)) {
+      setHistoryStatus("请选择开始日期和结束日期。", true, "error");
+      return;
+    }
+    if (fromDate > toDate) {
+      setHistoryStatus("开始日期不能晚于结束日期。", true, "error");
+      return;
+    }
+    const span = (Date.parse(`${toDate}T00:00:00Z`) - Date.parse(`${fromDate}T00:00:00Z`)) / 86_400_000 + 1;
+    if (span > 93) {
+      setHistoryStatus("时间区间最多支持 93 天，请缩小范围。", true, "error");
+      return;
+    }
+    const today = beijingDateString();
+    if (toDate > today) {
+      setHistoryStatus("结束日期不能晚于今天。", true, "error");
+      return;
+    }
+    state.historyView = "range";
+    state.historyRangeFrom = fromDate;
+    state.historyRangeTo = toDate;
+    if (el.historyFrom) el.historyFrom.value = fromDate;
+    if (el.historyTo) el.historyTo.value = toDate;
+    setHistoryControls("history", "range");
+    const requestNumber = ++state.highlightRequest;
+    state.highlightMode = "history";
+    renderHighlightsLoading(`正在拉取 ${formatShortDate(fromDate)}—${formatShortDate(toDate)} 的比赛…`);
+    if (state.apiAvailable && window.CourtsideApi?.highlightsRange) {
+      try {
+        const payload = await window.CourtsideApi.highlightsRange(fromDate, toDate, "Asia/Shanghai");
+        if (requestNumber !== state.highlightRequest) return;
+        renderHighlightProjection(payload?.games || [], "history", payload?.to || toDate, {
+          historyView: "range",
+          rangeFrom: payload?.from || fromDate,
+          rangeTo: payload?.to || toDate,
+          historyTitle: `精彩回顾 · ${formatShortDate(payload?.from || fromDate)}—${formatShortDate(payload?.to || toDate)}`,
+          listLabel: "时间区间比赛",
+        });
+        if (!payload?.games?.length) setHistoryStatus("已完成核验，该时间范围暂无比赛。", true, "empty");
+        return;
+      } catch (error) {
+        if (requestNumber !== state.highlightRequest) return;
+        if (error?.authRequired) {
+          requireLogin("登录已失效，请重新登录。");
+          state.historyLoading = false;
+          setHistoryControls("history", state.historyView);
+          clearHighlightProjection("请登录后查看赛事数据。");
+          setHistoryStatus("需要登录后才能拉取历史比赛。", true, "error");
+          return;
+        }
+        if (error?.network === false) {
+          const message = error?.publicPayload?.error?.message || "历史比赛暂时不可用。";
+          state.historyLoading = false;
+          setHistoryControls("history", state.historyView);
+          clearHighlightProjection(message);
+          setHistoryStatus(`拉取失败：${message}`, true, "error");
+          return;
+        }
+        setTransportLabel(false);
+        state.apiAvailable = false;
+      }
+    }
+    if (requestNumber !== state.highlightRequest) return;
+    const fallback = fixtureGamesInRange(fromDate, toDate);
+    renderHighlightProjection(fallback, "history", toDate, {
+      historyView: "range",
+      rangeFrom: fromDate,
+      rangeTo: toDate,
+      historyTitle: `精彩回顾 · ${formatShortDate(fromDate)}—${formatShortDate(toDate)}`,
+      listLabel: "时间区间比赛",
+    });
+    if (!state.apiProbeComplete || !state.apiAvailable) {
+      setConnection("ready", "离线演示");
+      setHistoryStatus("已展示区间内演示数据。", true, "offline");
+    }
   }
 
   async function loadHighlights(mode, selectedDate) {
@@ -2255,6 +2491,7 @@
       state.historyDate = selectedDate;
     }
     if (state.apiAvailable && window.CourtsideApi) {
+      renderHighlightsLoading(mode === "today" ? "正在拉取今日比赛…" : "正在拉取比赛…");
       try {
         const payload = await window.CourtsideApi.highlights(
           mode === "today" ? null : selectedDate,
@@ -2316,10 +2553,14 @@
   }
 
   function setHighlightsMode(mode) {
+    if (mode === "history") {
+      loadRecentHighlights();
+      return;
+    }
     const selectedDate = mode === "today"
       ? (state.apiAvailable ? beijingDateString() : "2026-06-12")
-      : (state.historyDate || el.highlightDate?.value || state.highlightDate || "2026-06-12");
-    loadHighlights(mode, selectedDate);
+      : "2026-06-12";
+    loadHighlights("today", selectedDate);
   }
 
   function selectHighlightDate(value) {
@@ -2350,16 +2591,17 @@
     loadHighlights("history", value);
   }
 
-  function clearHighlightProjection(message = "这一天暂无可用比赛记录。") {
+  function clearHighlightProjection(message = "这一天暂无可用比赛记录。", options = {}) {
     state.activeGame = null;
     state.activePbp = null;
     state.highlightGames = [];
     state.selectedGameId = null;
     if (el.featuredGame) el.featuredGame.hidden = true;
-    renderGameList([]);
+    renderGameList([], state.historyView === "range" ? "时间区间比赛" : state.highlightMode === "history" ? "最近 5 场比赛" : "当日比赛");
     if (el.highlightsEmpty) {
       el.highlightsEmpty.textContent = message;
       el.highlightsEmpty.hidden = false;
+      el.highlightsEmpty.classList.toggle("is-loading", Boolean(options.loading));
     }
     resetHud();
     renderPbp("Q4");
@@ -2601,8 +2843,7 @@
       if (state.highlightMode === "today") {
         loadHighlights("today", beijingDateString());
       } else {
-        loadHighlights("history", state.historyDate);
-        ensureCalendarAvailability(state.calendarMonth, true);
+        loadRecentHighlights();
       }
     }
   }
@@ -2663,6 +2904,24 @@
         if (button.disabled) return;
         setHighlightsMode(button.dataset.highlightMode || "today");
       });
+    });
+    el.historyRecent?.addEventListener("click", () => loadRecentHighlights());
+    el.historyCustom?.addEventListener("click", () => {
+      // Invalidate an in-flight recent query so switching views never lets
+      // its late response overwrite the custom-range form.
+      state.highlightRequest += 1;
+      state.historyLoading = false;
+      state.historyView = "range";
+      setHistoryRangeDefaults();
+      setHistoryControls("history", "range");
+      clearHighlightProjection("选择时间区间后点击“查看”。");
+      if (el.highlightsTitle) el.highlightsTitle.textContent = "精彩回顾 · 自定义时间";
+      const divider = $("span", el.dayDivider);
+      if (divider) divider.textContent = "精彩回顾 · 自定义时间";
+      setHistoryStatus("请选择开始和结束日期，然后点击“查看”。", true, "info");
+    });
+    el.historyRangeApply?.addEventListener("click", () => {
+      loadHistoryRange(el.historyFrom?.value || "", el.historyTo?.value || "");
     });
     el.highlightDate?.addEventListener("change", () => selectHighlightDate(el.highlightDate.value));
     el.highlightDateTrigger?.addEventListener("click", () => {
@@ -2746,6 +3005,19 @@
     if (el.highlightDate) {
       el.highlightDate.max = beijingDateString();
       el.highlightDate.hidden = true;
+    }
+    const today = beijingDateString();
+    const weekAgo = new Date(`${today}T00:00:00Z`);
+    weekAgo.setUTCDate(weekAgo.getUTCDate() - 6);
+    state.historyRangeFrom = weekAgo.toISOString().slice(0, 10);
+    state.historyRangeTo = today;
+    if (el.historyFrom) {
+      el.historyFrom.max = today;
+      el.historyFrom.value = state.historyRangeFrom;
+    }
+    if (el.historyTo) {
+      el.historyTo.max = today;
+      el.historyTo.value = state.historyRangeTo;
     }
     seedFixtureAvailability();
     state.calendarMonth = monthKeyForDate(el.highlightDate?.value || state.highlightDate);

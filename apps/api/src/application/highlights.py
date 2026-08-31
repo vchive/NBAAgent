@@ -12,6 +12,7 @@ from apps.api.src.api.schemas import (
     HighlightLeader,
     HighlightPlay,
     HighlightsAvailabilityResponse,
+    HighlightsRangeResponse,
     HighlightsResponse,
 )
 from apps.api.src.application.ports import RequestBudget
@@ -42,6 +43,11 @@ class HighlightsAvailabilityRangeError(ValueError):
 
 
 MAX_AVAILABILITY_DAYS = 31
+# A custom review window is intentionally bounded.  It is wide enough for a
+# month-plus playoff run while preventing an accidental year-long fan-out of
+# daily provider requests from the public demo.
+MAX_HIGHLIGHTS_RANGE_DAYS = 93
+RECENT_HIGHLIGHTS_LOOKBACK_DAYS = 120
 
 
 class HighlightsProviderError(RuntimeError):
@@ -121,6 +127,179 @@ class HighlightsService:
             timezone=timezone_name,
             games=public_games,
             as_of_beijing=as_of,
+            evidence_state=evidence_state.value.lower(),
+        )
+
+    async def for_range(
+        self,
+        start_day: date,
+        end_day: date,
+        *,
+        timezone_name: str = "Asia/Shanghai",
+    ) -> HighlightsRangeResponse:
+        """Return every game in a bounded local-date interval."""
+
+        return await self._range(
+            start_day,
+            end_day,
+            timezone_name=timezone_name,
+            limit=None,
+            max_days=MAX_HIGHLIGHTS_RANGE_DAYS,
+        )
+
+    async def recent(
+        self,
+        *,
+        limit: int = 5,
+        timezone_name: str = "Asia/Shanghai",
+        reference_day: date | None = None,
+    ) -> HighlightsRangeResponse:
+        """Return the latest completed games, newest first.
+
+        The provider is queried in bounded slices from newest to oldest and
+        stops once enough games have been collected.  The wider lookback keeps
+        the review panel useful during the off-season while avoiding an
+        unbounded historical scan.
+        """
+
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 20:
+            raise HighlightsAvailabilityRangeError("recent limit must be between 1 and 20")
+        zone = validate_timezone(timezone_name)
+        end_day = reference_day or self._now().astimezone(zone).date()
+        start_day = end_day - timedelta(days=RECENT_HIGHLIGHTS_LOOKBACK_DAYS - 1)
+        return await self._range(
+            start_day,
+            end_day,
+            timezone_name=zone.key,
+            limit=limit,
+            newest_first=True,
+            max_days=RECENT_HIGHLIGHTS_LOOKBACK_DAYS,
+        )
+
+    async def _range(
+        self,
+        start_day: date,
+        end_day: date,
+        *,
+        timezone_name: str,
+        limit: int | None,
+        newest_first: bool = False,
+        max_days: int = MAX_HIGHLIGHTS_RANGE_DAYS,
+    ) -> HighlightsRangeResponse:
+        zone = validate_timezone(timezone_name)
+        timezone_name = zone.key
+        if not isinstance(start_day, date) or isinstance(start_day, datetime):
+            raise HighlightsAvailabilityRangeError("range requires calendar dates")
+        if not isinstance(end_day, date) or isinstance(end_day, datetime):
+            raise HighlightsAvailabilityRangeError("range requires calendar dates")
+        if end_day < start_day:
+            raise HighlightsAvailabilityRangeError("range must be ordered")
+        span = (end_day - start_day).days + 1
+        if span > max_days:
+            raise HighlightsAvailabilityRangeError(
+                f"highlight range is limited to {max_days} days"
+            )
+        local_today = self._now().astimezone(zone).date()
+        if end_day > local_today:
+            raise FutureHighlightsDateError("future highlight dates are not available")
+
+        provider = getattr(self.gateway, "provider", self.gateway)
+        provider_limit = getattr(provider, "max_date_slices", None)
+        if provider_limit is None:
+            slice_limit = span
+        else:
+            try:
+                slice_limit = int(provider_limit) - 1
+            except (TypeError, ValueError):
+                slice_limit = span
+        slice_limit = max(1, min(slice_limit, max_days))
+        days = [start_day + timedelta(days=index) for index in range(span)]
+        chunks = [days[index : index + slice_limit] for index in range(0, span, slice_limit)]
+        if newest_first:
+            chunks.reverse()
+
+        # Each chunk reserves one gateway hand-off plus one provider operation
+        # per local date for adapters such as ESPN.  The generous bounded cap
+        # is still request-scoped and cannot grow beyond the 93-day API limit.
+        budget = RequestBudget(
+            self._now().replace(microsecond=0) + timedelta(seconds=20),
+            max_provider_operations=max(8, span + 2 * len(chunks) + 2),
+            max_retries_per_operation=0,
+            clock=self.clock,
+        )
+        games_by_id: dict[str, Game] = {}
+        retrieved: list[datetime] = []
+        had_success = False
+        had_unknown = False
+        first_error: Any | None = None
+        for chunk in chunks:
+            first = local_date_range(chunk[0], timezone_name)
+            last = local_date_range(chunk[-1], timezone_name)
+            date_range = DateRange(
+                start_inclusive=first.start_inclusive,
+                end_exclusive=last.end_exclusive,
+            )
+            try:
+                result = await self.gateway.search_games(
+                    GameFilters(date_range=date_range),
+                    budget=budget,
+                )
+            except Exception:
+                had_unknown = True
+                continue
+            if result.error is not None or not isinstance(result.data, list):
+                first_error = first_error or result.error
+                had_unknown = True
+                continue
+            had_success = True
+            had_unknown = had_unknown or bool(result.partial)
+            if isinstance(result.retrieved_at_utc, datetime):
+                retrieved.append(result.retrieved_at_utc)
+            for game in result.data:
+                if not isinstance(game, Game):
+                    had_unknown = True
+                    continue
+                game_day = game.start_utc.astimezone(zone).date()
+                if start_day <= game_day <= end_day:
+                    games_by_id[game.game_id] = game
+            if limit is not None and len(games_by_id) >= limit:
+                break
+
+        if not had_success and first_error is not None:
+            kind = getattr(first_error.kind, "value", str(first_error.kind))
+            mapping = {
+                "TIMEOUT": ("UPSTREAM_TIMEOUT", "数据暂时不可用，请稍后重试。", True, 504),
+                "RATE_LIMITED": (
+                    "UPSTREAM_RATE_LIMITED",
+                    "数据服务暂时繁忙，请稍后重试。",
+                    True,
+                    429,
+                ),
+                "AUTH": ("UPSTREAM_AUTH", "数据服务暂时不可用，请稍后再试。", False, 502),
+            }
+            code, message, retryable, status_code = mapping.get(
+                kind,
+                ("INVALID_UPSTREAM_DATA", "公开数据格式异常，暂时无法核验。", False, 502),
+            )
+            raise HighlightsProviderError(code, message, retryable, status_code)
+
+        games = sorted(games_by_id.values(), key=lambda item: item.start_utc, reverse=True)
+        if limit is not None:
+            games = games[:limit]
+        public_games = [self._public_game(game) for game in games]
+        evidence_state = (
+            EvidenceState.PARTIAL
+            if had_unknown
+            else EvidenceState.VERIFIED
+            if public_games
+            else EvidenceState.NONE
+        )
+        return HighlightsRangeResponse(
+            timezone=timezone_name,
+            from_date=start_day.isoformat(),
+            to_date=end_day.isoformat(),
+            games=public_games,
+            as_of_beijing=format_beijing(max(retrieved)) if public_games and retrieved else None,
             evidence_state=evidence_state.value.lower(),
         )
 
@@ -483,4 +662,6 @@ __all__ = [
     "HighlightsProviderError",
     "HighlightsService",
     "MAX_AVAILABILITY_DAYS",
+    "MAX_HIGHLIGHTS_RANGE_DAYS",
+    "RECENT_HIGHLIGHTS_LOOKBACK_DAYS",
 ]

@@ -726,6 +726,22 @@ empty provider response yields `empty`; provider errors/partial responses remain
 future days are not queried. The client may gray/disable confirmed empty and future days while
 keeping non-future unknown days retryable. This endpoint does not alter chat session context.
 
+### 9.3 Recent and custom-range highlights
+
+The left rail labels the historical projection as “精彩回顾”. The default view calls
+`GET /api/v1/highlights/recent?limit=5&timezone=...`; the service scans bounded provider date
+slices from newest to oldest and stops after five normalized games. The browser sorts the returned
+projection by `start_utc` descending and renders every returned game card.
+
+The “自定义时间” view calls
+`GET /api/v1/highlights/range?from=YYYY-MM-DD&to=YYYY-MM-DD&timezone=...`. Both endpoints return
+the provider-free `HighlightsRangeResponse` with inclusive `from`/`to`, all matching `games`, an
+optional freshness timestamp and `evidence_state`. Custom ranges are capped at 93 local calendar
+days; reversed, future or oversized ranges return `400 INVALID_PAYLOAD`. The browser clears the
+previous projection and displays an explicit “正在拉取” status while the request is in flight,
+then renders all returned games (or a truthful empty state) atomically. Request errors retain a
+retryable/error message and never leave stale scoreboard cards visible.
+
 ## 10. Error, retry and cache policy
 
 ### 10.1 Error taxonomy

@@ -73,40 +73,19 @@
 
           <div class="highlight-switcher" role="group" aria-label="赛事焦点时间范围">
             <button type="button" class="highlight-mode active" data-highlight-mode="today" aria-pressed="true">今日赛事</button>
-            <button type="button" class="highlight-mode" data-highlight-mode="history" aria-pressed="false">历史回顾</button>
-            <div class="highlight-date-picker" id="highlight-date-picker" hidden>
-              <label class="highlight-date-label" id="highlight-date-label" for="highlight-date-trigger">日期</label>
-              <button
-                class="highlight-date-trigger"
-                id="highlight-date-trigger"
-                type="button"
-                aria-label="选择有比赛的回顾日期"
-                aria-haspopup="dialog"
-                aria-controls="highlight-calendar"
-                aria-expanded="false"
-              >
-                <span id="highlight-date-value">2026/06/12</span>
-                <span class="date-trigger-chevron" aria-hidden="true">⌄</span>
-              </button>
-              <div class="highlight-calendar" id="highlight-calendar" role="dialog" aria-label="选择有比赛的回顾日期" hidden>
-                <div class="calendar-heading">
-                  <button class="calendar-nav" id="calendar-prev" type="button" aria-label="上一个月">‹</button>
-                  <strong id="calendar-month">2026 年 6 月</strong>
-                  <button class="calendar-nav" id="calendar-next" type="button" aria-label="下一个月">›</button>
-                </div>
-                <div class="calendar-weekdays" aria-hidden="true">
-                  <span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span>
-                </div>
-                <div class="calendar-grid" id="calendar-grid" role="grid" aria-label="月份日期"></div>
-                <div class="calendar-status" id="calendar-status" role="status" aria-live="polite">
-                  <span class="calendar-legend-dot has-games" aria-hidden="true"></span><span>有比赛</span>
-                  <span class="calendar-legend-dot no-games" aria-hidden="true"></span><span>无比赛 / 不可选</span>
-                  <span class="calendar-status-text" id="calendar-status-text">正在准备日期数据…</span>
-                </div>
+            <button type="button" class="highlight-mode" data-highlight-mode="history" aria-pressed="false">精彩回顾</button>
+            <div class="history-controls" id="history-controls" hidden>
+              <div class="history-view-switch" role="group" aria-label="精彩回顾范围">
+                <button type="button" class="history-view-button active" id="history-recent" aria-pressed="true">最近 5 场</button>
+                <button type="button" class="history-view-button" id="history-custom" aria-pressed="false">自定义时间</button>
               </div>
-              <!-- Keep a native control as a no-script/accessibility fallback. The
-                   custom calendar owns the visible interaction when JS is ready. -->
-              <input id="highlight-date" class="highlight-date" type="date" value="2026-06-12" aria-label="选择回顾日期" hidden />
+              <div class="history-range-picker" id="history-range-picker" hidden>
+                <label for="history-from">从 <input id="history-from" type="date" aria-label="回顾开始日期" /></label>
+                <span aria-hidden="true">—</span>
+                <label for="history-to">至 <input id="history-to" type="date" aria-label="回顾结束日期" /></label>
+                <button type="button" class="history-range-apply" id="history-range-apply">查看</button>
+              </div>
+              <div class="history-status" id="history-status" role="status" aria-live="polite" hidden></div>
             </div>
           </div>
 
@@ -122,7 +101,7 @@
           </button>
           <section class="games-section" id="games-section" aria-labelledby="games-section-title" hidden>
             <div class="section-label games-section-heading">
-              <span id="games-section-title">当日比赛</span>
+              <span id="games-section-title">今日比赛</span>
               <span class="section-count" id="game-list-count">00 场</span>
             </div>
             <div class="game-list" id="game-list" role="list" aria-label="当日比赛列表"></div>

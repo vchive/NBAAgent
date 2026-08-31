@@ -12,6 +12,7 @@ from apps.api.src.api.schemas import (
     ErrorResponse,
     HighlightAvailabilityDay,
     HighlightsAvailabilityResponse,
+    HighlightsRangeResponse,
     HighlightsResponse,
     MessageDeltaPayload,
     RunStatusPayload,
@@ -79,6 +80,25 @@ def test_highlights_response_validates_freshness_timestamp() -> None:
                 as_of_beijing=value,
                 evidence_state="none",
             )
+
+
+def test_highlights_range_response_uses_date_aliases() -> None:
+    response = HighlightsRangeResponse(
+        timezone="Asia/Shanghai",
+        from_date="2026-06-06",
+        to_date="2026-06-12",
+        games=[],
+        evidence_state="none",
+    )
+    assert response.model_dump(mode="json", by_alias=True)["from"] == "2026-06-06"
+    with pytest.raises(ValidationError):
+        HighlightsRangeResponse(
+            timezone="Asia/Shanghai",
+            from_date="2026-06-12",
+            to_date="2026-06-06",
+            games=[],
+            evidence_state="none",
+        )
 
 
 def test_technical_error_envelope_is_explicit() -> None:

@@ -124,20 +124,24 @@ fixture, asserting safe envelopes, zero downstream calls for short circuits, and
 
 ## Phase 8: Public provider and date-scoped highlights (Priority: P1/P2)
 
-**Goal**: make live retrieval replaceable and expose a small “赛事焦点 / 历史回顾” projection
+**Goal**: make live retrieval replaceable and expose a small “赛事焦点 / 精彩回顾” projection
 without conflating it with the chat `HISTORY` intent.
 
 - [X] T044 [P] [US1] Add ESPN-shaped response fixtures and adapter contract tests in `tests/contract/test_provider.py` and `apps/api/src/providers/fixtures/espn/`.
 - [X] T045 [US1] Implement allow-listed, timeout-bounded ESPN adapter and normalizer mapping in `apps/api/src/providers/espn_adapter.py`.
 - [X] T046 [US1] Add cache freshness, fallback selection, and public-data mode configuration in `apps/api/src/providers/gateway.py` and `apps/api/src/config.py`.
 - [X] T047 [P] [US1] Add `GET /api/v1/highlights?date=YYYY-MM-DD&timezone=Asia/Shanghai` schema, fixture projection, and no-future-date validation in `apps/api/src/api/highlights_routes.py` and `apps/api/src/application/highlights.py`.
-- [X] T048 [US1] Update the web demo left rail to a compact “赛事焦点 / 历史回顾” mode and date selector, clearing stale games on empty/failed dates in `apps/web-demo/index.html`, `apps/web-demo/app.js`, and `apps/web-demo/styles.css`.
+- [X] T048 [US1] Update the web demo left rail to a compact “赛事焦点 / 精彩回顾” mode with recent-five and custom-range controls, clearing stale games on empty/failed dates in `apps/web-demo/index.html`, `apps/web-demo/app.js`, and `apps/web-demo/styles.css`.
 - [X] T049 [US1] Complete highlights/date-range contract and UI smoke coverage in
   `tests/contract/test_highlights.py` and `tests/e2e/test_highlights.spec.ts`.
 - [X] T060 [US1] Add the bounded `GET /api/v1/highlights/availability` calendar projection with
   tri-state (`available` / `empty` / `unknown`) days, future-day handling, fixture coverage, and
   contract tests in `apps/api/src/api/highlights_routes.py`, `apps/api/src/application/highlights.py`,
   `apps/api/src/api/schemas.py`, and `tests/contract/test_highlights.py`.
+- [X] T061 [US1] Add recent-five and bounded custom-range highlights endpoints, provider-slice
+  aggregation, visible loading feedback, and browser/contract coverage in `apps/api/src/api/highlights_routes.py`,
+  `apps/api/src/application/highlights.py`, `apps/api/src/api/schemas.py`, `apps/web-demo/api-client.js`,
+  `apps/web-demo/app.js`, and `tests/e2e/test_highlights.spec.ts`.
 
 ## Phase 9: Evaluation, operations, and delivery
 

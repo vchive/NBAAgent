@@ -215,6 +215,39 @@ confirmed (for example, an upstream timeout/partial response or a future day). C
 and disable `empty` days and all `is_future=true` days. They SHOULD leave non-future `unknown`
 days retryable rather than presenting them as no-game dates.
 
+## 4.2 Recent and custom-range highlights
+
+`GET /api/v1/highlights/recent?limit=5&timezone=...` returns the latest completed games, newest
+first. `limit` defaults to 5 and is bounded to 1–20. The response uses the range projection shape
+below; its `from`/`to` fields describe the bounded lookback used by the service, while `games` is
+limited to the requested count.
+
+`GET /api/v1/highlights/range?from=YYYY-MM-DD&to=YYYY-MM-DD&timezone=...` returns every normalized
+game whose local start date falls in the inclusive interval. Custom ranges are limited to 93 days;
+missing, reversed, future or oversized ranges return `400 INVALID_PAYLOAD`. Both endpoints keep
+the response provider-free and do not alter chat session context:
+
+```json
+{
+  "timezone": "Asia/Shanghai",
+  "from": "2026-06-06",
+  "to": "2026-06-12",
+  "games": [
+    {
+      "game_id": "2026-finals-g4",
+      "start_utc": "2026-06-12T01:30:00Z",
+      "home_name": "凯尔特人",
+      "away_name": "雷霆",
+      "status": "final",
+      "home_score": 108,
+      "away_score": 104
+    }
+  ],
+  "as_of_beijing": "2026-08-28 15:50",
+  "evidence_state": "verified|partial|none"
+}
+```
+
 ## 5. Technical error envelope
 
 ```json

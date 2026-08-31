@@ -36,7 +36,8 @@
 - 公开来源实时查询、字段归一化、事实核验、确定性聚合及友好证据状态。
 - 当前会话的多轮上下文（至少支持围绕一场比赛连续三轮追问）。
 - Web 聊天、普通 HTTP 与 SSE 流式两种入口。
-- 左栏赛事焦点/历史回顾日期投影；它只读取日期范围 scoreboard，不改变聊天上下文。
+- 左栏赛事焦点/精彩回顾投影；默认读取最近 5 场，自定义时间读取有界日期范围 scoreboard，
+  不改变聊天上下文。
 
 ### Non-goals
 
@@ -535,7 +536,7 @@ P50/P90/P95、超时/错误率、SSE 断开率、准入拒绝率和 fallback 率
 | FR-019–021 | Pre-retrieval Safety Guard、Refusal Templates | 安全红队测试、provider call=0 断言 |
 | FR-022–023 | Resilience、Observability、Session Store | 错误契约、超时/429/隔离测试 |
 | FR-024–026 | Evaluation Runner、报告和方案文档 | `contracts/evaluation.md`、黄金题回放 |
-| FR-027 | Highlights API、日期可用性投影、日期选择器、文字 PBP 投影 | `contracts/http-api.md`、日期/无赛日置灰/空状态 UI 验收 |
+| FR-027 | Highlights API、最近 5 场/日期范围投影、加载反馈、文字 PBP 投影 | `contracts/http-api.md`、最近赛事/区间/空状态 UI 验收 |
 | FR-029 | Web Search Gateway、DuckDuckGo adapter、搜索证据分级与注入隔离 | `tests/contract/test_web_search.py`, `tests/integration/test_web_search.py` |
 | FR-030 | Full-intelligence RuntimeSelector、会话偏好、模型回退与状态展示 | `tests/contract/test_intelligence_mode.py`, `tests/integration/test_full_intelligence.py`, `tests/e2e/test_chat.spec.ts` |
 | ARCH-HERMES-001 | Official Hermes Agent boundary/capability self-test | `tests/contract/test_hermes_agent_runtime.py`, `tests/integration/test_agent_safety.py` |

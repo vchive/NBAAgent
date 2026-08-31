@@ -313,6 +313,75 @@
     return payload;
   }
 
+  async function highlightsRecent(limit = 5, timezone) {
+    if (!baseUrl) throw new Error("API base is not configured");
+    const query = new URLSearchParams({
+      timezone: timezone || "Asia/Shanghai",
+      limit: String(limit),
+    });
+    let response;
+    try {
+      response = await withTimeout(25_000, (signal) => fetch(
+        endpoint(`/api/v1/highlights/recent?${query.toString()}`),
+        {
+          method: "GET",
+          headers: { Accept: "application/json" },
+          credentials: "include",
+          signal,
+        },
+      ));
+    } catch (cause) {
+      const error = new Error("历史比赛连接暂时不可用。", { cause });
+      error.network = true;
+      throw error;
+    }
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      const error = new Error(payload?.error?.message || "历史比赛暂时不可用。");
+      error.publicPayload = payload;
+      error.status = response.status;
+      error.network = false;
+      error.authRequired = response.status === 401 || payload?.error?.code === "AUTH_REQUIRED";
+      throw error;
+    }
+    return payload;
+  }
+
+  async function highlightsRange(fromDate, toDate, timezone) {
+    if (!baseUrl) throw new Error("API base is not configured");
+    const query = new URLSearchParams({
+      timezone: timezone || "Asia/Shanghai",
+      from: String(fromDate || ""),
+      to: String(toDate || ""),
+    });
+    let response;
+    try {
+      response = await withTimeout(25_000, (signal) => fetch(
+        endpoint(`/api/v1/highlights/range?${query.toString()}`),
+        {
+          method: "GET",
+          headers: { Accept: "application/json" },
+          credentials: "include",
+          signal,
+        },
+      ));
+    } catch (cause) {
+      const error = new Error("历史比赛连接暂时不可用。", { cause });
+      error.network = true;
+      throw error;
+    }
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      const error = new Error(payload?.error?.message || "历史比赛暂时不可用。");
+      error.publicPayload = payload;
+      error.status = response.status;
+      error.network = false;
+      error.authRequired = response.status === 401 || payload?.error?.code === "AUTH_REQUIRED";
+      throw error;
+    }
+    return payload;
+  }
+
   async function highlightsAvailability(fromDate, toDate, timezone) {
     if (!baseUrl) throw new Error("API base is not configured");
     const query = new URLSearchParams({ timezone: timezone || "Asia/Shanghai" });
@@ -387,6 +456,8 @@
     logout,
     streamChat,
     highlights,
+    highlightsRecent,
+    highlightsRange,
     highlightsAvailability,
     highlightDetail,
     SSEParser,

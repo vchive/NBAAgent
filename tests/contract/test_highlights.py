@@ -57,6 +57,74 @@ async def test_fixture_demo_date_populates_unscoped_today_projection() -> None:
 
 
 @pytest.mark.asyncio
+async def test_highlights_recent_returns_latest_five_games() -> None:
+    app = create_app(settings=Settings(highlights_demo_date="2026-06-12"))
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(
+            "/api/v1/highlights/recent",
+            params={"limit": 5, "timezone": "Asia/Shanghai"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["from"] == "2026-02-13"
+    assert payload["to"] == "2026-06-12"
+    assert [game["game_id"] for game in payload["games"]] == [
+        "2026-finals-g4",
+        "2026-demo-den-gsw",
+        "2026-demo-lal-nyk",
+        "2026-finals-g3",
+        "2026-finals-g2",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_highlights_range_returns_all_games_in_interval() -> None:
+    app = create_app()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(
+            "/api/v1/highlights/range",
+            params={
+                "from": "2026-06-06",
+                "to": "2026-06-12",
+                "timezone": "Asia/Shanghai",
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["from"] == "2026-06-06"
+    assert payload["to"] == "2026-06-12"
+    assert len(payload["games"]) == 6
+    assert payload["games"][0]["game_id"] == "2026-finals-g4"
+
+
+@pytest.mark.asyncio
+async def test_highlights_range_rejects_future_and_wide_intervals() -> None:
+    app = create_app()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        future = await client.get(
+            "/api/v1/highlights/range",
+            params={"from": "2999-01-01", "to": "2999-01-02"},
+        )
+        wide = await client.get(
+            "/api/v1/highlights/range",
+            params={"from": "2025-01-01", "to": "2026-01-01"},
+        )
+
+    assert future.status_code == 400
+    assert future.json()["error"]["code"] == "INVALID_PAYLOAD"
+    assert wide.status_code == 400
+    assert wide.json()["error"]["code"] == "INVALID_PAYLOAD"
+
+
+@pytest.mark.asyncio
 async def test_highlight_detail_returns_leaders_and_play_by_play() -> None:
     app = create_app()
     async with httpx.AsyncClient(

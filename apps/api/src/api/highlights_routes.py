@@ -13,6 +13,7 @@ from apps.api.src.api.schemas import (
     ErrorResponse,
     HighlightDetailResponse,
     HighlightsAvailabilityResponse,
+    HighlightsRangeResponse,
     HighlightsResponse,
 )
 from apps.api.src.application.highlights import (
@@ -89,6 +90,107 @@ async def highlights_availability(
         return _error_response(
             "INVALID_PAYLOAD",
             "日期范围必须按顺序填写，且不能超过 31 天。",
+            400,
+        )
+    except HighlightsProviderError as exc:
+        return _error_response(exc.code, exc.message, exc.status_code, retryable=exc.retryable)
+    return result
+
+
+@router.get(
+    "/api/v1/highlights/recent",
+    response_model=HighlightsRangeResponse,
+    response_model_by_alias=True,
+    responses={
+        400: {"model": ErrorResponse},
+        429: {"model": ErrorResponse},
+        502: {"model": ErrorResponse},
+        504: {"model": ErrorResponse},
+    },
+)
+async def highlights_recent(
+    request: Request,
+    limit: int = Query(default=5, ge=1, le=20),
+    timezone_name: str = Query(default="Asia/Shanghai", alias="timezone"),
+):
+    """Return the latest completed games for the default review view."""
+
+    usecase = getattr(request.app.state, "chat_use_case", None)
+    gateway = getattr(usecase, "gateway", None)
+    if gateway is None:
+        return _error_response(
+            "SERVICE_BUSY",
+            "历史赛事服务暂时不可用，请稍后重试。",
+            503,
+            retryable=True,
+        )
+    service = HighlightsService(gateway, clock=getattr(usecase, "clock", None))
+    try:
+        zone = validate_timezone(timezone_name)
+        configured_demo = _fixture_demo_date(request)
+        result = await service.recent(
+            limit=limit,
+            timezone_name=zone.key,
+            reference_day=configured_demo,
+        )
+    except HighlightsAvailabilityRangeError:
+        return _error_response("INVALID_PAYLOAD", "最近比赛数量必须在 1–20 场之间。", 400)
+    except FutureHighlightsDateError:
+        return _error_response("INVALID_PAYLOAD", "不能查询未来日期。", 400)
+    except HighlightsProviderError as exc:
+        return _error_response(exc.code, exc.message, exc.status_code, retryable=exc.retryable)
+    return result
+
+
+@router.get(
+    "/api/v1/highlights/range",
+    response_model=HighlightsRangeResponse,
+    response_model_by_alias=True,
+    responses={
+        400: {"model": ErrorResponse},
+        429: {"model": ErrorResponse},
+        502: {"model": ErrorResponse},
+        504: {"model": ErrorResponse},
+    },
+)
+async def highlights_range(
+    request: Request,
+    from_date: str | None = Query(default=None, alias="from"),
+    to_date: str | None = Query(default=None, alias="to"),
+    timezone_name: str = Query(default="Asia/Shanghai", alias="timezone"),
+):
+    """Return all games in a caller-selected local-date interval."""
+
+    usecase = getattr(request.app.state, "chat_use_case", None)
+    gateway = getattr(usecase, "gateway", None)
+    if gateway is None:
+        return _error_response(
+            "SERVICE_BUSY",
+            "历史赛事服务暂时不可用，请稍后重试。",
+            503,
+            retryable=True,
+        )
+    try:
+        zone = validate_timezone(timezone_name)
+        if not from_date or not to_date:
+            raise ValueError("from and to are required")
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", from_date):
+            raise ValueError("from must use YYYY-MM-DD")
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", to_date):
+            raise ValueError("to must use YYYY-MM-DD")
+        start = date.fromisoformat(from_date)
+        end = date.fromisoformat(to_date)
+    except (ValueError, TypeError):
+        return _error_response("INVALID_PAYLOAD", "日期或时区格式不正确。", 400)
+    service = HighlightsService(gateway, clock=getattr(usecase, "clock", None))
+    try:
+        result = await service.for_range(start, end, timezone_name=zone.key)
+    except FutureHighlightsDateError:
+        return _error_response("INVALID_PAYLOAD", "不能查询未来日期。", 400)
+    except HighlightsAvailabilityRangeError:
+        return _error_response(
+            "INVALID_PAYLOAD",
+            "日期范围必须按顺序填写，且不能超过 93 天。",
             400,
         )
     except HighlightsProviderError as exc:
