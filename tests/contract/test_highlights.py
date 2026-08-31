@@ -84,6 +84,41 @@ async def test_hybrid_fallback_is_not_presented_as_today() -> None:
 
 
 @pytest.mark.asyncio
+async def test_hybrid_historical_empty_fills_review_from_snapshot() -> None:
+    """An empty live archive must not make a known review date look blank."""
+
+    primary = FixtureProvider(scenario="empty")
+    fallback = FixtureProvider()
+    gateway = ProviderGateway(primary, fallback=fallback, max_retries=0)
+    clock = FixedClock(datetime(2026, 8, 31, 12, 0, tzinfo=UTC))
+    settings = Settings(public_data_mode="hybrid")
+    usecase = ChatUseCase(primary, gateway=gateway, clock=clock, settings=settings)
+    app = create_app(settings=settings, usecase=usecase)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        dated = await client.get(
+            "/api/v1/highlights",
+            params={"date": "2026-06-12", "timezone": "Asia/Shanghai"},
+        )
+        ranged = await client.get(
+            "/api/v1/highlights/range",
+            params={
+                "from": "2026-06-12",
+                "to": "2026-06-12",
+                "timezone": "Asia/Shanghai",
+            },
+        )
+
+    assert dated.status_code == ranged.status_code == 200
+    assert len(dated.json()["games"]) == 3
+    assert len(ranged.json()["games"]) == 3
+    assert dated.json()["evidence_state"] == "partial"
+    assert ranged.json()["evidence_state"] == "partial"
+
+
+@pytest.mark.asyncio
 async def test_highlights_recent_returns_latest_five_games() -> None:
     app = create_app(settings=Settings(highlights_demo_date="2026-06-12"))
     async with httpx.AsyncClient(

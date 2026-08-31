@@ -70,6 +70,51 @@ class HighlightsService:
         value = self.clock.now_utc() if hasattr(self.clock, "now_utc") else self.clock()
         return value.astimezone(UTC)
 
+    async def _search_games(
+        self,
+        filters: GameFilters,
+        *,
+        budget: RequestBudget,
+        allow_empty_fallback: bool = False,
+    ) -> Any:
+        """Query the configured gateway and optionally fill historical gaps.
+
+        In a hybrid deployment the live provider can legitimately return an
+        empty list when its historical scoreboard endpoint has no archive for
+        a date that is present in our deterministic snapshot.  The gateway
+        intentionally does not replace authoritative empty responses, which
+        is correct for current-day facts.  Date-scoped review is different:
+        it is explicitly allowed to use the bounded historical snapshot when
+        the live archive is unavailable.  Keep that decision local to the
+        highlights projection and mark the result partial so the UI/API never
+        presents it as fully live evidence.
+        """
+
+        result = await self.gateway.search_games(filters, budget=budget)
+        if (
+            not allow_empty_fallback
+            or getattr(result, "error", None) is not None
+            or getattr(result, "data", None)
+        ):
+            return result
+        fallback = getattr(self.gateway, "fallback", None)
+        fallback_method = getattr(fallback, "search_games", None)
+        if fallback_method is None or budget.remaining_ms() <= 0:
+            return result
+        try:
+            fallback_result = await fallback_method(filters, budget=budget)
+        except Exception:
+            return result
+        if (
+            getattr(fallback_result, "error", None) is None
+            and isinstance(getattr(fallback_result, "data", None), list)
+            and fallback_result.data
+        ):
+            return fallback_result.model_copy(
+                update={"used_fallback": True, "partial": True}
+            )
+        return result
+
     async def for_date(
         self, day: date, *, timezone_name: str = "Asia/Shanghai"
     ) -> HighlightsResponse:
@@ -84,9 +129,10 @@ class HighlightsService:
             max_provider_operations=2,
             clock=self.clock,
         )
-        result = await self.gateway.search_games(
+        result = await self._search_games(
             GameFilters(date_range=date_range),
             budget=budget,
+            allow_empty_fallback=day < local_today,
         )
         # Hybrid mode may return a deterministic snapshot after the live
         # provider is unavailable. That fallback is useful for historical
@@ -250,9 +296,10 @@ class HighlightsService:
                 end_exclusive=last.end_exclusive,
             )
             try:
-                result = await self.gateway.search_games(
+                result = await self._search_games(
                     GameFilters(date_range=date_range),
                     budget=budget,
+                    allow_empty_fallback=True,
                 )
             except Exception:
                 had_unknown = True
