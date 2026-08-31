@@ -266,6 +266,9 @@ uvicorn apps.api.src.main:app --host 0.0.0.0 --port 8000
 日志中没有 `Authorization`/token。向第三方发送的内容仅包括清理后的问题、泛化上下文、
 NBA 工具 schema 和清洗后的工具观察，不包括 Provider URL、原始 JSON、
 证据/会话 ID 或凭据。
+Dockerfile 默认使用清华 PyPI 镜像，并将依赖安装层与源码层分离；国内服务器首次构建仍
+需等待 Hermes 依赖下载，后续源码变更可复用依赖缓存。镜像不可达时可在构建命令追加
+`--build-arg PIP_INDEX_URL=https://pypi.org/simple`。
 该 override 默认不切换 `PUBLIC_DATA_MODE`；如需公开 ESPN 数据，必须另行设置 `live`/`hybrid`
 并审核条款。未配置认证时不要把 live profile 直接暴露给公网用户。
 

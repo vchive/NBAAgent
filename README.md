@@ -75,6 +75,13 @@ npm run e2e
 docker compose up --build
 ```
 
+Dockerfile 已将第三方依赖层与业务源码层分开，并默认使用清华 PyPI 镜像；国内服务器
+首次构建仍需下载 Hermes 依赖，后续代码更新不会重复下载。若镜像不可达，可显式切换：
+
+```bash
+docker compose build --build-arg PIP_INDEX_URL=https://pypi.org/simple
+```
+
 Compose 默认将完整应用暴露在 `http://<服务器IP>:8000/`。
 后台对外部署请先设置访问密码，再使用 `make deploy`；查看状态用 `make deploy-status`。
 
