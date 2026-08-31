@@ -7,12 +7,25 @@ from typing import Any
 
 from apps.api.src.api.schemas import (
     HighlightAvailabilityDay,
+    HighlightDetailResponse,
     HighlightGame,
+    HighlightLeader,
+    HighlightPlay,
     HighlightsAvailabilityResponse,
     HighlightsResponse,
 )
 from apps.api.src.application.ports import RequestBudget
-from apps.api.src.domain.models import DateRange, EvidenceState, Game, GameFilters
+from apps.api.src.domain.models import (
+    DateRange,
+    EvidenceState,
+    Game,
+    GameBundle,
+    GameFilters,
+    PlayEvent,
+    PlayEventType,
+    ShotType,
+    StatLine,
+)
 from apps.api.src.domain.time_policy import (
     format_beijing,
     local_date_range,
@@ -108,6 +121,58 @@ class HighlightsService:
             timezone=timezone_name,
             games=public_games,
             as_of_beijing=as_of,
+            evidence_state=evidence_state.value.lower(),
+        )
+
+    async def detail(
+        self, game_id: str, *, timezone_name: str = "Asia/Shanghai"
+    ) -> HighlightDetailResponse:
+        """Load the selected game's safe scoreboard and replay projection.
+
+        The date projection intentionally stays cheap and only lists games.  A
+        second, bounded call loads the summary/PBP for the selected card so a
+        multi-game slate does not fan out into one upstream request per game.
+        """
+
+        zone = validate_timezone(timezone_name)
+        timezone_name = zone.key
+        budget = RequestBudget(
+            self._now().replace(microsecond=0) + timedelta(seconds=8),
+            max_provider_operations=2,
+            clock=self.clock,
+        )
+        result = await self.gateway.get_game_summary(game_id, budget=budget)
+        if result.error is not None:
+            kind = getattr(result.error.kind, "value", str(result.error.kind))
+            mapping = {
+                "NOT_FOUND": ("NOT_FOUND", "该场比赛暂无可用详情。", False, 404),
+                "TIMEOUT": ("UPSTREAM_TIMEOUT", "数据暂时不可用，请稍后重试。", True, 504),
+                "RATE_LIMITED": (
+                    "UPSTREAM_RATE_LIMITED",
+                    "数据服务暂时繁忙，请稍后重试。",
+                    True,
+                    429,
+                ),
+                "AUTH": ("UPSTREAM_AUTH", "数据服务暂时不可用，请稍后再试。", False, 502),
+            }
+            code, message, retryable, status_code = mapping.get(
+                kind,
+                ("INVALID_UPSTREAM_DATA", "公开数据格式异常，暂时无法核验。", False, 502),
+            )
+            raise HighlightsProviderError(code, message, retryable, status_code)
+        bundle = result.data
+        if not isinstance(bundle, GameBundle):
+            raise HighlightsProviderError(
+                "INVALID_UPSTREAM_DATA", "公开数据格式异常，暂时无法核验。", False, 502
+            )
+        plays = self._public_plays(bundle)
+        leaders = self._public_leaders(bundle.leaders or bundle.stat_lines)
+        evidence_state = EvidenceState.PARTIAL if result.partial else EvidenceState.VERIFIED
+        return HighlightDetailResponse(
+            game=self._public_game(bundle.game),
+            leaders=leaders,
+            plays=plays,
+            as_of_beijing=format_beijing(result.retrieved_at_utc),
             evidence_state=evidence_state.value.lower(),
         )
 
@@ -303,6 +368,113 @@ class HighlightsService:
             away_score=game.away_score,
             series_game_number=game.series_game_number,
         )
+
+    @staticmethod
+    def _public_leaders(rows: list[StatLine]) -> list[HighlightLeader]:
+        values: list[HighlightLeader] = []
+        for row in rows[:16]:
+            subject = getattr(row, "subject", None)
+            name = getattr(subject, "display_name", None)
+            if not isinstance(name, str) or not name.strip():
+                continue
+            metrics = getattr(row, "metrics", {}) or {}
+
+            def metric(name: str) -> int | None:
+                value = metrics.get(name)
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    return int(value)
+                return None
+
+            values.append(
+                HighlightLeader(
+                    player_name=name.strip(),
+                    points=metric("points"),
+                    rebounds=metric("rebounds"),
+                    assists=metric("assists"),
+                )
+            )
+        return values
+
+    @staticmethod
+    def _public_plays(bundle: GameBundle) -> list[HighlightPlay]:
+        if bundle.plays is None:
+            return []
+        home = bundle.game.home
+        away = bundle.game.away
+        home_alias = next(
+            (alias for alias in home.aliases if len(alias) <= 4 and alias.isascii()), None
+        )
+        away_alias = next(
+            (alias for alias in away.aliases if len(alias) <= 4 and alias.isascii()), None
+        )
+        events = sorted(
+            bundle.plays.events,
+            key=lambda item: (
+                item.period,
+                -float(item.clock_seconds_remaining),
+                item.provider_index,
+            ),
+        )
+        output: list[HighlightPlay] = []
+        previous_home: int | None = None
+        previous_away: int | None = None
+        for event in events[:2000]:
+            team = None
+            if event.home_score_after is not None and event.away_score_after is not None:
+                if previous_home is not None and event.home_score_after > previous_home:
+                    team = home_alias
+                elif previous_away is not None and event.away_score_after > previous_away:
+                    team = away_alias
+                previous_home = event.home_score_after
+                previous_away = event.away_score_after
+            player = event.shooter.display_name if event.shooter is not None else None
+            action = HighlightsService._play_action(event)
+            detail = (
+                f"比分更新至 {event.away_score_after}–{event.home_score_after}"
+                if event.home_score_after is not None and event.away_score_after is not None
+                else None
+            )
+            output.append(
+                HighlightPlay(
+                    period=event.period,
+                    clock=HighlightsService._format_clock(event.clock_seconds_remaining),
+                    team=team,
+                    player_name=player,
+                    action=action,
+                    detail=detail,
+                    home_score=event.home_score_after,
+                    away_score=event.away_score_after,
+                )
+            )
+        return output
+
+    @staticmethod
+    def _format_clock(seconds: Any) -> str:
+        total = max(0.0, float(seconds))
+        minutes = int(total // 60)
+        remainder = total - minutes * 60
+        return f"{minutes}:{remainder:04.1f}"
+
+    @staticmethod
+    def _play_action(event: PlayEvent) -> str:
+        if event.event_type is PlayEventType.SHOT:
+            label = {
+                ShotType.THREE_POINT: "三分",
+                ShotType.TWO_POINT: "两分",
+                ShotType.UNKNOWN: "投篮",
+                ShotType.NONE: "投篮",
+                ShotType.FREE_THROW: "罚球",
+            }.get(event.shot_type, "投篮")
+            return f"{label}{'命中' if event.points is not None else '出手'}"
+        if event.event_type is PlayEventType.FREE_THROW:
+            return f"罚球{'命中' if event.points is not None else '出手'}"
+        return {
+            PlayEventType.FOUL: "犯规",
+            PlayEventType.TURNOVER: "失误",
+            PlayEventType.REBOUND: "篮板",
+            PlayEventType.SUBSTITUTION: "换人",
+            PlayEventType.OTHER: "比赛事件",
+        }.get(event.event_type, "比赛事件")
 
 
 __all__ = [

@@ -57,6 +57,42 @@ async def test_fixture_demo_date_populates_unscoped_today_projection() -> None:
 
 
 @pytest.mark.asyncio
+async def test_highlight_detail_returns_leaders_and_play_by_play() -> None:
+    app = create_app()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(
+            "/api/v1/highlights/2026-finals-g4/detail",
+            params={"timezone": "Asia/Shanghai"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["game"]["home_score"] == 108
+    assert payload["game"]["away_score"] == 104
+    assert payload["leaders"][0]["player_name"] == "杰伦·布朗"
+    assert payload["leaders"][0]["points"] == 32
+    assert len(payload["plays"]) == 6
+    assert payload["plays"][-1]["period"] == 4
+    assert payload["plays"][-1]["home_score"] == 108
+    assert payload["plays"][-1]["away_score"] == 104
+
+
+@pytest.mark.asyncio
+async def test_highlight_detail_not_found_is_safe() -> None:
+    app = create_app()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get("/api/v1/highlights/not-a-game/detail")
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "NOT_FOUND"
+    assert "provider" not in response.text.lower()
+
+
+@pytest.mark.asyncio
 async def test_highlights_availability_returns_tri_state_fixture_calendar() -> None:
     app = create_app()
     async with httpx.AsyncClient(

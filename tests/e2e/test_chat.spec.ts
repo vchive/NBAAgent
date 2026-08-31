@@ -8,6 +8,8 @@ test("streams a question and keeps the input usable", async ({ page }) => {
   await expect(page.locator(".dynamic-message.assistant-message").last()).toContainText("32");
   await expect(page.locator("#stream-status")).toBeHidden();
   await expect(input).toBeEnabled();
+  await expect(page.locator("#recommendations")).toBeVisible();
+  await expect(page.locator(".recommendation-button")).toHaveCount(3);
 });
 
 test("supports cancellation and a follow-up in the same session", async ({ page }) => {

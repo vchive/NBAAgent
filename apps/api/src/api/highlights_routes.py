@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 
 from apps.api.src.api.schemas import (
     ErrorResponse,
+    HighlightDetailResponse,
     HighlightsAvailabilityResponse,
     HighlightsResponse,
 )
@@ -143,6 +144,44 @@ async def highlights(
     except HighlightsProviderError as exc:
         return _error_response(exc.code, exc.message, exc.status_code, retryable=exc.retryable)
     return result
+
+
+@router.get(
+    "/api/v1/highlights/{game_id}/detail",
+    response_model=HighlightDetailResponse,
+    response_model_by_alias=True,
+    responses={
+        400: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        429: {"model": ErrorResponse},
+        502: {"model": ErrorResponse},
+        504: {"model": ErrorResponse},
+    },
+)
+async def highlight_detail(
+    request: Request,
+    game_id: str,
+    timezone_name: str = Query(default="Asia/Shanghai", alias="timezone"),
+):
+    """Return safe summary/PBP data for the selected scoreboard card."""
+
+    usecase = getattr(request.app.state, "chat_use_case", None)
+    gateway = getattr(usecase, "gateway", None)
+    if gateway is None:
+        return _error_response(
+            "SERVICE_BUSY",
+            "比赛详情服务暂时不可用，请稍后重试。",
+            503,
+            retryable=True,
+        )
+    if not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", game_id):
+        return _error_response("INVALID_PAYLOAD", "比赛标识格式不正确。", 400)
+    service = HighlightsService(gateway, clock=getattr(usecase, "clock", None))
+    try:
+        timezone_name = validate_timezone(timezone_name).key
+        return await service.detail(game_id, timezone_name=timezone_name)
+    except HighlightsProviderError as exc:
+        return _error_response(exc.code, exc.message, exc.status_code, retryable=exc.retryable)
 
 
 def _fixture_demo_date(request: Request) -> date | None:

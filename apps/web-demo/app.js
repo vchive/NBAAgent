@@ -50,6 +50,8 @@
     input: $("#message-input"),
     charCount: $("#char-count"),
     sendButton: $("#send-button"),
+    recommendations: $("#recommendations"),
+    recommendationList: $("#recommendation-list"),
     intelligenceMode: $("#intelligence-mode"),
     intelligenceHelp: $("#intelligence-help"),
     streamStatus: $("#stream-status"),
@@ -145,6 +147,9 @@
     activePbp: PBP,
     highlightGames: [],
     selectedGameId: null,
+    detailRequest: 0,
+    detailLoadingGameId: null,
+    gameDetails: new Map(),
     apiAvailable: false,
     apiProbeComplete: false,
     apiDataMode: "fixture",
@@ -1213,6 +1218,35 @@
     });
   }
 
+  function renderRecommendations(response) {
+    if (!el.recommendations || !el.recommendationList) return;
+    const game = state.activeGame;
+    const home = game?.home_name || "这场比赛主队";
+    const away = game?.away_name || "这场比赛客队";
+    const suggestions = [];
+    if (response?.follow_up) suggestions.push(String(response.follow_up));
+    if (game) {
+      suggestions.push(`${away} 对 ${home} 谁得分最高？`);
+      suggestions.push("这场比赛最后 5 秒发生了什么？");
+      suggestions.push(`${home} 为什么能赢下这场比赛？`);
+    } else {
+      suggestions.push("今天有哪些 NBA 比赛？");
+      suggestions.push("最近一场比赛的关键回合是什么？");
+      suggestions.push("你能帮我做哪些 NBA 数据分析？");
+    }
+    const values = [...new Set(suggestions.map((item) => item.trim()).filter(Boolean))].slice(0, 3);
+    el.recommendationList.textContent = "";
+    values.forEach((prompt) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "recommendation-button";
+      button.dataset.prompt = prompt;
+      button.textContent = prompt;
+      el.recommendationList.append(button);
+    });
+    el.recommendations.hidden = values.length === 0;
+  }
+
   function renderError(container, response, retryable) {
     const card = document.createElement("div");
     card.className = "error-card dynamic-error";
@@ -1315,6 +1349,7 @@
     // same nodes keeps focus/scroll behaviour stable and avoids duplicate
     // assistant messages when the terminal envelope arrives.
     body.append(meta, card);
+    renderRecommendations(response);
     if (placeholder.article && !placeholder.article.parentElement) {
       placeholder.article.append(placeholder.avatar || createAvatar("assistant-avatar", "CS"), body);
       el.chatLog.append(placeholder.article);
@@ -1799,6 +1834,7 @@
       // Ignore storage failures.
     }
     $$(".dynamic-message").forEach((message) => message.remove());
+    if (el.recommendations) el.recommendations.hidden = true;
     showToast("已开始新对话，会话上下文已隔离");
     el.input.value = "";
     updateCharCount();
@@ -1877,8 +1913,83 @@
   }
 
   function gameHasPbp(game) {
+    const detail = game ? state.gameDetails.get(String(game.game_id)) : null;
+    if (detail) return Array.isArray(detail.plays) && detail.plays.length > 0;
     const pbp = game ? pbpForGame(game.game_id) : null;
     return Boolean(pbp && Object.values(pbp).some((events) => Array.isArray(events) && events.length));
+  }
+
+  function pbpFromDetail(detail) {
+    if (!detail || !Array.isArray(detail.plays) || !detail.plays.length) return null;
+    const grouped = { Q1: [], Q2: [], Q3: [], Q4: [], OT: [] };
+    detail.plays.forEach((play) => {
+      const periodNumber = Number(play?.period);
+      const period = periodNumber > 4 ? "OT" : `Q${periodNumber}`;
+      if (!grouped[period]) return;
+      const team = String(play?.team || "").trim();
+      grouped[period].push({
+        clock: String(play?.clock || "—"),
+        team: team || "—",
+        teamClass: tokenClass(team),
+        player: String(play?.player_name || "比赛事件"),
+        action: String(play?.action || "比赛事件"),
+        detail: String(play?.detail || ""),
+        away: play?.away_score == null ? null : Number(play.away_score),
+        home: play?.home_score == null ? null : Number(play.home_score),
+      });
+    });
+    return grouped;
+  }
+
+  async function loadGameDetail(game) {
+    if (!state.apiAvailable || !window.CourtsideApi?.highlightDetail || !game) return;
+    const gameId = String(game.game_id || "");
+    if (!gameId) return;
+    const cached = state.gameDetails.get(gameId);
+    if (cached) {
+      if (state.activeGame && String(state.activeGame.game_id) === gameId) {
+        state.activeGame = { ...state.activeGame, ...(cached.game || {}) };
+        state.activePbp = pbpFromDetail(cached) || {};
+        applyGameToHud(state.activeGame);
+        renderFeaturedGame(state.activeGame, state.highlightMode, state.highlightDate);
+        renderGameList(state.highlightGames);
+        renderPbp(defaultPbpPeriod(state.activePbp));
+      }
+      return;
+    }
+    const requestNumber = ++state.detailRequest;
+    state.detailLoadingGameId = gameId;
+    if (state.activeGame && String(state.activeGame.game_id) === gameId) {
+      state.activePbp = null;
+      renderPbp("Q4");
+    }
+    try {
+      const detail = await window.CourtsideApi.highlightDetail(gameId, "Asia/Shanghai");
+      if (requestNumber !== state.detailRequest) return;
+      state.gameDetails.set(gameId, detail || {});
+      if (!state.activeGame || String(state.activeGame.game_id) !== gameId) return;
+      state.detailLoadingGameId = null;
+      state.activeGame = { ...state.activeGame, ...(detail?.game || {}) };
+      state.activePbp = pbpFromDetail(detail) || {};
+      applyGameToHud(state.activeGame);
+      renderFeaturedGame(state.activeGame, state.highlightMode, state.highlightDate);
+      renderGameList(state.highlightGames);
+      renderPbp(defaultPbpPeriod(state.activePbp));
+    } catch (error) {
+      if (requestNumber !== state.detailRequest) return;
+      if (error?.authRequired) {
+        requireLogin("登录已失效，请重新登录。");
+        return;
+      }
+      if (state.activeGame && String(state.activeGame.game_id) === gameId) {
+        state.detailLoadingGameId = null;
+        state.activePbp = {};
+        renderPbp("Q4");
+        if (error?.network === false) showToast(error.message || "该场比赛详情暂不可用");
+      }
+    } finally {
+      if (requestNumber === state.detailRequest) state.detailLoadingGameId = null;
+    }
   }
 
   function defaultPbpPeriod(pbp) {
@@ -2035,11 +2146,12 @@
     if (!game) return false;
     state.activeGame = game;
     state.selectedGameId = targetId;
-    state.activePbp = pbpForGame(targetId);
+    state.activePbp = state.apiAvailable ? null : pbpForGame(targetId);
     updateGameListSelection();
     renderFeaturedGame(game, state.highlightMode, state.highlightDate);
     applyGameToHud(game);
     renderPbp(defaultPbpPeriod(state.activePbp));
+    loadGameDetail(game);
     if (options.announce) {
       const matchup = `${game.away_name || "客队"} · ${game.home_name || "主队"}`;
       showToast(state.activePbp ? `已切换至 ${matchup}，可查看文字回放` : `已切换至 ${matchup}，该场暂无可用文字回放`);
@@ -2104,12 +2216,13 @@
     }
     state.activeGame = game;
     state.selectedGameId = String(game.game_id);
-    state.activePbp = pbpForGame(game.game_id);
+    state.activePbp = state.apiAvailable ? null : pbpForGame(game.game_id);
     renderGameList(values);
     renderFeaturedGame(game, mode, dateValue);
     if (el.highlightsEmpty) el.highlightsEmpty.hidden = true;
     applyGameToHud(game);
     renderPbp(defaultPbpPeriod(state.activePbp));
+    loadGameDetail(game);
   }
 
   async function loadHighlights(mode, selectedDate) {
@@ -2240,10 +2353,14 @@
   function renderPbp(period, preserveIndex = false) {
     state.currentPeriod = period;
     const events = currentPbp()[period] || [];
+    const detailLoading = Boolean(state.detailLoadingGameId && state.activeGame
+      && String(state.detailLoadingGameId) === String(state.activeGame.game_id));
     const requested = preserveIndex ? state.pbpIndex : events.length - 1;
     state.pbpIndex = Math.max(0, Math.min(requested, Math.max(events.length - 1, 0)));
     el.pbpList.textContent = "";
-    el.eventCount.textContent = `${String(events.length).padStart(2, "0")} EVENTS`;
+    el.eventCount.textContent = detailLoading
+      ? "LOADING"
+      : `${String(events.length).padStart(2, "0")} EVENTS`;
     el.pbpSlider.max = String(Math.max(events.length - 1, 0));
     el.pbpSlider.value = String(state.pbpIndex);
     el.pbpSlider.disabled = !events.length;
@@ -2256,9 +2373,11 @@
       empty.className = "pbp-empty";
       empty.setAttribute("role", "listitem");
       empty.setAttribute("aria-live", "polite");
-      empty.textContent = !state.activeGame
-        ? "暂无选中的比赛，先从左侧选择一场赛事。"
-        : (period === "OT" ? "本场没有加时回合，终场在第四节结束时确定。" : "该场暂无可用的逐回合记录。");
+      empty.textContent = detailLoading
+        ? "正在加载该场比赛的逐回合记录…"
+        : !state.activeGame
+          ? "暂无选中的比赛，先从左侧选择一场赛事。"
+          : (period === "OT" ? "本场没有加时回合，终场在第四节结束时确定。" : "该场暂无可用的逐回合记录。");
       el.pbpList.append(empty);
       el.periodTabs.forEach((tab) => {
         const active = tab.dataset.period === period;
@@ -2556,6 +2675,17 @@
       if (!button) return;
       const prompt = button.dataset.prompt || "";
       if (state.streaming) return;
+      el.input.value = "";
+      updateCharCount();
+      autoGrowInput();
+      startRequest(prompt);
+    });
+
+    el.recommendationList?.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-prompt]");
+      if (!button || state.streaming) return;
+      const prompt = button.dataset.prompt || "";
+      if (!prompt) return;
       el.input.value = "";
       updateCharCount();
       autoGrowInput();

@@ -542,6 +542,61 @@ class HighlightGame(_WireBase):
         return value
 
 
+class HighlightLeader(_WireBase):
+    """Safe, compact leader projection used by the scoreboard detail view."""
+
+    player_name: str = Field(min_length=1, max_length=200)
+    points: int | None = Field(default=None, ge=0)
+    rebounds: int | None = Field(default=None, ge=0)
+    assists: int | None = Field(default=None, ge=0)
+
+    @field_validator("player_name")
+    @classmethod
+    def _player_name_safe(cls, value: str) -> str:
+        return _validate_public_text(value)
+
+
+class HighlightPlay(_WireBase):
+    """UI-ready play-by-play row with provider metadata removed."""
+
+    period: int = Field(ge=1, le=10)
+    clock: str = Field(min_length=1, max_length=16)
+    team: str | None = Field(default=None, max_length=10)
+    player_name: str | None = Field(default=None, max_length=200)
+    action: str = Field(min_length=1, max_length=120)
+    detail: str | None = Field(default=None, max_length=240)
+    home_score: int | None = Field(default=None, ge=0)
+    away_score: int | None = Field(default=None, ge=0)
+
+    @field_validator("clock", "team", "player_name", "action", "detail")
+    @classmethod
+    def _play_text_safe(cls, value: str | None) -> str | None:
+        return None if value is None else _validate_public_text(value)
+
+
+class HighlightDetailResponse(_WireBase):
+    """Detailed, user-facing data loaded after selecting one game."""
+
+    game: HighlightGame
+    leaders: list[HighlightLeader] = Field(default_factory=list, max_length=16)
+    plays: list[HighlightPlay] = Field(default_factory=list, max_length=2000)
+    as_of_beijing: str | None = None
+    evidence_state: EvidenceState
+
+    @field_validator("as_of_beijing")
+    @classmethod
+    def _as_of_format(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not _AS_OF_RE.fullmatch(value):
+            raise ValueError("as_of_beijing must use YYYY-MM-DD HH:mm")
+        try:
+            datetime.strptime(value, "%Y-%m-%d %H:%M")
+        except ValueError as exc:
+            raise ValueError("as_of_beijing is not a valid date/time") from exc
+        return value
+
+
 class HighlightsResponse(_WireBase):
     date: str
     timezone: str
@@ -776,8 +831,11 @@ __all__ = [
     "HealthDependencies",
     "HealthResponse",
     "HighlightAvailabilityDay",
+    "HighlightDetailResponse",
     "HighlightsAvailabilityResponse",
     "HighlightGame",
+    "HighlightLeader",
+    "HighlightPlay",
     "HighlightsResponse",
     "JsonScalar",
     "MessageDeltaPayload",

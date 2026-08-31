@@ -346,6 +346,38 @@
     return payload;
   }
 
+  async function highlightDetail(gameId, timezone) {
+    if (!baseUrl) throw new Error("API base is not configured");
+    const query = new URLSearchParams({ timezone: timezone || "Asia/Shanghai" });
+    const encodedId = encodeURIComponent(String(gameId || ""));
+    let response;
+    try {
+      response = await withTimeout(9000, (signal) => fetch(
+        endpoint(`/api/v1/highlights/${encodedId}/detail?${query.toString()}`),
+        {
+          method: "GET",
+          headers: { Accept: "application/json" },
+          credentials: "include",
+          signal,
+        },
+      ));
+    } catch (cause) {
+      const error = new Error("比赛详情连接暂时不可用。", { cause });
+      error.network = true;
+      throw error;
+    }
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      const error = new Error(payload?.error?.message || "比赛详情暂时不可用。");
+      error.publicPayload = payload;
+      error.status = response.status;
+      error.network = false;
+      error.authRequired = response.status === 401 || payload?.error?.code === "AUTH_REQUIRED";
+      throw error;
+    }
+    return payload;
+  }
+
   window.CourtsideApi = {
     baseUrl,
     health,
@@ -356,6 +388,7 @@
     streamChat,
     highlights,
     highlightsAvailability,
+    highlightDetail,
     SSEParser,
   };
 })();

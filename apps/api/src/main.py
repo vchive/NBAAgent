@@ -129,6 +129,7 @@ def create_app(*, settings: Settings | None = None, usecase: ChatUseCase | None 
             or path == "/api/v1/chat/stream"
             or path == "/api/v1/highlights"
             or path == "/api/v1/highlights/availability"
+            or path.startswith("/api/v1/highlights/")
         )
         manager: AuthManager = request.app.state.auth_manager
         if protected and manager.enabled and request.method != "OPTIONS":

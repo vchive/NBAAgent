@@ -1734,6 +1734,59 @@ p {
   border-color: rgba(255, 108, 126, 0.4);
 }
 
+.recommendations {
+  display: grid;
+  gap: 8px;
+  margin: 0 24px 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(85, 213, 230, 0.14);
+  border-radius: 10px;
+  background: rgba(85, 213, 230, 0.035);
+}
+
+.recommendations[hidden] {
+  display: none;
+}
+
+.recommendations-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.recommendations-source {
+  color: var(--ink-600);
+  font: 500 9px var(--font-mono);
+}
+
+.recommendation-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.recommendation-button {
+  max-width: 100%;
+  padding: 6px 9px;
+  color: var(--ink-300);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.025);
+  cursor: pointer;
+  font-size: 10px;
+  line-height: 1.45;
+  text-align: left;
+  transition: color 150ms ease, border-color 150ms ease, background 150ms ease;
+}
+
+.recommendation-button:hover,
+.recommendation-button:focus-visible {
+  color: var(--cyan-bright);
+  border-color: rgba(85, 213, 230, 0.42);
+  background: rgba(85, 213, 230, 0.08);
+}
+
 .composer {
   padding: 0 24px 18px;
 }
