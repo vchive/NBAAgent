@@ -156,12 +156,14 @@ Safety Guard 在任何外部检索前运行；一条消息同时包含正常篮�
 当前仓库已经提交需求规格、研究记录、HLD、LLD、统一数据模型、HTTP/SSE/Provider/评测
 契约、本地验收指南，以及一条可运行的 fixture-first 垂直切片：
 
-- FastAPI 同步聊天、POST SSE、健康检查和日期范围 highlights 接口；
+- FastAPI 同步聊天、POST SSE、健康检查、日期范围 highlights 和按需比赛详情接口；
 - 中文意图/实体/赛季解析、事实核验、系列赛与最后 5 秒 PBP 确定性推导；
 - 会话隔离、幂等重放、取消传播、TTL 缓存、重试/fallback、检索前安全短路和脱敏 telemetry；
 - 官方 Hermes Agent、三个任务级 NBA 工具、旧 composer（默认关闭）与确定性回退；
 - 受控 DuckDuckGo 新闻/背景搜索，以及会话级“全智能分析”开关；
 - 赛事转播风格静态 UI，支持“今日赛事 / 历史回顾”日期切换，并在 API 不可用时离线演示。
+- 选中赛事后按需加载终场摘要、得分王和 PBP；回答完成后给出基于当前上下文的后续问题建议，
+  不让模型直接编造未核验的推荐事实。
 
 当前代码包含事实、模型、安全、日期和认证测试；浏览器 E2E 作为独立 npm profile 提供，
 部署验收使用 `make deploy` / `make deploy-live`。正式 Hermes sidecar 仍可在不改变

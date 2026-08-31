@@ -8,7 +8,8 @@
 
 - API 可用时，`api-client.js` 探测 `/healthz`，聊天走 `POST /api/v1/chat/stream`，左栏
   赛事焦点走 `GET /api/v1/highlights`，历史日期可用性走
-  `GET /api/v1/highlights/availability`；
+  `GET /api/v1/highlights/availability`；选中比赛后按需请求
+  `GET /api/v1/highlights/{game_id}/detail` 获取终场摘要、得分王和 PBP；
 - SSE 客户端在收到 `message.completed`/`run.error` 后立即释放连接；若代理只发送心跳却不
   发送终止事件，15 秒后会自动退出加载态并切换到离线演示，避免“正在准备”永久卡住；
 - API 不可用时，自动切换到内置 fixture，仍可完整演示交互，不需要 Node、构建工具、外网
@@ -20,8 +21,9 @@
 
 左栏的赛事焦点支持单日多场比赛：主推卡展示当前选中场次，下面的“当日比赛”列表
 会列出接口返回的全部 `games[]`。点击任一卡片会同步右侧 HUD、节次比分和文字 PBP；
-没有逐回合数据的场次会明确显示“暂无 PBP”，不会复用另一场比赛的回放。离线 fixture
-在 2026-06-12 提供三场演示赛事，便于面试时直接演示切换。
+没有逐回合数据的场次会明确显示“暂无 PBP”，不会复用另一场比赛的回放；详情加载期间会显示
+“正在加载”。回答完成后，中央输入框上方会出现 3 条基于当前上下文的推荐问题。离线
+fixture 在 2026-06-12 提供三场演示赛事，便于面试时直接演示切换。
 
 ## 启动离线 Demo
 
