@@ -452,6 +452,34 @@ class TemplateComposer:
                     final_shooter = getattr(final_event, "shooter", None)
                     if final_shooter is None:
                         focus_parts.append("最后一条记录未标注出手者，最后一投暂无可核验结果。")
+                        # Some feeds append a zero-clock terminal marker after
+                        # the final shot.  Keep the marker's missing actor
+                        # explicit for provenance, while also surfacing the
+                        # latest actual shot/free throw so a natural question
+                        # such as “最后谁投篮的” receives a useful answer.
+                        last_identified = next(
+                            (
+                                event
+                                for event in reversed(events[:-1])
+                                if getattr(event, "shooter", None) is not None
+                            ),
+                            None,
+                        )
+                        if last_identified is not None:
+                            identified_shooter = last_identified.shooter.display_name
+                            identified_clock = float(last_identified.clock_seconds_remaining)
+                            identified_type = shot_labels_by_value.get(
+                                getattr(
+                                    getattr(last_identified, "shot_type", None),
+                                    "value",
+                                    None,
+                                ),
+                                "出手",
+                            )
+                            focus_parts.append(
+                                f"终场前最近一条有明确出手者的记录是 **{identified_shooter}**，"
+                                f"第{last_identified.period}节 {identified_clock:g}秒的{identified_type}"
+                            )
                     else:
                         focus_parts.append(
                             f"最后一条记录的出手者是 **{final_shooter.display_name}**"
