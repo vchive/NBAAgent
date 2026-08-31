@@ -142,6 +142,7 @@ python3 -m http.server 4173 --directory apps/web-demo
 - [SiliconFlow BYOK 配置指南](docs/byok.md)
 - [方案说明源文档](docs/solution.md)
 - [方案说明 PDF](docs/solution.pdf)
+- [PDF 需求验收报告（含测试用例）](docs/pdf-requirements-verification-report.md)
 
 ## 开发流程
 
