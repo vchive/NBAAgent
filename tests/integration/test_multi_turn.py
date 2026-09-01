@@ -185,3 +185,28 @@ async def test_selected_game_direct_last_shot_answer_is_concise_and_bounded() ->
     assert "谢伊·吉尔杰斯-亚历山大" in result.answer_markdown
     assert "出手位置字段" in result.answer_markdown
     assert "| 节次" not in result.answer_markdown
+
+
+@pytest.mark.asyncio
+async def test_conversational_fact_references_are_reverified_and_answered() -> None:
+    usecase = ChatUseCase(FixtureProvider())
+    first = await usecase.handle({"message": "2025-26 总决赛 G4 谁得分最高？"})
+
+    scorer = await usecase.handle(
+        {"session_id": first.session_id, "message": "你刚才说谁拿了 32 分？"}
+    )
+    shooter = await usecase.handle(
+        {"session_id": first.session_id, "message": "刚才那个球是谁投的？"}
+    )
+
+    assert scorer.status == "completed"
+    assert "杰伦·布朗" in scorer.answer_markdown
+    assert "32 分" in scorer.answer_markdown
+    assert shooter.status == "completed"
+    assert "谢伊·吉尔杰斯-亚历山大" in shooter.answer_markdown
+    assert "终场标记" in shooter.answer_markdown
+    counters = usecase.gateway.counters()
+    # Every factual turn re-enters the verified gateway; an already verified
+    # box score may be served from the freshness cache instead of re-fetching.
+    assert counters["cache_read_count"] >= 3
+    assert counters["provider_call_count"] >= 2

@@ -1,12 +1,12 @@
 """Regression coverage for natural-language intent/time parsing."""
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
 import pytest
 
-from apps.api.src.application.parser import IntentParser
+from apps.api.src.application.parser import GAMES, IntentParser
 from apps.api.src.application.query_planner import QueryPlanner
 from apps.api.src.domain.models import (
     Category,
@@ -340,6 +340,33 @@ def test_open_last_shot_questions_route_to_play_by_play(question: str) -> None:
     parsed = IntentParser().parse(question)
     assert parsed.intent.intent_name is IntentName.PLAY_BY_PLAY
     assert any(item.kind is EntityKind.GAME for item in parsed.intent.entities)
+
+
+def test_conversational_last_shot_reference_stays_play_by_play() -> None:
+    context = ConversationContext(
+        session_id=uuid4(),
+        active_game=GAMES["2026-finals-g4"],
+        expires_at_utc=datetime.now(UTC) + timedelta(hours=1),
+    )
+
+    parsed = IntentParser().parse("刚才那个球是谁投的？", context)
+
+    assert parsed.intent.intent_name is IntentName.PLAY_BY_PLAY
+    assert any(metric.name == "last_shot_detail" for metric in parsed.intent.metrics)
+    assert not parsed.missing_slots
+
+
+def test_conversational_score_value_lookup_stays_data_intent() -> None:
+    context = ConversationContext(
+        session_id=uuid4(),
+        active_game=GAMES["2026-finals-g4"],
+        expires_at_utc=datetime.now(UTC) + timedelta(hours=1),
+    )
+
+    parsed = IntentParser().parse("你刚才说谁拿了 32 分？", context)
+
+    assert parsed.intent.intent_name is IntentName.DATA
+    assert any(metric.name == "points" for metric in parsed.intent.metrics)
 
 
 def test_negated_betting_prediction_is_in_scope_and_bounded() -> None:

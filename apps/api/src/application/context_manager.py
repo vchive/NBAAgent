@@ -103,7 +103,7 @@ class ContextManager:
                 base.active_player,
             )
             turn = TurnSummary(
-                turn_index=base.turn_count + 1,
+                turn_index=base.completed_user_turn_count + 1,
                 user_intent=intent.intent_name.value,
                 user_message=bounded_user_message,
                 active_refs=refs,
@@ -124,6 +124,7 @@ class ContextManager:
                     "active_team": active_team,
                     "active_player": active_player,
                     "active_season": intent.season or base.active_season,
+                    "completed_user_turn_count": base.completed_user_turn_count + 1,
                     "turn_count": min(base.turn_count + 1, self.max_turns),
                     "recent_turn_summaries": summaries,
                     "expires_at_utc": self._now() + timedelta(seconds=self.ttl_seconds),

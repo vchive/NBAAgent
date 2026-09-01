@@ -1,10 +1,10 @@
 # NBA Chat Agent — High-Level Design (HLD)
 
 **Feature**: [001-nba-chat-agent](spec.md)
-**Status**: 官方 Hermes Agent、逻辑会话连续性与受控工具核验已实现
+**Status**: 官方 Agent、逻辑会话连续性、会话元问题与受控工具核验已实现
 **Date**: 2026-09-01
 **Audience**: 面试评审、实现人员和部署维护人员
-**Revision**: v0.4 — 正式 Hermes Agent、受控 NBA 工具循环与逻辑会话连续性
+**Revision**: v0.5 — 会话元问题确定性路由与准确轮次
 
 ## 1. Design goals
 
@@ -89,6 +89,7 @@ flowchart TB
       ORCH[Chat Orchestrator]
       SAFE[Safety Guard\npre-retrieval]
       CTX[Conversation Manager]
+      META[Session Meta Resolver\n计数/上一问/当前对象]
       INT[Intent + Entity + Time Parser]
       ADM[Admission Controller\nrate/deadline/bulkhead]
       PLAN[Query Planner / Router]
@@ -111,7 +112,9 @@ flowchart TB
     UI --> API --> ORCH
     UI -. date projection .-> HIGHLIGHTS
     ORCH --> SAFE
-    SAFE --> CTX --> SELECT
+    SAFE --> CTX --> META
+    META -->|NBA/普通问题| SELECT
+    META -->|会话元问题| GUARD
     SELECT -->|hybrid| INT --> ADM --> PLAN --> PG
     SELECT -->|full| HERMES
     HERMES -. nba tools .-> INT
@@ -139,6 +142,7 @@ Provider/cache，也不调用 Hermes。
 | Highlights API | 按请求时区投影日期赛事、拒绝未来日期、返回空集合；提供最多 31 天的 `available/empty/unknown` 日期可用性以置灰无赛日 | 聊天意图、会话上下文和 PBP 事实推导 |
 | Safety Guard | 识别红线、生成 1–2 句拒答、在检索前短路 | 对敏感请求进行搜索或辩论 |
 | Conversation Manager | 会话隔离、活动实体、轮次和上下文压缩 | 跨会话共享用户内容 |
+| Session Meta Resolver | 确定性回答计数、上一问/答、近期摘要、活动对象和当前模式 | 回答或复述未经当前轮核验的 NBA 事实 |
 | Intent/Time Parser | 题型、实体、槽位、赛季、日期和时区解析 | 代替事实数据源给答案 |
 | Query Planner/Router | 按题型选择能力和新鲜度策略、拆分查询 | 生成未经核验的事实 |
 | Provider Adapters | 调用公开来源、超时/限流处理、返回原始证据 | 将供应商 JSON 直接交给用户 |
@@ -216,7 +220,20 @@ Agent 原生磁盘 memory、session database、context files 和 trajectory 全�
 包含赛程、比分、统计、历史、新闻、战术或 PBP 的新轮次仍必须调用获准 NBA 工具重新核验。
 新应用会话不会收到旧历史或旧活动比赛。
 
-### 5.1.2 受控 DuckDuckGo 搜索
+#### 5.1.2 Session Meta Resolver
+
+安全检查通过并加载当前 `ConversationContext` 后，系统先执行一个窄的会话元问题分类器，再
+进入 hybrid/full 分流。它只接受“我问了几个问题”“上一问/答是什么”“当前在聊哪场”
+“总结当前对话”“当前是什么模式”等应用状态问题，并直接读取服务端状态生成回答。该分支
+不调用模型、Provider 或 NBA 工具，full 模式也一样；会话状态属于确定性应用数据，不能让
+模型依据最近 4 个投影回合猜测。
+
+系统维护独立的 `completed_user_turn_count`，不会随最多 8 条的摘要窗口截断。安全允许且形成
+`completed/no_data/needs_clarification` 结果的请求计入，幂等重放只复用旧 envelope，技术失败、
+取消和安全拦截不计入且不保存敏感原文。“刚才那个球是谁”“你刚才说谁得了 32 分”等事实
+指代明确排除在元问题分类器之外，继续进入 Agent/确定性工具链做本轮核验。
+
+#### 5.1.3 受控 DuckDuckGo 搜索
 
 DuckDuckGo 只作为新闻、背景和长尾问题的候选检索源，不作为 NBA 比分、排名、统计或 PBP
 的唯一事实来源。`WebSearchGateway` 固定 HTTPS 端点和查询策略，限制结果数、响应大小、
@@ -561,6 +578,7 @@ P50/P90/P95、超时/错误率、SSE 断开率、准入拒绝率和 fallback 率
 | FR-027 | Highlights API、最近 5 场/日期范围投影、加载反馈、文字 PBP 投影 | `contracts/http-api.md`、最近赛事/区间/空状态 UI 验收 |
 | FR-029 | Web Search Gateway、DuckDuckGo adapter、搜索证据分级与注入隔离 | `tests/contract/test_web_search.py`, `tests/integration/test_web_search.py` |
 | FR-030–031 | Full-intelligence Agent 路由、稳定逻辑会话、每轮受控工具核验、模型回退与状态展示 | `tests/contract/test_hermes_agent_runtime.py`, `tests/integration/test_full_intelligence.py`, `tests/e2e/test_chat.spec.ts` |
+| FR-036 | Safety 后的 Session Meta Resolver、准确计数与有界摘要分离、事实指代重新核验 | `tests/unit/test_session_meta.py`, `tests/integration/test_session_meta.py` |
 | ARCH-HERMES-001 | Official Hermes Agent boundary/capability self-test | `tests/contract/test_hermes_agent_runtime.py`, `tests/integration/test_agent_safety.py` |
 | ARCH-CAPACITY-001 | Admission budget、bounded queue、backpressure | `CAP-ADMISSION-001`, `E2E-SSE-001` |
 | ARCH-FAILURE-001 | Failure/degradation matrix and cancellation | `CHAOS-UPSTREAM-001`, `INT-CANCEL-001` |

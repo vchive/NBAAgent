@@ -152,7 +152,8 @@ ConversationContext
   session_id: UUID
   version: int (non-negative, incremented on successful turn commit)
   timezone: IANA timezone
-  turn_count: int
+  completed_user_turn_count: int (unbounded lifetime count within the TTL-scoped session)
+  turn_count: int (retained summary count, 0..8; not a lifetime count)
   active_game: EntityRef?
   active_team: EntityRef?
   active_player: EntityRef?
@@ -363,7 +364,8 @@ ConversationRecord
   session_id: UUID
   version: int (non-negative, incremented on successful turn commit)
   timezone: IANA timezone
-  turn_count: int
+  completed_user_turn_count: int
+  retained_summary_count: int (0..8)
   active_refs: EntityRef[]
   turn_summaries: TurnSummary[]
   created_at_utc: Instant
@@ -464,6 +466,12 @@ EvaluationRun
 Agent 原生 memory、session database 与 trajectory 持久化保持关闭。历史回答不是新的
 `Evidence` 或 `FactAssertion`，当前轮引用其中的比分、统计、PBP 或日期时必须重新调用受控
 NBA 工具核验。
+
+`completed_user_turn_count` 与 `recent_turn_summaries` 的窗口长度严格分离：前者对安全检查
+通过并获得 `completed/no_data/needs_clarification` 会话结果的非幂等用户请求单调加一，后者
+最多保留 8 条用于指代和复述。安全拦截、技术失败、取消和幂等重放不增加前者；安全命中文本
+不进入 `TurnSummary`。回答当前计数问题时，提交前的值表示“此前 N 个”，当前元问题提交成功
+后计数变为 N+1。
 
 `EvaluationCase.turns` 是评测输入的唯一规范形态：单轮题包含一个 turn，H 类题包含按
 `turn_index` 排序的三轮消息并在同一 `session_id` 中执行。`expected_entities`、

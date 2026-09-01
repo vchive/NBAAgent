@@ -354,7 +354,14 @@ def _metric_refs(text: str, *, scope: StatScope = StatScope.GAME) -> list[Metric
         metrics.append(MetricRef(name="layup", unit=None, scope=scope))
     if any(
         token in text
-        for token in ("最后谁投", "最后谁出手", "最后一投", "最后一次投篮", "最后那个球")
+        for token in (
+            "最后谁投",
+            "最后谁出手",
+            "最后一投",
+            "最后一次投篮",
+            "最后那个球",
+            "刚才那个球",
+        )
     ):
         metrics.append(MetricRef(name="last_shot_detail", unit=None, scope=scope))
     mapping = (
@@ -477,7 +484,7 @@ def _parse_game_number(text: str) -> int | None:
 
 
 def _parse_clock_window(text: str) -> TimeWindow | None:
-    if "最后那个球" in text or "最后一球" in text:
+    if any(token in text for token in ("最后那个球", "刚才那个球", "最后一球")):
         each_period = bool(re.search(r"(?:每|各)(?:个|一)?\s*(?:节|节次)", text))
         if each_period:
             return TimeWindow(
@@ -587,6 +594,7 @@ def _claims(text: str, entities: Iterable[EntityRef]) -> list[Claim]:
             "最后一攻",
             "最后一球",
             "最后那个球",
+            "刚才那个球",
             "最后一投",
             "最后一次投篮",
             "决胜球",
@@ -691,6 +699,7 @@ class IntentParser:
                 "最后一攻",
                 "最后一球",
                 "最后那个球",
+                "刚才那个球",
                 "最后一投",
                 "最后一次投篮",
                 "决胜球",
@@ -715,6 +724,13 @@ class IntentParser:
             any(token in message for token in ("逐回合", "关键球", "关键回合", "最后几秒", "回放"))
             or clock_window_hint is not None
             or event_focus
+        )
+        score_value_lookup = bool(
+            re.search(
+                r"(?:谁|哪位|哪个球员).{0,12}(?:拿了|得到|得了|拿到)?\s*\d{1,3}\s*分|"
+                r"(?:拿了|得到|得了|拿到)\s*\d{1,3}\s*分.{0,12}(?:谁|哪位|哪个球员)",
+                message,
+            )
         )
         is_fact = any(
             token in message for token in ("核验", "核查", "我记得", "是不是", "对吗", "记得")
@@ -914,6 +930,7 @@ class IntentParser:
             # the planner can load the box score/PBP instead of rendering a
             # generic matchup follow-up.
             and ranked_stat is None
+            and not score_value_lookup
             and not is_tactical
             and not is_recap
         ):

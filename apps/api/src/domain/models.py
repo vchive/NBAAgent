@@ -784,6 +784,12 @@ class ConversationContext(CanonicalModel):
     session_id: UUID
     version: int = Field(default=0, ge=0)
     timezone: str = "Asia/Shanghai"
+    # Accurate count of successfully handled, safety-allowed user turns.  It
+    # is independent from the bounded context window below and therefore does
+    # not stop increasing when old summaries are evicted.
+    completed_user_turn_count: int = Field(default=0, ge=0)
+    # Number of summaries retained for entity/history projection.  This stays
+    # bounded by ``recent_turn_summaries`` and is not a lifetime turn count.
     turn_count: int = Field(default=0, ge=0, le=8)
     active_game: EntityRef | None = None
     active_team: EntityRef | None = None
@@ -1076,7 +1082,8 @@ class ConversationRecord(CanonicalModel):
     session_id: UUID
     version: int = Field(default=0, ge=0)
     timezone: str = "Asia/Shanghai"
-    turn_count: int = Field(default=0, ge=0)
+    completed_user_turn_count: int = Field(default=0, ge=0)
+    retained_summary_count: int = Field(default=0, ge=0, le=8)
     active_refs: list[EntityRef] = Field(default_factory=list, max_length=32)
     turn_summaries: list[TurnSummary] = Field(default_factory=list, max_length=8)
     created_at_utc: datetime

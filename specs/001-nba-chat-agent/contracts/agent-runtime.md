@@ -63,6 +63,12 @@ history explicitly while native memory, session database, context files and traj
 disabled. History resolves references only: every current factual question still requires a new
 successful NBA tool observation, and old answers never become evidence.
 
+Questions about deterministic application session state are resolved before this runtime. Turn
+count, previous user/assistant message, bounded conversation summary, active subject and current
+intelligence mode therefore use `composition.mode=deterministic,status=not_requested` even when
+full mode is selected. Referential NBA questions such as “刚才那个球是谁” are not session-meta
+questions and still require a fresh successful NBA tool observation.
+
 ## 3. Tool contracts
 
 ### `nba_query`
@@ -134,7 +140,8 @@ and credentials are forbidden.
 ## 5. Output and fallback
 
 Greetings and capability introductions (including identity questions and common pinyin/English
-aliases) may complete without a tool and must contain no NBA factual claim. Schedule, score,
+aliases) may complete without a tool and must contain no NBA factual claim. Deterministic session
+metadata is answered before the runtime and is not a zero-tool Agent exception. Schedule, score,
 player/team data, history, news, tactical-fact or PBP answers require at least one successful
 observation. If Hermes is unavailable for a capability turn, the API returns a local capability
 prompt with `composition.mode=deterministic,status=not_requested` rather than NBA clarification.

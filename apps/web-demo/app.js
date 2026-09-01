@@ -1302,20 +1302,32 @@
     container.append(section);
   }
 
-  function evidenceLabel(value) {
+  function evidenceLabel(value, status = "completed") {
     const normalized = String(value || "none").toLowerCase();
     if (normalized === "verified") return { text: "已核验", className: "verified", icon: "✓" };
     if (normalized === "partial") return { text: "部分核验", className: "partial", icon: "△" };
+    if (String(status || "").toLowerCase() === "completed") {
+      return { text: "已回答", className: "none", icon: "·" };
+    }
     return { text: "暂无数据", className: "none", icon: "—" };
   }
 
-  function compositionLabel(value) {
+  function compositionLabel(value, response = null) {
     const mode = String(value?.mode || "deterministic").toLowerCase();
     const status = String(value?.status || "not_requested").toLowerCase();
+    const conversational = String(response?.status || "").toLowerCase() === "completed"
+      && String(response?.evidence_state || "none").toLowerCase() === "none";
     if (mode === "agent" && status === "used") {
       const latency = Number.isFinite(Number(value?.latency_ms)) && Number(value.latency_ms) > 0
         ? ` · ${Math.round(Number(value.latency_ms) / 100) / 10}s`
         : "";
+      if (conversational) {
+        return {
+          text: `智能分析${latency}`,
+          className: "agent",
+          title: "已完成智能回答",
+        };
+      }
       return {
         text: `智能分析 · 已调用工具${latency}`,
         className: "agent",
@@ -1333,6 +1345,9 @@
     }
     if (mode === "fallback") {
       return { text: "Agent 回退 · 已核验事实", className: "fallback", title: "智能链路未完成，已回退到确定性核验事实" };
+    }
+    if (conversational) {
+      return { text: "会话处理", className: "deterministic", title: "由当前应用会话状态确定性回答" };
     }
     return { text: "确定性事实", className: "deterministic", title: "客观事实由确定性核验链路生成" };
   }
@@ -1414,7 +1429,7 @@
     name.textContent = "COURTSIDE";
     const time = document.createElement("span");
     time.textContent = currentShortTime();
-    const evidence = evidenceLabel(response.evidence_state);
+    const evidence = evidenceLabel(response.evidence_state, response.status);
     const mark = document.createElement("span");
     mark.className = "verified-mark";
     mark.textContent = `${evidence.icon} ${evidence.text}`;
@@ -1461,7 +1476,7 @@
 
     const foot = document.createElement("div");
     foot.className = "answer-foot";
-    const composition = compositionLabel(response.composition);
+    const composition = compositionLabel(response.composition, response);
     const source = document.createElement("span");
     source.className = `composition-chip ${composition.className}`;
     source.textContent = composition.text;
@@ -1472,7 +1487,9 @@
     const asOf = document.createElement("span");
     asOf.textContent = response.as_of_beijing
       ? `公开资料 · 数据截至北京时间 ${response.as_of_beijing}`
-      : "公开资料 · 当前没有可用的时间口径";
+      : response.status === "completed" && String(response.evidence_state || "none").toLowerCase() === "none"
+        ? "本轮回答 · 无需展示时间"
+        : "公开资料 · 当前没有可用的时间口径";
     foot.append(source, chip, asOf);
     card.append(foot);
     // `body` remains attached to the article while streaming.  Reusing the

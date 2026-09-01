@@ -83,7 +83,9 @@ test("a fast cached history response does not flash loading", async ({ page }) =
 
 test("announces one visible loading state while fetching slow history", async ({ page }) => {
   await page.route("**/api/v1/highlights/recent**", async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    // Keep the response beyond the 250 ms anti-flicker threshold long enough
+    // for browser/CI polling to observe the intentionally visible state.
+    await new Promise((resolve) => setTimeout(resolve, 800));
     await route.continue();
   });
   await page.goto("/");

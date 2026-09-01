@@ -26,6 +26,10 @@ from apps.api.src.application.ports import (
 )
 from apps.api.src.application.query_planner import QueryPlan, QueryPlanner
 from apps.api.src.application.runtime_selector import RuntimeSelector
+from apps.api.src.application.session_meta import (
+    classify_session_meta_question,
+    render_session_meta_answer,
+)
 from apps.api.src.application.template_composer import TemplateComposer
 from apps.api.src.domain.derivation import (
     DerivedResult,
@@ -667,6 +671,9 @@ class ChatUseCase:
             # produced a misleading "请补充查询对象" clarification), and a
             # model does not need to explain which model is configured.
             if _is_model_meta_question(req.message):
+                context = await self.context_manager.ensure(
+                    session_id, req.client_timezone or "Asia/Shanghai"
+                )
                 runtime_model = getattr(self.agent_runtime, "model", "") or getattr(
                     getattr(self.hermes_runtime, "model_runtime", None), "model", ""
                 )
@@ -705,6 +712,12 @@ class ChatUseCase:
                 telemetry.cache_read_count = 0
                 telemetry.cache_write_count = 0
                 telemetry.cache_hit_count = 0
+                await self._commit_context_turn(
+                    context,
+                    intent=self._session_meta_summary_intent(context),
+                    answer=draft.markdown,
+                    user_message=req.message,
+                )
                 self.telemetry.record(telemetry)
                 if client_id:
                     await self.session_store.complete_idempotency(session_id, client_id, result)
@@ -735,6 +748,65 @@ class ChatUseCase:
                 # the previous active game on the next committed turn.
                 context = context.model_copy(update={"active_game": selected_ref})
             telemetry.transition("CONTEXT_RESOLVED")
+            session_meta = (
+                None
+                if _internal_tool
+                else classify_session_meta_question(req.message)
+            )
+            if session_meta is not None:
+                requested_mode = getattr(
+                    req.intelligence_mode, "value", req.intelligence_mode
+                ) or getattr(self.settings, "default_intelligence_mode", "hybrid")
+                requested_full = str(requested_mode).lower() == "full"
+                answer = render_session_meta_answer(
+                    session_meta,
+                    context,
+                    requested_full=requested_full,
+                    effective_full=self._full_agent_requested(req),
+                )
+                draft = self.output_guard.validate(
+                    DraftAnswer(
+                        markdown=answer,
+                        blocks=[
+                            AnswerBlock(type=AnswerBlockType.TEXT, content=answer)
+                        ],
+                        evidence_state=EvidenceState.NONE,
+                    ),
+                    facts=None,
+                    allow_unverified_numbers=True,
+                )
+                telemetry.intent_category = "SESSION_META"
+                telemetry.intent_name = f"SESSION_META_{session_meta.kind.value}"
+                telemetry.composition_mode = "deterministic"
+                telemetry.composition_status = "not_requested"
+                telemetry.evidence_state = "none"
+                telemetry.transition("COMPOSED")
+                telemetry.transition("OUTPUT_GUARDED")
+                await self._commit_context_turn(
+                    context,
+                    intent=self._session_meta_summary_intent(context),
+                    answer=draft.markdown,
+                    user_message=req.message,
+                )
+                result = self._result_from_draft(
+                    request_id,
+                    session_id,
+                    "completed",
+                    draft,
+                    started,
+                    as_of=None,
+                    composition=self._composition_from_telemetry(telemetry),
+                )
+                telemetry.finish(outcome="completed", total_latency_ms=result.latency_ms)
+                self.telemetry.record(telemetry)
+                if client_id:
+                    await self.session_store.complete_idempotency(
+                        session_id, client_id, result
+                    )
+                for chunk in _chunks(draft.markdown, 120):
+                    await _emit(sink, "message.delta", {"text": chunk})
+                await _emit(sink, "message.completed", result.to_dict())
+                return result
             agent_attempted = False
             # A clicked replay card is a server-resolved game scope, not a
             # reason to bypass the full Agent.  The Agent may understand and
@@ -894,16 +966,15 @@ class ChatUseCase:
                             telemetry.evidence_state = evidence.value.lower()
                             telemetry.transition("COMPOSED")
                             telemetry.transition("OUTPUT_GUARDED")
-                            try:
-                                await self.context_manager.commit(
-                                    context,
-                                    intent=self._agent_summary_intent(),
-                                    facts=FactBundle(facts=[], evidence_state=EvidenceState.NONE),
-                                    answer=guarded.markdown,
-                                    user_message=req.message,
-                                )
-                            except Exception:
-                                pass
+                            await self._commit_context_turn(
+                                context,
+                                intent=self._agent_summary_intent(),
+                                facts=FactBundle(
+                                    facts=[], evidence_state=EvidenceState.NONE
+                                ),
+                                answer=guarded.markdown,
+                                user_message=req.message,
+                            )
                             as_of = self._agent_as_of(agent_turn.observations)
                             result = self._result_from_draft(
                                 request_id,
@@ -948,6 +1019,12 @@ class ChatUseCase:
                     telemetry.evidence_state = "none"
                     telemetry.transition("COMPOSED")
                     telemetry.transition("OUTPUT_GUARDED")
+                    await self._commit_context_turn(
+                        context,
+                        intent=self._agent_summary_intent(),
+                        answer=local_draft.markdown,
+                        user_message=req.message,
+                    )
                     result = self._result_from_draft(
                         request_id,
                         session_id,
@@ -1000,6 +1077,12 @@ class ChatUseCase:
                 telemetry.evidence_state = "none"
                 telemetry.transition("COMPOSED")
                 telemetry.transition("OUTPUT_GUARDED")
+                await self._commit_context_turn(
+                    context,
+                    intent=self._agent_summary_intent(),
+                    answer=local_draft.markdown,
+                    user_message=req.message,
+                )
                 result = self._result_from_draft(
                     request_id,
                     session_id,
@@ -1105,6 +1188,13 @@ class ChatUseCase:
                 telemetry.cache_read_count = 0
                 telemetry.cache_write_count = 0
                 telemetry.cache_hit_count = 0
+                if not _internal_tool:
+                    await self._commit_context_turn(
+                        context,
+                        intent=parsed.intent,
+                        answer=draft.markdown,
+                        user_message=req.message,
+                    )
                 self.telemetry.record(telemetry)
                 if client_id:
                     await self.session_store.complete_idempotency(session_id, client_id, result)
@@ -1137,6 +1227,13 @@ class ChatUseCase:
                     ),
                 )
                 telemetry.finish(outcome="needs_clarification", total_latency_ms=result.latency_ms)
+                if not _internal_tool:
+                    await self._commit_context_turn(
+                        context,
+                        intent=parsed.intent,
+                        answer=draft.markdown,
+                        user_message=req.message,
+                    )
                 self.telemetry.record(telemetry)
                 if client_id:
                     await self.session_store.complete_idempotency(session_id, client_id, result)
@@ -1167,6 +1264,13 @@ class ChatUseCase:
                     ),
                 )
                 telemetry.finish(outcome="needs_clarification", total_latency_ms=result.latency_ms)
+                if not _internal_tool:
+                    await self._commit_context_turn(
+                        context,
+                        intent=parsed.intent,
+                        answer=draft.markdown,
+                        user_message=req.message,
+                    )
                 self.telemetry.record(telemetry)
                 if client_id:
                     await self.session_store.complete_idempotency(session_id, client_id, result)
@@ -1258,6 +1362,13 @@ class ChatUseCase:
                 )
                 telemetry.evidence_state = "none"
                 telemetry.finish(outcome="no_data", total_latency_ms=result.latency_ms)
+                if not _internal_tool:
+                    await self._commit_context_turn(
+                        context,
+                        intent=parsed.intent,
+                        answer=draft.markdown,
+                        user_message=req.message,
+                    )
                 self.telemetry.record(telemetry)
                 if client_id:
                     await self.session_store.complete_idempotency(session_id, client_id, result)
@@ -1358,18 +1469,13 @@ class ChatUseCase:
             telemetry.transition("COMPOSED")
             telemetry.transition("OUTPUT_GUARDED")
             if not _internal_tool:
-                try:
-                    await self.context_manager.commit(
-                        context,
-                        intent=parsed.intent,
-                        facts=facts,
-                        answer=guarded.markdown,
-                        user_message=req.message,
-                    )
-                except Exception:
-                    # A context write failure must not invalidate a verified answer; the next
-                    # turn will ask for clarification rather than crossing sessions.
-                    pass
+                await self._commit_context_turn(
+                    context,
+                    intent=parsed.intent,
+                    facts=facts,
+                    answer=guarded.markdown,
+                    user_message=req.message,
+                )
             result = self._result_from_draft(
                 request_id,
                 session_id,
@@ -1592,6 +1698,56 @@ class ChatUseCase:
         )
 
     @staticmethod
+    def _session_meta_summary_intent(context: Any) -> QueryIntent:
+        """Represent a session-state turn without inventing an NBA lookup."""
+
+        entities = [
+            item
+            for item in (
+                getattr(context, "active_game", None),
+                getattr(context, "active_team", None),
+                getattr(context, "active_player", None),
+            )
+            if item is not None
+        ]
+        return QueryIntent(
+            category=Category.H,
+            intent_name=IntentName.FOLLOW_UP,
+            mode=QueryMode.OBJECTIVE,
+            confidence=1,
+            entities=entities,
+            operation=Operation.EXPLAIN,
+        )
+
+    async def _commit_context_turn(
+        self,
+        context: Any,
+        *,
+        intent: QueryIntent,
+        answer: str,
+        user_message: str,
+        facts: FactBundle | None = None,
+    ) -> None:
+        """Commit one safety-allowed conversational outcome.
+
+        Context persistence must not invalidate an otherwise safe answer.  The
+        optimistic store still retries conflicts inside ``ContextManager``;
+        after that bounded retry the next request simply starts from the last
+        committed state.
+        """
+
+        try:
+            await self.context_manager.commit(
+                context,
+                intent=intent,
+                facts=facts,
+                answer=answer,
+                user_message=user_message,
+            )
+        except Exception:
+            pass
+
+    @staticmethod
     def _agent_as_of(observations: list[dict[str, Any]]) -> str | None:
         values = [
             str(item.get("as_of_beijing"))
@@ -1673,7 +1829,7 @@ class ChatUseCase:
         pbp_question = bool(
             re.search(
                 r"(?:关键回合|逐回合|最后\s*[0-9一二三四五六七八九十]+\s*秒|最后一攻|"
-                r"最后那个球|最后一球|最后一投|回放|出手者|谁助攻)",
+                r"最后那个球|刚才那个球|最后一球|最后一投|回放|出手者|谁助攻)",
                 text,
             )
         )

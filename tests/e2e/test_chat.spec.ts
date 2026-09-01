@@ -23,6 +23,38 @@ test("supports cancellation and a follow-up in the same session", async ({ page 
   await expect(page.locator(".dynamic-message.assistant-message").last()).toContainText("2 个回合");
 });
 
+test("keeps accurate session metadata across refresh and resets on new chat", async ({ page }) => {
+  await page.goto("/");
+  const input = page.locator("#message-input");
+  await input.fill("你好");
+  await input.press("Enter");
+  await expect(page.locator(".dynamic-message.assistant-message").last()).toContainText("COURTSIDE");
+
+  const originalSessionId = await page.evaluate(
+    () => window.sessionStorage.getItem("courtside-demo-session-v1"),
+  );
+  await page.reload();
+  await page.locator("#message-input").fill("我问了你几个问题？");
+  await page.locator("#message-input").press("Enter");
+  await expect(page.locator(".dynamic-message.assistant-message").last()).toContainText(
+    "此前问了 1 个问题",
+  );
+  await expect(page.locator(".dynamic-message.assistant-message").last()).toContainText("已回答");
+  await expect(page.locator(".dynamic-message.assistant-message").last()).toContainText("会话处理");
+  await expect(page.locator(".dynamic-message.assistant-message").last()).not.toContainText("暂无数据");
+
+  await page.locator("#new-session").click();
+  const freshSessionId = await page.evaluate(
+    () => window.sessionStorage.getItem("courtside-demo-session-v1"),
+  );
+  expect(freshSessionId).not.toBe(originalSessionId);
+  await page.locator("#message-input").fill("我问了你几个问题？");
+  await page.locator("#message-input").press("Enter");
+  await expect(page.locator(".dynamic-message.assistant-message").last()).toContainText(
+    "此前问了 0 个问题",
+  );
+});
+
 test("forwards the selected highlights card as chat context", async ({ page }) => {
   let selectedGameId: unknown = null;
   await page.route("**/api/v1/chat/stream", async (route) => {

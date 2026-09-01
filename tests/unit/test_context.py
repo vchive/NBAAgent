@@ -6,7 +6,15 @@ from uuid import uuid4
 
 import pytest
 
-from apps.api.src.domain.models import ConversationContext
+from apps.api.src.application.context_manager import ContextManager
+from apps.api.src.domain.models import (
+    Category,
+    ConversationContext,
+    IntentName,
+    Operation,
+    QueryIntent,
+    QueryMode,
+)
 from apps.api.src.infrastructure.session_store import (
     InMemorySessionStore,
     SessionConflictError,
@@ -83,3 +91,31 @@ async def test_optimistic_save_rejects_stale_context() -> None:
             _context(session_id, now + timedelta(days=1)),
             expected_version=0,
         )
+
+
+@pytest.mark.asyncio
+async def test_accurate_turn_count_is_independent_from_bounded_summaries() -> None:
+    store = InMemorySessionStore()
+    manager = ContextManager(store, max_turns=8)
+    session_id = uuid4()
+    context = await manager.ensure(session_id)
+    intent = QueryIntent(
+        category=Category.H,
+        intent_name=IntentName.FOLLOW_UP,
+        mode=QueryMode.OBJECTIVE,
+        confidence=1,
+        operation=Operation.EXPLAIN,
+    )
+
+    for index in range(12):
+        context = await manager.commit(
+            context,
+            intent=intent,
+            answer=f"回答 {index + 1}",
+            user_message=f"问题 {index + 1}",
+        )
+
+    assert context.completed_user_turn_count == 12
+    assert context.turn_count == 8
+    assert len(context.recent_turn_summaries) == 8
+    assert [item.turn_index for item in context.recent_turn_summaries] == list(range(5, 13))

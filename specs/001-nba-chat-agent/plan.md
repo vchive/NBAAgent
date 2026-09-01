@@ -1,7 +1,7 @@
 # Implementation Plan: NBA Chat Agent
 
 **Branch**: `001-nba-chat-agent`
-**Date**: 2026-08-30
+**Date**: 2026-09-01
 **Spec**: [spec.md](spec.md)
 
 **Input**: 4 页 NBA Chat Agent 笔试题及其需求规格
@@ -14,7 +14,9 @@
 Hermes Agent 参与理解和规划，只能调用服务器批准的 NBA 查询/赛程/新闻工具，这些工具再
 复用同一 Provider、Verifier 和 Derivation 事实底座。Agent、工具或模型失败时回退确定性
 通道。HLD 与 LLD 记录边界和契约；黄金题集验证 PDF 的事实、安全、多轮和性能维度，并增加
-问候、错别字、空赛程、工具循环和注入回退验收。
+问候、错别字、空赛程、工具循环和注入回退验收。安全门与双运行通道之间增加确定性的
+Session Meta Resolver，负责准确轮次、上一问答、近期摘要、活动对象和当前模式；NBA 事实
+指代仍进入本轮工具核验。
 
 ## Technical Context
 
@@ -23,7 +25,8 @@ for the current Web Demo (a React/Next.js migration remains optional after the f
 **Primary Dependencies**: FastAPI/ASGI, Pydantic v2, httpx, `hermes-agent==0.19.0`, SiliconFlow
 OpenAI-compatible model endpoint, browser `fetch`/ReadableStream for POST-SSE, pytest；
 DuckDuckGo 作为受控背景搜索，正式生产仍优先将 Hermes 迁移到独立 sidecar
-**Storage**: 首版无 NBA 内部数据库；会话与 TTL 缓存采用可替换的轻量存储，评测 fixture 使用版本化 JSON
+**Storage**: 首版无 NBA 内部数据库；会话与 TTL 缓存采用可替换的轻量存储，准确会话计数与最多
+8 条的摘要窗口分离，评测 fixture 使用版本化 JSON
 **Testing**: pytest（单元/集成/契约）、Playwright（Web E2E）、黄金题回放与时延采集
 **Target Platform**: Linux 容器；公开 Web/API 服务，支持本地 fixture/mock 模式
 **Project Type**: Web application with API service and evaluation CLI
@@ -38,7 +41,7 @@ DuckDuckGo 作为受控背景搜索，正式生产仍优先将 Hermes 迁移到�
 
 | Gate | Result | Evidence |
 |---|---|---|
-| Specification-first | PASS | `spec.md` defines scope, scenarios, FR-001–035 and SC-001–016 |
+| Specification-first | PASS | `spec.md` defines scope, scenarios, FR-001–036 and SC-001–017 |
 | Evidence-first facts | PASS | Provider → Normalizer → Verifier → Derivation chain in HLD/LLD |
 | Safety before retrieval | PASS | Safety Guard is the first orchestrator branch; no-retrieval test required |
 | Contract/test-first | PASS | API/provider/evaluation contracts and traceability matrix planned |
@@ -114,7 +117,9 @@ tests/
 
 docs/
 ├── solution.md                      # source for the brief solution explanation
-└── solution.pdf                     # exported submission artifact (generated before final delivery)
+├── solution.pdf                     # exported submission artifact (generated before final delivery)
+├── architecture-audit.md            # independent architecture/session-routing audit
+└── test-report-2026-09-01.md         # independent acceptance report
 ```
 
 根目录还提供 `Dockerfile`、`docker-compose.yml` 和 `.dockerignore`，用于 fixture 默认的
@@ -165,6 +170,7 @@ docs/
 | FR-033 | LLD empty-result observation and scoped explanation | `tests/integration/test_full_intelligence.py`, `tests/evaluation/test_agent_cases.py` |
 | FR-034 | Agent fallback/provenance contract；Web status projection | `tests/contract/test_hermes_agent_runtime.py`, `tests/e2e/test_chat.spec.ts` |
 | FR-035 | HLD pre-Agent safety；tool result trust boundary | `tests/integration/test_agent_safety.py` |
+| FR-036 | HLD/LLD Session Meta Resolver；准确计数与有界摘要分离 | `tests/unit/test_session_meta.py`, `tests/integration/test_session_meta.py`, `tests/e2e/test_chat.spec.ts` |
 | SC-001 | HLD deployment；quickstart | `OPS-001` 公网 URL/HTTPS 探活 |
 | SC-002 | Evaluation contract | `EVAL-COVERAGE-001` A–I 覆盖报告 |
 | SC-003 | HLD multi-turn；LLD context | `EVAL-H-001` 三轮一致 |
@@ -181,6 +187,7 @@ docs/
 | SC-014 | HLD full-intelligence mode；LLD routing and telemetry | `tests/contract/test_intelligence_mode.py`, `tests/integration/test_full_intelligence.py`, `tests/e2e/test_chat.spec.ts` |
 | SC-015 | Agent acceptance trio in evaluation fixtures | `tests/evaluation/test_agent_cases.py`, `tests/e2e/test_chat.spec.ts` |
 | SC-016 | Agent budget, repeated-tool, timeout and injection cases | `tests/contract/test_hermes_agent_runtime.py`, `tests/integration/test_agent_safety.py` |
+| SC-017 | Session Meta Resolver；刷新/新会话/幂等/长会话边界 | `tests/integration/test_session_meta.py`, `tests/e2e/test_chat.spec.ts` |
 | ARCH-HERMES-001 | HLD §5.1；LLD §1.3/§4.4 runtime boundary | `SEC-HERMES-001`, `INT-HERMES-001` |
 | ARCH-CAPACITY-001 | HLD §9.2；LLD §3.1/§10 admission budget | `CAP-ADMISSION-001`, `E2E-SSE-001` |
 | ARCH-FAILURE-001 | HLD failure matrix；LLD §10 errors/cancellation | `CHAOS-UPSTREAM-001`, `INT-CANCEL-001` |
@@ -200,9 +207,9 @@ docs/
 **Fixture MVP gate: PASSED.** The local fixture path (including the shared sync/SSE envelope,
 core safety/fact/context flow, and quickstart) is runnable and reproducible.
 
-**Baseline delivery gates: PASSED.** Existing deterministic/hybrid delivery remains deployable.
-The full Agent refinement gate stays open until the Hermes package integration, tool-loop tests,
-live SiliconFlow acceptance trio and public deployment evidence pass.
+**Baseline and refinement delivery gates: PASSED.** Deterministic/hybrid delivery、正式 Agent
+工具循环、live SiliconFlow 验收、Session Meta 长会话边界和公开部署证据均已通过；关闭 feature
+flag 仍可回到 template/hybrid 通道。
 
 ## Complexity Tracking
 
@@ -212,3 +219,7 @@ PDF 的联网事实、逐回合核验、安全否决和重复评测要求所必�
 所有工具均通过任务级 bridge 复用现有确定性用例，Hermes 不持有 Provider 凭据，也不直接
 访问任意网络。`embedded_agent` 适合本次面试演示，生产仍应迁移到隔离 sidecar；关闭 feature
 flag 即可回到当前 `hybrid/template` 通道，不改变领域层和公开 API。
+
+Session Meta Resolver 是 FR-036 的窄确定性分支，不扩大 Agent 工具能力。它以服务端会话状态
+代替模型对裁剪历史的猜测，并通过准确计数、有界摘要和幂等提交语义获得可测试收益；关闭该
+分支只会恢复原 NBA parser 回退，不影响 Provider/Verifier 数据链。

@@ -377,3 +377,17 @@ zero Agent/tool calls, and timeout/repeated-tool cases fall back safely.
   session, and keep prior facts non-authoritative so every factual follow-up still uses verified
   NBA tools; update the official runtime contract, multi-turn integration/evaluation coverage,
   HLD/LLD and reviewer documentation per FR-002/FR-030/FR-031/SC-003/SC-014 (partial).
+
+## Phase 27: Session-meta routing and accurate turn accounting
+
+- [X] T098 [US8] Add a narrow `Session Meta Resolver` after Safety/context and before hybrid/full
+  routing for turn count, previous user/assistant message, bounded conversation summary, active
+  subject and effective intelligence mode; keep referential NBA facts on the verified tool path.
+- [X] T099 [US8] Separate monotonic `completed_user_turn_count` from the eight-summary context
+  window, commit safety-allowed completed/no-data/clarification outcomes, and preserve idempotency,
+  failure, cancellation and safety privacy semantics.
+- [X] T100 [US8] Add classifier, long-session, new-session, replay, active-game, full-mode zero-call
+  and clarification regression tests; update spec, HLD, LLD, data model, runtime contract and
+  reviewer quickstart per FR-002/FR-036/SC-003/SC-017.
+- [ ] T101 [US8] Run all quality/evaluation/browser gates, redeploy the public live profile, verify
+  the session-meta matrix through the authenticated API, record evidence and push the branch.

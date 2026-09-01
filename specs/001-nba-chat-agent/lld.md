@@ -2,9 +2,9 @@
 
 **Feature**: [spec.md](spec.md)
 **HLD**: [hld.md](hld.md)
-**Status**: 官方 Hermes Agent、逻辑会话连续性与受控工具核验已实现
+**Status**: 官方 Agent、逻辑会话连续性、会话元问题与受控工具核验已实现
 **Date**: 2026-09-01
-**Revision**: v0.4 — 正式 Hermes Agent、逻辑会话历史与任务级 NBA tools
+**Revision**: v0.5 — Session Meta Resolver、准确轮次与有界历史
 
 本文把 HLD 的组件落到可实现的模块、类型、状态、协议和测试。字段名是内部契约示例；
 除明确标注为用户字段的内容外，不得原样回传浏览器。
@@ -42,6 +42,7 @@ apps/api/src/
 │   └── schemas.py                  # request/response wire schemas
 ├── application/
 │   ├── chat_use_case.py            # sync/SSE 共用的用例
+│   ├── session_meta.py             # 会话元问题窄分类与确定性渲染
 │   ├── orchestrator.py             # 状态机与阶段事件
 │   ├── runtime.py                  # template/Hermes runtime selection
 │   └── ports.py                    # Safety/Context/Provider/Composer ports
@@ -505,6 +506,26 @@ Provider 健康检查只验证允许的端点，不把上游 URL 发送给用户
 
 `RuntimeSelector` 仅负责 `hybrid` 的末端 composer：只为 `TACTICAL/RECAP` 选择旧 runtime。
 `full` 不再通过该 selector，而由下面的 Agent orchestrator 在规则解析之前接管。
+
+### 4.4.1 Session Meta Resolver
+
+实际请求顺序为：`Auth → payload validation → SafetyGuard → Context load/selected-game
+reconciliation → SessionMeta classifier → hybrid/full router`。分类器使用保守的整句模式识别：
+
+```text
+TURN_COUNT | LAST_USER_MESSAGE | LAST_ASSISTANT_MESSAGE |
+CONVERSATION_SUMMARY | ACTIVE_SUBJECT | INTELLIGENCE_MODE
+```
+
+命中后从 `ConversationContext` 渲染答案，并以 `composition=deterministic/not_requested` 完成；
+不进入 Agent 或 NBA Parser。输出仍经过通用泄漏/安全检查，但允许服务端计数数字。分类器不得
+匹配“刚才那个球是谁”“你刚才说谁拿了 32 分”“把比赛结论再说一遍”等 NBA 事实请求。
+
+`completed_user_turn_count` 对安全允许且得到 `completed/no_data/needs_clarification` 的 owner
+请求在 commit 时单调加一；`turn_count` 仅表示当前保留的摘要数量并封顶 8。`TurnSummary` 的
+`turn_index` 使用准确计数生成，因此裁剪后仍保持真实序号。幂等 replay 在 context load 前
+返回原结果，不重复 commit；技术失败/取消调用 idempotency fail，不 commit；安全分支在 context
+load 前结束，避免保留敏感原文。当前计数回答同时显示提交前 N 和包含本句的 N+1。
 
 ### 4.5 Official HermesAgentRuntime and NBA tool bridge
 

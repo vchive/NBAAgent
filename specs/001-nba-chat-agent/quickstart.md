@@ -202,6 +202,12 @@ npm ci && npx playwright install --with-deps chromium && npm run e2e
 `make docker-up` 是上述命令的快捷入口；`make lint` 可用于开发期检查，当前代码通过 Ruff
 检查。
 
+会话连续性额外使用以下矩阵验收：连续提问后输入“我问了你几个问题”“我刚才问了什么”
+“你刚才回答了什么”“总结一下我们刚才聊了什么”“当前选中的是哪场比赛”“我开启全智能
+了吗”。这些问题应确定性读取当前会话，显示 `deterministic` 且不调用模型/Provider；超过
+8 轮后总数仍准确，重复 `client_message_id` 不重复计数，新对话归零。“刚才那个球是谁”
+仍必须重新走 NBA 核验链路。
+
 评测 runner、报告模块和独立 CLI 已存在于 `apps/api/src/evaluation/`，黄金集当前包含
 A–I、安全/范围外和 3 条全智能验收题，共 21 条案例；完整集成回放和 Playwright E2E 可分别通过 pytest 和
 `npm run e2e` 验证。
@@ -291,7 +297,7 @@ make deploy-status
 面试官访问 `http://<EIP>:8000/` 后输入共享密码；`/healthz`、`/readyz`、`/livez` 保持公开。
 如只需本地离线复现，继续使用基础 `docker-compose.yml`，它不会访问外网。
 
-### 9.2 Public live acceptance evidence (2026-08-31, Asia/Shanghai)
+### 9.2 Public live acceptance evidence (2026-09-01, Asia/Shanghai)
 
 最终交付使用 `make deploy-live` 构建并启动 base + public + auth + SiliconFlow 四层 Compose。
 验收过程中没有输出访问密码或模型 Key：
@@ -310,8 +316,12 @@ make deploy-status
 | `下周有比赛买` | `completed` | `agent/used` | 返回完整北京时间范围 `2026-08-31 至 2026-09-06`，明确没有返回比赛 |
 | `下周有比赛吗` | `completed` | `agent/used` | 同一完整范围和空赛程结论，不推测休赛期原因 |
 | 博彩策略红线 | `blocked` | `deterministic/not_requested` | 1 ms 本地短路，Agent 和工具调用均为 0 |
+| `我问了你几个问题`（此前 4 轮） | `completed` | `deterministic/not_requested` | 回答此前 4 个、算本句第 5 个；不调用模型/Provider |
+| `我开启全智能了吗` | `completed` | `deterministic/not_requested` | 从本轮服务端配置确认 full，不让模型猜测应用状态 |
+| `你刚才说谁拿了 32 分` | `completed` | `deterministic/not_requested` | 重新读取核验 box score，返回杰伦·布朗 32 分 |
+| `刚才那个球是谁投的` | `completed` | `deterministic/not_requested` | 重新读取 PBP，说明终场标记及最近明确出手者 |
 
-最终自动化门禁：pytest `323 passed`，Ruff/JS/compileall/git diff 检查通过，Playwright `8 passed`，
+最终自动化门禁：pytest `415 passed`，Ruff/JS/compileall/git diff 检查通过，Playwright `13 passed`，
 黄金题评测 `63 runs / 100.00`、安全否决 `0`。回归还验证了公开搜索组合下的日期可用性置灰和
 休赛期最近 5 场补足：无比赛日期返回 `empty`，最近 5 场接口返回 5 场已结束比赛并标记
 `partial`（使用有界历史快照补足）。
