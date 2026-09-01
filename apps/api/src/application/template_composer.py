@@ -180,7 +180,7 @@ class TemplateComposer:
             "TACTICAL",
             "FOLLOW_UP",
         } and not multi_game_schedule and not unavailable_game_metrics:
-            if intent.intent_name.value == "FOLLOW_UP":
+            if intent.intent_name.value in {"FOLLOW_UP", "RECAP", "TACTICAL"}:
                 matchup = (
                     f"对阵双方：**{game.away.display_name}** vs **{game.home.display_name}**。"
                 )
@@ -576,7 +576,8 @@ class TemplateComposer:
                             )
                             focus_parts.append(
                                 f"终场前最近一条有明确出手者的记录是 **{identified_shooter}**，"
-                                f"第{last_identified.period}节还剩 {identified_clock:g} 秒的{identified_type}"
+                                f"第{last_identified.period}节还剩 {identified_clock:g} 秒的"
+                                f"{identified_type}"
                             )
                     else:
                         focus_parts.append(
@@ -649,7 +650,8 @@ class TemplateComposer:
             )
             if winner is not None and winner_event is not None:
                 event_score = (
-                    f"，将比分带到 **{winner_event.home_score_after}–{winner_event.away_score_after}**"
+                    "，将比分带到 "
+                    f"**{winner_event.home_score_after}–{winner_event.away_score_after}**"
                     if winner_event.home_score_after is not None
                     and winner_event.away_score_after is not None
                     else ""
@@ -664,7 +666,9 @@ class TemplateComposer:
                     "建立并守住了领先优势。"
                 )
                 blocks.append(AnswerBlock(type=AnswerBlockType.ANALYSIS, content=analysis))
-                blocks.append(AnswerBlock(type=AnswerBlockType.TEXT, content=f"**事实依据**：{fact_text}"))
+                blocks.append(
+                    AnswerBlock(type=AnswerBlockType.TEXT, content=f"**事实依据**：{fact_text}")
+                )
                 blocks.append(
                     AnswerBlock(
                         type=AnswerBlockType.TEXT,

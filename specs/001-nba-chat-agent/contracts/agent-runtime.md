@@ -32,6 +32,7 @@ AgentTurnInput
   timezone: IANA timezone
   now_beijing: "YYYY-MM-DD HH:mm"
   context_hint: string? (bounded, provider-free)
+  conversation_history: [{role: user|assistant, content: string}] (0..8 messages / 12 KiB)
   deadline_at_utc: Instant
   max_iterations: 1..4
   max_tool_calls: 1..4
@@ -49,6 +50,18 @@ AgentTurnResult
 The system prompt is server-owned and includes the current Beijing time, NBA-only scope, tool-use
 rules, empty-result behavior, fact/inference separation and prompt-injection warning. User text or
 tool output cannot replace it.
+
+The application session is the sole continuity owner. Its UUID is one-way hashed into a stable
+`opaque_session_id` for the lifetime of that chat. The browser reuses the application session
+across refreshes and replaces it only when the user starts a new chat. Every Agent invocation uses
+a separate random `task_id` for the tool bridge; `task_id` MUST NOT be used as the logical session.
+
+`conversation_history` contains at most the latest four complete user/assistant pairs. Roles MUST
+alternate beginning with `user` and end with `assistant`; incomplete pairs, control characters,
+more than eight messages, or more than 12 KiB are rejected. The official runtime receives this
+history explicitly while native memory, session database, context files and trajectories remain
+disabled. History resolves references only: every current factual question still requires a new
+successful NBA tool observation, and old answers never become evidence.
 
 ## 3. Tool contracts
 

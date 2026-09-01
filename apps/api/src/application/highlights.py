@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import MutableMapping
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -19,6 +20,8 @@ from apps.api.src.api.schemas import (
 from apps.api.src.application.ports import RequestBudget
 from apps.api.src.domain.models import (
     DateRange,
+    EntityKind,
+    EntityRef,
     EvidenceState,
     Game,
     GameBundle,
@@ -32,6 +35,7 @@ from apps.api.src.domain.models import (
 from apps.api.src.domain.time_policy import (
     format_beijing,
     local_date_range,
+    season_label_for_date,
     validate_timezone,
 )
 
@@ -87,6 +91,57 @@ class HighlightsService:
         for game in list(games or []):
             if isinstance(game, Game):
                 self.game_registry[game.game_id] = game
+
+    def remember_public_games(
+        self,
+        games: Any,
+        *,
+        timezone_name: str = "Asia/Shanghai",
+    ) -> None:
+        """Rehydrate cached public cards into the selected-game registry.
+
+        SQLite intentionally stores only the safe public projection.  A cache
+        hit must still let a subsequent chat request resolve its selected
+        ``game_id`` without trusting team/score fields sent by the browser.
+        """
+
+        if self.game_registry is None:
+            return
+
+        def team_ref(name: str, abbreviation: str | None) -> EntityRef:
+            token = str(abbreviation or "").strip().lower()
+            if not token:
+                digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:16]
+                token = f"public-{digest}"
+            aliases = [abbreviation] if abbreviation else []
+            return EntityRef(
+                kind=EntityKind.TEAM,
+                canonical_id=token,
+                display_name=name,
+                aliases=aliases,
+            )
+
+        for item in list(games or []):
+            if not isinstance(item, HighlightGame):
+                continue
+            try:
+                game = Game(
+                    game_id=item.game_id,
+                    season=season_label_for_date(
+                        item.start_utc,
+                        timezone_name=timezone_name,
+                    ),
+                    start_utc=item.start_utc,
+                    home=team_ref(item.home_name, item.home_abbreviation),
+                    away=team_ref(item.away_name, item.away_abbreviation),
+                    status=GameStatus(item.status.upper()),
+                    home_score=item.home_score,
+                    away_score=item.away_score,
+                    series_game_number=item.series_game_number,
+                )
+            except (TypeError, ValueError):
+                continue
+            self.game_registry[game.game_id] = game
 
     def _now(self) -> datetime:
         if self.clock is None:

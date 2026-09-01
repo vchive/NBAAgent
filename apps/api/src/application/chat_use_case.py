@@ -76,6 +76,7 @@ from apps.api.src.domain.verifier import (
 from apps.api.src.infrastructure.admission import AdmissionController
 from apps.api.src.infrastructure.agent_tools import resolve_date_expression
 from apps.api.src.infrastructure.hermes_agent_runtime import (
+    AgentHistoryMessage,
     AgentTurnInput,
     AgentTurnResult,
     HermesAgentRuntime,
@@ -433,7 +434,18 @@ class ChatUseCase:
             if item.kind is EntityKind.TEAM
         }
         selected_ids = {selected_game.home.canonical_id, selected_game.away.canonical_id}
-        if not team_ids or not team_ids.issubset(selected_ids):
+        # A generic tactical/recap turn made while a card is selected (for
+        # example “把整场双方战术说一下”) is game-scoped even without an
+        # explicit pronoun or team name.  Bind it to the selected game so the
+        # deterministic NBA tool can return the game bundle and bounded PBP,
+        # rather than broadening to the latest scoreboard row.
+        implicit_selected_analysis = (
+            parsed.intent.intent_name in {IntentName.TACTICAL, IntentName.RECAP}
+            and not team_ids
+        )
+        if not implicit_selected_analysis and (
+            not team_ids or not team_ids.issubset(selected_ids)
+        ):
             return parsed
         # Avoid mutating the parser's list in place: ParseResult is reused by
         # telemetry/evaluation code and a copy keeps that boundary explicit.
@@ -724,17 +736,16 @@ class ChatUseCase:
                 context = context.model_copy(update={"active_game": selected_ref})
             telemetry.transition("CONTEXT_RESOLVED")
             agent_attempted = False
-            # A clicked replay card is already a server-resolved, immutable
-            # game scope.  Letting the planning model paraphrase or replace it
-            # can produce exactly the failure the UI must avoid: a response
-            # about a different fixture.  Selected-game facts therefore use
-            # the verified deterministic path in every intelligence mode; the
-            # full Agent remains available for open-ended, unscoped questions.
+            # A clicked replay card is a server-resolved game scope, not a
+            # reason to bypass the full Agent.  The Agent may understand and
+            # explain the question, while its nba_query tool is rebound to the
+            # original user wording and the validated selected_game_id below.
+            # Hybrid keeps the low-latency deterministic selected-game path.
             selected_game_verified = selected_ref is not None
+            full_agent_requested = self._full_agent_requested(req)
             if (
                 not _internal_tool
-                and not selected_game_verified
-                and self._full_agent_requested(req)
+                and full_agent_requested
             ):
                 agent_attempted = True
                 await _emit(
@@ -753,6 +764,9 @@ class ChatUseCase:
                                 timezone=context.timezone,
                                 now_beijing=format_beijing(self._now()),
                                 context_hint=self._agent_context_hint(context),
+                                conversation_history=self._agent_conversation_history(
+                                    context
+                                ),
                                 deadline_at_utc=telemetry.deadline_at_utc,
                                 max_iterations=getattr(self.settings, "agent_max_iterations", 4),
                                 max_tool_calls=getattr(self.settings, "agent_max_tool_calls", 4),
@@ -760,7 +774,10 @@ class ChatUseCase:
                             tool_runner=self._agent_tool_runner(
                                 session_id=session_id,
                                 context=context,
-                                selected_game_id=req.selected_game_id,
+                                selected_game_id=(
+                                    req.selected_game_id if selected_game_verified else None
+                                ),
+                                original_question=req.message,
                                 deadline_at_utc=telemetry.deadline_at_utc,
                                 token=token,
                                 sink=sink,
@@ -883,6 +900,7 @@ class ChatUseCase:
                                     intent=self._agent_summary_intent(),
                                     facts=FactBundle(facts=[], evidence_state=EvidenceState.NONE),
                                     answer=guarded.markdown,
+                                    user_message=req.message,
                                 )
                             except Exception:
                                 pass
@@ -1308,7 +1326,11 @@ class ChatUseCase:
                 telemetry=telemetry,
                 user_message=req.message,
                 intelligence_mode=req.intelligence_mode,
-                force_template=_internal_tool or agent_attempted or selected_game_verified,
+                force_template=(
+                    _internal_tool
+                    or agent_attempted
+                    or (selected_game_verified and not full_agent_requested)
+                ),
                 preserve_fallback=agent_attempted,
             )
             try:
@@ -1338,7 +1360,11 @@ class ChatUseCase:
             if not _internal_tool:
                 try:
                     await self.context_manager.commit(
-                        context, intent=parsed.intent, facts=facts, answer=guarded.markdown
+                        context,
+                        intent=parsed.intent,
+                        facts=facts,
+                        answer=guarded.markdown,
+                        user_message=req.message,
                     )
                 except Exception:
                     # A context write failure must not invalidate a verified answer; the next
@@ -1518,12 +1544,42 @@ class ChatUseCase:
         ]
         if active_names:
             parts.append("当前对象：" + "、".join(active_names[:3]))
-        for summary in list(getattr(context, "recent_turn_summaries", []) or [])[-3:]:
-            text = " ".join(str(getattr(summary, "text_summary", "")).split())[:600]
-            if text and not is_unsafe_runtime_text(text):
-                parts.append("上轮摘要：" + text)
+        active_season = getattr(context, "active_season", None)
+        if active_season is not None:
+            label = str(getattr(active_season, "label", active_season)).strip()
+            if label:
+                parts.append("当前赛季：" + label[:32])
         value = "\n".join(parts)
         return value[:3000] or None
+
+    @staticmethod
+    def _agent_conversation_history(context: Any) -> list[AgentHistoryMessage]:
+        """Project application summaries into a bounded Hermes transcript.
+
+        The application session remains authoritative for isolation and TTL.
+        Hermes receives no raw session id and keeps native memory disabled;
+        this explicit projection gives it conversational continuity without
+        allowing an old answer to become current factual evidence.
+        """
+
+        history: list[AgentHistoryMessage] = []
+        summaries = list(getattr(context, "recent_turn_summaries", []) or [])[-4:]
+        for summary in summaries:
+            user = " ".join(str(getattr(summary, "user_message", "") or "").split())[:600]
+            assistant = " ".join(
+                str(getattr(summary, "text_summary", "") or "").split()
+            )[:1800]
+            if not user or not assistant:
+                continue
+            if is_unsafe_runtime_text(user) or is_unsafe_runtime_text(assistant):
+                continue
+            history.extend(
+                [
+                    AgentHistoryMessage(role="user", content=user),
+                    AgentHistoryMessage(role="assistant", content=assistant),
+                ]
+            )
+        return history
 
     @staticmethod
     def _agent_summary_intent() -> QueryIntent:
@@ -1679,6 +1735,7 @@ class ChatUseCase:
         session_id: UUID,
         context: Any,
         selected_game_id: str | None,
+        original_question: str,
         deadline_at_utc: datetime,
         token: CancelToken,
         sink: Any,
@@ -1696,9 +1753,18 @@ class ChatUseCase:
                     timezone_name=context.timezone,
                     deadline_at_utc=deadline_at_utc,
                     token=token,
-                )
+            )
             if tool_name == "nba_query":
-                message = arguments.get("question", "")
+                # When a card is selected, the user's wording plus the
+                # server-owned selected_game_id is the authoritative scope.
+                # Do not let a planning paraphrase silently swap the matchup.
+                # Explicitly named other games remain in the original wording
+                # and therefore retain the parser's documented precedence.
+                message = (
+                    original_question
+                    if selected_game_id and original_question.strip()
+                    else arguments.get("question", "")
+                )
                 intent = "nba_query"
             elif tool_name == "nba_news":
                 message = arguments.get("subject", "")
@@ -1944,11 +2010,12 @@ class ChatUseCase:
             )
         method = getattr(self.gateway, plan.operation)
         kwargs = dict(plan.kwargs)
-        # News/background is the one chat operation where an empty live
-        # archive is commonly caused by a provider's limited historical index.
-        # In a hybrid profile, allow the bounded local snapshot to fill that
-        # gap; ProviderGateway keeps the opt-in scoped to this operation.
-        if plan.operation == "search_news":
+        # Historical archives are not uniformly indexed by public providers.
+        # In a hybrid profile, a bounded local snapshot may fill an otherwise
+        # empty history/record, selected-game, news or standings lookup.  A
+        # schedule lookup must request that policy itself (only season-scoped
+        # plans do), so a current empty day can never turn into an old fixture.
+        if plan.operation in {"get_game_summary", "get_history", "search_news", "get_standings"}:
             kwargs.setdefault("fallback_on_empty", True)
         return await self._await_with_cancel(
             method(*plan.args, **kwargs, budget=budget), token
@@ -2248,7 +2315,10 @@ class ChatUseCase:
                     parsed.intent.clock_window or game_end_window(5),
                     period=parsed.intent.period,
                 )
-            elif parsed.intent.intent_name in {IntentName.TACTICAL, IntentName.RECAP} and data.plays:
+            elif (
+                parsed.intent.intent_name in {IntentName.TACTICAL, IntentName.RECAP}
+                and data.plays
+            ):
                 # “为什么能赢” cannot be grounded by a final score alone.
                 # Add a bounded final-minute event window to the same verified
                 # box-score bundle, without claiming tactical detail that the

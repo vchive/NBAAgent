@@ -4,7 +4,7 @@
 **详细设计**：[HLD](../specs/001-nba-chat-agent/hld.md) · [LLD](../specs/001-nba-chat-agent/lld.md)
 **导出 PDF**：[solution.pdf](solution.pdf)
 **状态**：可交付版本。fixture-first 垂直切片、官方 Hermes Agent、API、离线/在线自适应 UI Demo、
-契约/集成测试和方案 PDF 均已提交。公网 profile 使用 hybrid 公开数据并保留 fixture fallback；
+持久化赛事回顾缓存、契约/集成测试和方案 PDF 均已完成。公网 profile 使用 hybrid 公开数据并保留 fixture fallback；
 公网端口仍需由部署机配置云安全组/EIP 入站规则。
 
 可运行的赛事转播风格 UI 位于 [`apps/web-demo`](../apps/web-demo/)。页面启动时会探测
@@ -40,6 +40,9 @@ Key 只能通过 secret 文件或受控环境注入，不能进入仓库、镜�
 面试演示的隐藏输入步骤见 [`docs/byok.md`](byok.md)。
 默认 `AGENT_REASONING_EFFORT=none`，并向固定模型显式关闭隐藏思考；如调整推理档位，需重新
 验证工具调用、事实守卫和 live 时延。
+同一个网页聊天会话映射为一个稳定的逻辑 Agent 会话：刷新页面继续使用当前会话，点击
+“新对话”才清空上下文。应用显式传入最近 4 个完整回合；底层原生 memory/session database
+仍关闭。旧回答只用于理解指代，每个事实追问都必须重新调用服务端 NBA 工具核验。
 在隔离实现交付前，`HERMES_LITE_MODE=sidecar` 会保持 not-ready/模板回退，不会绕过边界改走
 进程内直连。
 `LLM_MODE=live` 与 `PUBLIC_DATA_MODE` 独立：`docker-compose.siliconflow.yml` 已启用 bounded
@@ -66,6 +69,9 @@ PDF 中的要求分为三类：联网公开取数、事实核验、时区/赛季
 ```mermaid
 flowchart LR
   U[用户] --> UI[Web Chat]
+  UI --> HAPI[Highlights API]
+  HAPI --> HC[(SQLite 公开赛事投影)]
+  HC --> PG
   UI --> API[版本化 Chat API]
   API --> SG[Safety Guard]
   SG --> CTX[会话/时区上下文]
@@ -100,13 +106,20 @@ DuckDuckGo 只作为新闻、背景和长尾问题的补充候选源。适配器
 控制字符、链接和提示注入。搜索证据保持 `SEARCH`/部分核验，不能单独把比分、排名、统计
 或 PBP 数字升级为已核验；搜索失败也不会影响 NBA 结构化事实链路。
 
+Highlights API 在公开响应模型与数据源之间增加失败可退化的 SQLite 通用缓存。它只保存
+已经过 Pydantic 校验的赛事列表和详情，不保存凭据、聊天、提示词、Cookie 或上游原始响应。
+历史终场数据采用 stale-while-revalidate；今日、进行中比赛和未结束详情只允许短时 fresh
+命中。详情按比分、leaders 和 PBP 完整度单调升级，低完整度或终场比分冲突的刷新不会覆盖
+已有记录。Docker 具名卷使镜像重建和容器替换后仍能复用缓存；缓存不可写时保持原数据链路。
+
 ## 3. 一次请求如何被处理
 
 1. API 校验消息长度、时区和幂等键，并生成 `request_id`/`session_id`。
 2. Safety Guard 使用本地规则/分类器先判定红线。BLOCK 或 `OUT_OF_SCOPE` 直接返回礼貌
    拒答/篮球引导，Provider 和其缓存读取均为 **0**。
 3. 允许请求加载当前会话上下文。`hybrid` 进入确定性解析；`full` 在规则 Parser 之前进入官方
-   Hermes Agent。Agent 最多执行 4 次迭代/4 次工具调用，并且只能选择三个 NBA 工具。
+   Hermes Agent。应用会话经单向散列形成稳定逻辑 session，每轮另有独立工具 task ID；
+   Agent 最多执行 4 次迭代/4 次工具调用，并且只能选择三个 NBA 工具。
 4. NBA 工具或 hybrid 查询规划器调用 typed Provider port。适配器处理超时、限流、格式异常和 fallback，
    Normalizer 将结果映射到统一领域模型并保留缺失值。
 5. Verifier 检查证据可信度、新鲜度、实体/时间一致性和用户前提。系列赛累计、连胜和
@@ -117,6 +130,10 @@ DuckDuckGo 只作为新闻、背景和长尾问题的补充候选源。适配器
    关闭。Output Guard 检查未观察数字、提示注入、敏感内容和内部字段泄露；Hermes 不可用、
    超时、超预算或输出不合规时回退确定性通道。SafetyGuard、Provider、Verifier、Derivation
    和 Output Guard 的事实与安全所有权不变。
+
+   多轮历史由应用保存和裁剪：最近最多 4 个完整用户/助手回合、8 条消息/12 KiB。历史仅
+   用于解析“那场”“最后那个球”，不能授权比分或统计；事实追问仍必须产生新的工具观察。
+   点击“新对话”后应用 session、逻辑 Agent session、活动比赛和历史同时隔离。
 
    如果模型选择了与问题类型不符的工具（例如用赛程空结果回答球员数据或战术问题），服务端
    会拒绝该 Agent 结果并回退到对应的核验流程，避免“工具调用成功但答非所问”。
@@ -149,7 +166,7 @@ Safety Guard 在任何外部检索前运行；一条消息同时包含正常篮�
 拒答不复述敏感词、不提供规避建议，只用 1–2 句引导回比赛、球员或球队数据。日志只保留
 脱敏哈希、题型、状态、时延、证据状态、Provider 调用计数和缓存读写计数，不记录凭据、
 原始敏感文本或不必要的个人信息；安全短路的 Provider/cache 计数必须均为 0。健康检查不
-暴露上游 URL 和依赖细节。
+暴露上游 URL、缓存路径或 cache key；只提供持久缓存状态、条目数和有界计数器。
 
 ## 6. 评测与交付
 
@@ -164,10 +181,12 @@ Safety Guard 在任何外部检索前运行；一条消息同时包含正常篮�
 - FastAPI 同步聊天、POST SSE、健康检查、日期范围 highlights 和按需比赛详情接口；
 - 中文意图/实体/赛季解析、事实核验、系列赛与最后 5 秒 PBP 确定性推导；
 - 会话隔离、幂等重放、取消传播、TTL 缓存、重试/fallback、检索前安全短路和脱敏 telemetry；
+- SQLite 精彩回顾缓存、历史 SWR、今日 fresh-only、最多五场详情预热和完整度防倒退；
 - 官方 Hermes Agent、三个任务级 NBA 工具、旧 composer（默认关闭）与确定性回退；
 - 受控 DuckDuckGo 新闻/背景搜索，以及会话级“全智能分析”开关；
 - 赛事转播风格静态 UI，支持“今日赛事 / 精彩回顾”切换；精彩回顾默认列出最近 5 场，
-  自定义时间可查询最多 93 天区间，并在 API 不可用时离线演示。
+  自定义时间可查询最多 93 天区间，并在 API 不可用时离线演示；请求在 250ms 内完成时
+  不闪 loading，慢请求保留原卡片并只显示一处加载状态。
 - 选中赛事后按需加载终场摘要、得分王和 PBP；回答完成后给出基于当前上下文的后续问题建议，
   不让模型直接编造未核验的推荐事实。
 
@@ -184,7 +203,8 @@ API + 零依赖静态 Web Demo（后续可替换为 React/Next.js）、ESPN-firs
 
 “今日赛事”与“精彩回顾”是左侧 scoreboard/highlights 的日期投影，不会占用聊天的
 `HISTORY` 意图：精彩回顾默认调用 `GET /api/v1/highlights/recent?limit=5`，自定义时间调用
-`GET /api/v1/highlights/range`（最多连续 93 天）；查询期间前端显示明确的“正在拉取”状态，
+`GET /api/v1/highlights/range`（最多连续 93 天）；查询超过 250ms 时前端显示一次明确的
+“正在拉取”状态，快速缓存命中不清空当前内容，
 未来日期、逆序日期和超长区间会被拒绝，空区间显示明确空状态。月历可用性接口仍保留给需要
 逐日置灰的嵌入方：`GET /api/v1/highlights/availability`（最多连续 31 天）。
 API 模式按服务端时钟计算“今天”；为保持离线 Demo 可复现，fixture 展示固定的

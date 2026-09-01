@@ -71,6 +71,30 @@ class WrongToolAgent(FakeSmartAgent):
         )
 
 
+class QueryingSmartAgent(FakeSmartAgent):
+    """Exercise the real selected-game nba_query bridge from a fake planner."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.tool_names: list[str] = []
+
+    async def run(self, turn, *, tool_runner, cancel):
+        self.turns.append(turn)
+        self.tool_names.append("nba_query")
+        observation = dict(
+            await tool_runner("nba_query", {"question": turn.sanitized_question})
+        )
+        return AgentTurnResult(
+            status=RuntimeStatus.OK,
+            answer_markdown=observation["answer_markdown"],
+            evidence_state=observation["evidence_state"],
+            observations=[observation],
+            tool_calls=[AgentToolCall("nba_query", "hash", "completed", 1)],
+            latency_ms=2,
+            iteration_count=2,
+        )
+
+
 def settings() -> Settings:
     return Settings(
         full_intelligence_enabled=True,
@@ -177,10 +201,10 @@ async def test_agent_unavailable_falls_back_to_deterministic_path() -> None:
 
 
 @pytest.mark.asyncio
-async def test_full_mode_selected_game_uses_verified_path_before_agent_planning() -> None:
-    """A model must not replace the clicked card's verified game context."""
+async def test_full_mode_selected_game_uses_agent_with_verified_tool_scope() -> None:
+    """A clicked card scopes the Agent tool; it must not disable planning."""
 
-    agent = FakeSmartAgent(answer_override="错误的自由回答")
+    agent = QueryingSmartAgent()
     usecase = ChatUseCase(FixtureProvider(), settings=settings(), agent_runtime=agent)
     result = await usecase.handle(
         {
@@ -193,7 +217,69 @@ async def test_full_mode_selected_game_uses_verified_path_before_agent_planning(
     assert result.status == "completed"
     assert "杰伦·布朗" in result.answer_markdown
     assert "32 分" in result.answer_markdown
+    assert result.composition["mode"] == "agent"
+    assert result.composition["status"] == "used"
+    assert len(agent.turns) == 1
+    assert "2025-26 总决赛 G4" in (agent.turns[0].context_hint or "")
+    assert usecase.telemetry.latest().agent_tool_names == ["nba_query"]
+
+
+@pytest.mark.asyncio
+async def test_full_mode_selected_game_tactical_question_uses_agent() -> None:
+    agent = QueryingSmartAgent()
+    usecase = ChatUseCase(FixtureProvider(), settings=settings(), agent_runtime=agent)
+
+    result = await usecase.handle(
+        {
+            "message": "把整场的双方战术说一下",
+            "selected_game_id": "2026-finals-g4",
+            "intelligence_mode": "full",
+        }
+    )
+
+    assert result.status == "completed"
+    assert result.composition["mode"] == "agent"
+    assert result.composition["status"] == "used"
+    assert "凯尔特人" in result.answer_markdown
+    assert "雷霆" in result.answer_markdown
+
+
+@pytest.mark.asyncio
+async def test_hybrid_selected_game_stays_deterministic() -> None:
+    agent = QueryingSmartAgent()
+    usecase = ChatUseCase(FixtureProvider(), settings=settings(), agent_runtime=agent)
+
+    result = await usecase.handle(
+        {
+            "message": "雷霆对凯尔特人谁得分最高？",
+            "selected_game_id": "2026-finals-g4",
+            "intelligence_mode": "hybrid",
+        }
+    )
+
+    assert result.status == "completed"
+    assert result.composition["mode"] == "deterministic"
     assert agent.turns == []
+
+
+@pytest.mark.asyncio
+async def test_selected_game_agent_failure_falls_back_to_same_verified_game() -> None:
+    agent = FakeSmartAgent(unavailable=True)
+    usecase = ChatUseCase(FixtureProvider(), settings=settings(), agent_runtime=agent)
+
+    result = await usecase.handle(
+        {
+            "message": "雷霆对凯尔特人谁得分最高？",
+            "selected_game_id": "2026-finals-g4",
+            "intelligence_mode": "full",
+        }
+    )
+
+    assert result.status == "completed"
+    assert result.composition["mode"] == "fallback"
+    assert result.composition["status"] == "fallback"
+    assert "杰伦·布朗" in result.answer_markdown
+    assert "32 分" in result.answer_markdown
 
 
 @pytest.mark.asyncio
@@ -208,8 +294,98 @@ async def test_agent_receives_bounded_multi_turn_hint() -> None:
             "intelligence_mode": "full",
         }
     )
-    assert agent.turns[1].context_hint is not None
-    assert "上轮摘要" in agent.turns[1].context_hint
+    assert agent.turns[1].opaque_session_id == agent.turns[0].opaque_session_id
+    assert [
+        item.model_dump(mode="python")
+        for item in agent.turns[1].conversation_history
+    ] == [
+        {"role": "user", "content": "nihao"},
+        {
+            "role": "assistant",
+            "content": "您好！我可以帮您查询 NBA 赛程、比赛和球员表现。",
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_new_application_session_starts_new_hermes_history() -> None:
+    agent = FakeSmartAgent()
+    usecase = ChatUseCase(FixtureProvider(), settings=settings(), agent_runtime=agent)
+
+    first = await usecase.handle({"message": "nihao", "intelligence_mode": "full"})
+    second = await usecase.handle({"message": "hello", "intelligence_mode": "full"})
+
+    assert first.session_id != second.session_id
+    assert agent.turns[0].opaque_session_id != agent.turns[1].opaque_session_id
+    assert agent.turns[0].conversation_history == []
+    assert agent.turns[1].conversation_history == []
+
+
+@pytest.mark.asyncio
+async def test_new_full_session_does_not_inherit_selected_game() -> None:
+    agent = QueryingSmartAgent()
+    usecase = ChatUseCase(FixtureProvider(), settings=settings(), agent_runtime=agent)
+
+    first = await usecase.handle(
+        {
+            "message": "雷霆对凯尔特人谁得分最高？",
+            "selected_game_id": "2026-finals-g4",
+            "intelligence_mode": "full",
+        }
+    )
+    fresh = await usecase.handle(
+        {
+            "message": "那场最后5秒发生了什么？",
+            "intelligence_mode": "full",
+        }
+    )
+
+    assert first.session_id != fresh.session_id
+    assert agent.turns[0].opaque_session_id != agent.turns[1].opaque_session_id
+    assert agent.turns[1].conversation_history == []
+    assert "2025-26 总决赛 G4" not in (agent.turns[1].context_hint or "")
+    assert "请补充具体比赛" in fresh.answer_markdown
+    assert "谢伊·吉尔杰斯-亚历山大" not in fresh.answer_markdown
+
+
+@pytest.mark.asyncio
+async def test_full_agent_keeps_selected_game_across_three_turns() -> None:
+    agent = QueryingSmartAgent()
+    usecase = ChatUseCase(FixtureProvider(), settings=settings(), agent_runtime=agent)
+
+    first = await usecase.handle(
+        {
+            "message": "雷霆对凯尔特人谁得分最高？",
+            "selected_game_id": "2026-finals-g4",
+            "intelligence_mode": "full",
+        }
+    )
+    second = await usecase.handle(
+        {
+            "session_id": first.session_id,
+            "message": "那场最后5秒发生了什么？",
+            "intelligence_mode": "full",
+        }
+    )
+    third = await usecase.handle(
+        {
+            "session_id": first.session_id,
+            "message": "最后那个球是谁？",
+            "intelligence_mode": "full",
+        }
+    )
+
+    assert all(result.composition["mode"] == "agent" for result in (first, second, third))
+    assert "杰伦·布朗" in first.answer_markdown
+    assert "谢伊·吉尔杰斯-亚历山大" in second.answer_markdown
+    assert "谢伊·吉尔杰斯-亚历山大" in third.answer_markdown
+    assert len(agent.turns[2].conversation_history) == 4
+    assert {turn.opaque_session_id for turn in agent.turns} == {
+        agent.turns[0].opaque_session_id
+    }
+    # Conversation history may resolve pronouns, but every factual turn still
+    # re-enters the verified NBA query tool instead of trusting an old answer.
+    assert agent.tool_names == ["nba_query", "nba_query", "nba_query"]
 
 
 @pytest.mark.asyncio

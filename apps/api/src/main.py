@@ -21,6 +21,7 @@ from apps.api.src.application.chat_use_case import ChatUseCase
 from apps.api.src.config import Settings
 from apps.api.src.infrastructure.auth import AuthManager
 from apps.api.src.infrastructure.cache import InMemoryTTLCache
+from apps.api.src.infrastructure.highlights_cache import SQLiteHighlightsCache
 from apps.api.src.providers.ddg_adapter import DuckDuckGoAdapter
 from apps.api.src.providers.espn_adapter import ESPNAdapter
 from apps.api.src.providers.fixture_provider import FixtureProvider
@@ -89,6 +90,32 @@ def create_app(*, settings: Settings | None = None, usecase: ChatUseCase | None 
         openapi_url=None if public_profile else "/openapi.json",
     )
     app.state.settings = config
+    app.state.highlights_cache = None
+    if bool(getattr(config, "highlights_cache_enabled", False)):
+        cache_path = Path(str(getattr(config, "highlights_cache_db", "")))
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            # The cache implementation is fail-open. Let it record a degraded
+            # state while the existing Provider/in-memory path remains usable.
+            pass
+        persistent_cache = SQLiteHighlightsCache(
+            cache_path,
+            max_entries=int(getattr(config, "highlights_cache_max_entries", 5_000)),
+            max_payload_bytes=int(
+                getattr(config, "highlights_cache_max_payload_bytes", 2_097_152)
+            ),
+            lease_seconds=int(getattr(config, "highlights_cache_lease_seconds", 30)),
+            busy_timeout_ms=int(
+                getattr(config, "highlights_cache_busy_timeout_ms", 1_500)
+            ),
+        )
+        app.state.highlights_cache = persistent_cache
+        # FastAPI 0.116+ exposes lifecycle registration on the underlying
+        # Starlette router.  Register the synchronous close callback there so
+        # cache-enabled production profiles start cleanly across supported
+        # FastAPI versions.
+        app.router.add_event_handler("shutdown", persistent_cache.close)
     # Server-owned map of games exposed by the highlights projection. Chat
     # requests may refer to a selected card by ID; resolving that ID here
     # prevents the browser from supplying untrusted team/score metadata.

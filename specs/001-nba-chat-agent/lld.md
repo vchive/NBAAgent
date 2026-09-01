@@ -2,9 +2,9 @@
 
 **Feature**: [spec.md](spec.md)
 **HLD**: [hld.md](hld.md)
-**Status**: 官方 Hermes Agent 已实现并完成公网 live 验收
-**Date**: 2026-08-30
-**Revision**: v0.3 — 正式 Hermes Agent、任务级 NBA tools 与双通道状态机
+**Status**: 官方 Hermes Agent、逻辑会话连续性与受控工具核验已实现
+**Date**: 2026-09-01
+**Revision**: v0.4 — 正式 Hermes Agent、逻辑会话历史与任务级 NBA tools
 
 本文把 HLD 的组件落到可实现的模块、类型、状态、协议和测试。字段名是内部契约示例；
 除明确标注为用户字段的内容外，不得原样回传浏览器。
@@ -127,11 +127,14 @@ ToolPolicy {
 AgentTurnInput {
   contract_version: "agent.v1"
   request_id: UUID
-  session_hash: string
+  opaque_session_id: string          # application session 的稳定单向散列
   question: string
   timezone: IANA timezone
   now_beijing: string
   context_hint: string?              # 泛化 active game/team/player；无原始会话 ID
+  conversation_history: [            # 最近最多 4 个完整逻辑回合
+    {role: "user" | "assistant", content: string}
+  ]                                  # user/assistant 交替；最多 8 条/12 KiB
   deadline_at_utc: Instant
   max_iterations: int = 4
   max_tool_calls: int = 4
@@ -521,14 +524,28 @@ AIAgent(
   skip_context_files = true,
   load_soul_identity = false,
   skip_memory = true,
+  session_db = null,
   save_trajectories = false,
+  session_id = opaque_session_id,
   ephemeral_system_prompt = server_owned_agent_policy,
+)
+
+AIAgent.run_conversation(
+  question,
+  conversation_history = bounded_application_history,
+  task_id = per_request_random_task_id,
 )
 ```
 
 启动自检必须确认发行版版本等于锁定版本，registry 对当前 Agent 暴露的函数名集合精确等于
 `{"nba_query", "nba_schedule", "nba_news"}`。多出或缺少任一工具均将 capability 标记为
 degraded，full 请求回退 hybrid。
+
+`opaque_session_id` 在同一应用 `session_id` 生命周期内稳定，但不能反推出原始 UUID；新建
+应用会话后立即变化。`task_id` 每轮独立随机，只用于下述 bridge，不能当作 Agent session。
+显式 `conversation_history` 是唯一的多轮输入：取最近 4 个完整回合，user 每条最多 600 字、
+assistant 每条最多 1800 字，总计最多 12 KiB；角色不交替、半回合、控制字符或危险运行时
+文本一律拒绝或整对丢弃。历史只用于指代理解，当前事实仍必须通过本轮工具 observation 授权。
 
 #### 4.5.1 Tool registration and dispatch
 
@@ -790,6 +807,9 @@ retryable/error message and never leave stale scoreboard cards visible.
   用例按 session lock 串行更新 `turn_count`/active refs，或使用 optimistic version 检测
   冲突后重试；不同 session 可并行。不保存凭据，
   安全命中的原始敏感文本只保留哈希/类别。
+- full 模式从 session store 投影最近 4 个完整 user/assistant 回合；网页刷新沿用同一
+  `session_id`，点击“新对话”生成新 ID。Agent 原生 memory/session database 不保存任何
+  对话；旧回答不能替代当前轮 NBA 工具核验。
 - 同一 session 的并发请求按 `(session_id, client_message_id)` 在编排开始前原子 reserve；
   重复请求若仍 in-flight 则等待或返回可重连状态，完成后复用 envelope；不同 session 永不
   共享上下文。
@@ -818,8 +838,8 @@ P90 时延、队列深度、SSE 连接数、Provider 熔断、Hermes fallback �
 
 | 层级 | 场景 | 必须断言 |
 |---|---|---|
-| Contract | composer 与 Agent capability | composer 工具关闭；Agent 工具集合精确为三个 NBA 工具，包版本锁定 |
-| Integration | Agent 正常/空结果/超时/不可用/不安全 | full 使用 `agent/used`；失败回退；空赛程解释准确且不补数字 |
+| Contract | composer 与 Agent capability/session | composer 工具关闭；Agent 工具集合精确为三个 NBA 工具，包版本锁定；逻辑 session 稳定且 task ID 独立；非法/超限历史拒绝 |
+| Integration | Agent 正常/空结果/超时/不可用/不安全/三轮追问 | full 使用 `agent/used`；失败回退；三轮不串比赛且每个事实轮重新调用 NBA 工具；新 session 无旧历史 |
 | Security | 注入文本、恶意工具配置、网络/文件系统探测 | Safety 在 Agent 前零调用；无通用工具/memory/出站旁路；OutputGuard 阻断未观察数字 |
 | Operations | admission 满载、SSE 断开、滚动重启、SessionStore 故障 | 队列有界、取消无 orphan、会话不静默串线、幂等结果可恢复 |
 

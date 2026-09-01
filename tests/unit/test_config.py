@@ -52,6 +52,28 @@ def test_fixture_demo_date_must_be_iso_calendar_date() -> None:
         Settings(highlights_demo_date="2026-02-30").validate()
 
 
+def test_persistent_highlights_cache_settings_are_bounded() -> None:
+    settings = Settings(
+        highlights_cache_enabled=True,
+        highlights_cache_db="/tmp/nba-agent/highlights.sqlite3",
+    )
+    settings.validate()
+    assert settings.highlights_cache_max_entries == 5_000
+    assert settings.highlights_cache_max_payload_bytes == 2_097_152
+    assert settings.highlights_cache_recent_ttl_seconds == 900
+    assert settings.highlights_cache_history_ttl_seconds == 86_400
+    assert settings.highlights_cache_detail_ttl_seconds == 604_800
+
+    with pytest.raises(ValueError, match="HIGHLIGHTS_CACHE_DB"):
+        Settings(highlights_cache_enabled=True, highlights_cache_db="").validate()
+    with pytest.raises(ValueError, match="HIGHLIGHTS_CACHE_MAX_ENTRIES"):
+        Settings(highlights_cache_max_entries=100_001).validate()
+    with pytest.raises(ValueError, match="HIGHLIGHTS_CACHE_MAX_PAYLOAD_BYTES"):
+        Settings(highlights_cache_max_payload_bytes=16_000_000).validate()
+    with pytest.raises(ValueError, match="HIGHLIGHTS_CACHE.*TTL"):
+        Settings(highlights_cache_recent_ttl_seconds=0).validate()
+
+
 def test_official_agent_settings_are_bounded_and_version_locked() -> None:
     settings = Settings(
         llm_mode="live",

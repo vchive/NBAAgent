@@ -74,6 +74,20 @@ class Settings:
     cache_ttl_live_seconds: int = 45
     cache_ttl_boxscore_seconds: int = 300
     cache_ttl_history_seconds: int = 86_400
+    # Public highlights are also cached as validated wire projections in an
+    # optional persistent store. Local Python runs keep this disabled by
+    # default to avoid writing into a developer checkout; Docker enables it
+    # on a named writable volume.
+    highlights_cache_enabled: bool = False
+    highlights_cache_db: str = "data/highlights.sqlite3"
+    highlights_cache_max_entries: int = 5_000
+    highlights_cache_max_payload_bytes: int = 2_097_152
+    highlights_cache_live_ttl_seconds: int = 45
+    highlights_cache_recent_ttl_seconds: int = 900
+    highlights_cache_history_ttl_seconds: int = 86_400
+    highlights_cache_detail_ttl_seconds: int = 604_800
+    highlights_cache_lease_seconds: int = 30
+    highlights_cache_busy_timeout_ms: int = 1_500
     session_ttl_seconds: int = 86_400
     max_session_turns: int = 8
     max_session_bytes: int = 16_384
@@ -168,6 +182,30 @@ class Settings:
             cache_ttl_live_seconds=_int("CACHE_TTL_LIVE_SECONDS", 45),
             cache_ttl_boxscore_seconds=_int("CACHE_TTL_BOXSCORE_SECONDS", 300),
             cache_ttl_history_seconds=_int("CACHE_TTL_HISTORY_SECONDS", 86_400),
+            highlights_cache_enabled=_bool("HIGHLIGHTS_CACHE_ENABLED", False),
+            highlights_cache_db=os.getenv(
+                "HIGHLIGHTS_CACHE_DB", "data/highlights.sqlite3"
+            ).strip(),
+            highlights_cache_max_entries=_int("HIGHLIGHTS_CACHE_MAX_ENTRIES", 5_000),
+            highlights_cache_max_payload_bytes=_int(
+                "HIGHLIGHTS_CACHE_MAX_PAYLOAD_BYTES", 2_097_152
+            ),
+            highlights_cache_live_ttl_seconds=_int(
+                "HIGHLIGHTS_CACHE_LIVE_TTL_SECONDS", 45
+            ),
+            highlights_cache_recent_ttl_seconds=_int(
+                "HIGHLIGHTS_CACHE_RECENT_TTL_SECONDS", 900
+            ),
+            highlights_cache_history_ttl_seconds=_int(
+                "HIGHLIGHTS_CACHE_HISTORY_TTL_SECONDS", 86_400
+            ),
+            highlights_cache_detail_ttl_seconds=_int(
+                "HIGHLIGHTS_CACHE_DETAIL_TTL_SECONDS", 604_800
+            ),
+            highlights_cache_lease_seconds=_int("HIGHLIGHTS_CACHE_LEASE_SECONDS", 30),
+            highlights_cache_busy_timeout_ms=_int(
+                "HIGHLIGHTS_CACHE_BUSY_TIMEOUT_MS", 1_500
+            ),
             session_ttl_seconds=_int("SESSION_TTL_SECONDS", 86_400),
             max_session_turns=_int("MAX_SESSION_TURNS", 8),
             max_session_bytes=_int("MAX_SESSION_BYTES", 16_384),
@@ -287,6 +325,30 @@ class Settings:
             or self.cache_ttl_history_seconds < 0
         ):
             raise ValueError("cache TTL values must be non-negative")
+        if self.highlights_cache_enabled and not self.highlights_cache_db:
+            raise ValueError("HIGHLIGHTS_CACHE_DB must not be empty when enabled")
+        if self.highlights_cache_db and any(
+            ord(char) < 32 or ord(char) == 127 for char in self.highlights_cache_db
+        ):
+            raise ValueError("HIGHLIGHTS_CACHE_DB contains control characters")
+        if not 1 <= self.highlights_cache_max_entries <= 100_000:
+            raise ValueError("HIGHLIGHTS_CACHE_MAX_ENTRIES must be between 1 and 100000")
+        if not 1_024 <= self.highlights_cache_max_payload_bytes <= 8_388_608:
+            raise ValueError(
+                "HIGHLIGHTS_CACHE_MAX_PAYLOAD_BYTES must be between 1024 and 8388608"
+            )
+        cache_ttls = {
+            "HIGHLIGHTS_CACHE_LIVE_TTL_SECONDS": self.highlights_cache_live_ttl_seconds,
+            "HIGHLIGHTS_CACHE_RECENT_TTL_SECONDS": self.highlights_cache_recent_ttl_seconds,
+            "HIGHLIGHTS_CACHE_HISTORY_TTL_SECONDS": self.highlights_cache_history_ttl_seconds,
+            "HIGHLIGHTS_CACHE_DETAIL_TTL_SECONDS": self.highlights_cache_detail_ttl_seconds,
+        }
+        if any(value <= 0 or value > 2_592_000 for value in cache_ttls.values()):
+            raise ValueError("HIGHLIGHTS_CACHE TTL values must be between 1 and 2592000")
+        if not 1 <= self.highlights_cache_lease_seconds <= 300:
+            raise ValueError("HIGHLIGHTS_CACHE_LEASE_SECONDS must be between 1 and 300")
+        if not 1 <= self.highlights_cache_busy_timeout_ms <= 30_000:
+            raise ValueError("HIGHLIGHTS_CACHE_BUSY_TIMEOUT_MS must be between 1 and 30000")
         if app_env == "production" and hermes_lite_mode in {"embedded_spike", "embedded_agent"}:
             raise ValueError("embedded Hermes runtimes are forbidden in production")
         positive = {

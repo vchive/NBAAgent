@@ -6,7 +6,9 @@ import pytest
 
 from apps.api.src.application.ports import ProviderResult, RequestBudget
 from apps.api.src.domain.errors import ProviderError, ProviderErrorKind
-from apps.api.src.domain.models import GameFilters
+from apps.api.src.domain.models import GameFilters, HistoryQuery, HistoryRecordType
+from apps.api.src.infrastructure.cache import InMemoryTTLCache
+from apps.api.src.providers.fixture_provider import FixtureProvider
 from apps.api.src.providers.gateway import ProviderGateway
 
 
@@ -67,3 +69,35 @@ async def test_gateway_does_not_replace_authoritative_empty_result() -> None:
     assert result.error is None
     assert result.data == []
     assert fallback.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_history_empty_cache_does_not_disable_an_explicit_snapshot_fallback() -> None:
+    """Fallback policy is part of the cache key, even though it is not a provider argument."""
+
+    primary = FixtureProvider(scenario="empty")
+    fallback = FixtureProvider()
+    gateway = ProviderGateway(
+        primary,
+        fallback=fallback,
+        cache=InMemoryTTLCache(),
+        max_retries=0,
+    )
+    query = HistoryQuery(record_type=HistoryRecordType.CHAMPIONSHIP, limit=1)
+
+    authoritative_empty = await gateway.get_history(
+        query,
+        budget=RequestBudget(datetime.now(UTC) + timedelta(seconds=2)),
+    )
+    recovered = await gateway.get_history(
+        query,
+        budget=RequestBudget(datetime.now(UTC) + timedelta(seconds=2)),
+        fallback_on_empty=True,
+    )
+
+    assert authoritative_empty.data == []
+    assert recovered.error is None
+    assert recovered.partial is True
+    assert recovered.data and recovered.data[0].subject is not None
+    assert recovered.data[0].subject.display_name == "凯尔特人"
+    assert fallback.operation_calls["get_history"] == 1

@@ -11,6 +11,11 @@ fixture/mock 模式的 FastAPI Agent：同步聊天、POST SSE、会话隔离、
 在仓库包含 Web Demo 时会从同一端口托管 UI，因此可以直接通过一个 `IP:端口` 访问完整演示。
 ESPN、受控 DuckDuckGo 搜索与官方 Hermes Agent 均为可替换适配器，默认关闭，不需要任何凭据。
 
+“精彩回顾”使用失败可退化的 SQLite 通用缓存：最近列表、历史日期/区间和比赛详情首次
+核验后可跨浏览器访问和容器重建复用。历史终场数据允许先返回缓存再后台刷新；今日和
+进行中比赛只接受短 TTL 的 fresh 数据。详情写入会拒绝低完整度或终场比分冲突，最近列表
+最多后台预热 5 场详情。缓存只保存公开响应投影，不保存用户会话、问题、提示词或密钥。
+
 > **SiliconFlow BYOK 状态**：默认仍是完全离线的 `template`/`mock` 模式（不会读取或发送
 > 模型请求）。live profile 使用锁定的 `hermes-agent==0.19.0` 和
 > `HERMES_LITE_MODE=embedded_agent`；页面开启“全智能分析”后，请求会在 SafetyGuard 与会话
@@ -23,6 +28,9 @@ ESPN、受控 DuckDuckGo 搜索与官方 Hermes Agent 均为可替换适配器�
 > `SILICONFLOW_API_KEY_FILE`（挂载 secret）注入，绝不能提交到仓库、镜像、前端、日志或聊天。
 > `HERMES_LITE_MODE=sidecar` 目前是保守的未实现占位，会保持 not-ready/模板回退，不会
 > 偷换成进程内直连。
+> 同一网页聊天会话使用稳定的逻辑 Agent session，并显式传入最近 4 个完整回合；刷新页面
+> 继续当前应用会话，点击“新对话”才切换。这里的连续性由应用会话管理，底层原生
+> memory/session database 仍关闭；任何事实追问每轮都必须重新调用受控 NBA 工具核验。
 > 模型运行时和 `PUBLIC_DATA_MODE` 相互独立；`make deploy-live` 会叠加 public hybrid 数据
 > profile。若把 live profile 暴露到公网，任何已登录访问者都可能消耗 BYOK 额度，必须
 > 放在认证反代/VPN/受限安全组后，并配置供应商预算与限额。
@@ -60,6 +68,10 @@ curl -fsS 'http://127.0.0.1:8000/api/v1/highlights/availability?from=2026-06-06&
 ```bash
 python3 -m pytest -q
 ```
+
+SQLite 默认写入 `/app/data/highlights.sqlite3`，Compose 使用具名卷 `highlights_data`。
+普通容器重建不会删除它；只有明确执行带 `-v` 的卷删除操作才会清空缓存。前端对历史请求
+采用 250ms 感知阈值，快速命中不闪 loading，慢请求保留原内容并只显示一处加载提示。
 
 浏览器验收（Node.js 20+，首次运行需下载 Chromium）：
 

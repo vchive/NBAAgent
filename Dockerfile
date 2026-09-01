@@ -38,6 +38,7 @@ COPY docs ./docs
 # Install this project itself without dependency resolution; dependencies are
 # already present in the cached layer above.
 RUN python -m pip install --no-deps --no-build-isolation . \
+    && mkdir -p /app/data \
     && chown -R nbaagent:nbaagent /app
 
 USER nbaagent

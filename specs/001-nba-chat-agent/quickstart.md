@@ -242,6 +242,12 @@ full 模式使用官方 `HermesAgentRuntime`，在规则解析之前执行有界
 受控面试演示，正式 sidecar 隔离仍是后续部署形态。没有 key 时 Agent 不发请求并回退模板，
 `/healthz`/`/readyz` 会反映配置未就绪。
 
+同一个网页聊天会话会复用稳定的应用 `session_id` 及其单向散列逻辑 Agent session；页面
+刷新仍继续该会话，点击“新对话”才换 ID。每轮向 Agent 显式提供最近最多 4 个完整
+user/assistant 回合（最多 8 条、12 KiB），同时使用新的随机 `task_id` 隔离工具调用。底层
+原生 memory/session database/trajectory 均关闭；历史只用于理解指代，事实追问仍必须在
+当前轮重新调用 NBA 工具。
+
 本地 direct BYOK 示例（不要把真实 key 写进 shell 历史或提交文件）：
 
 ```bash
@@ -265,7 +271,7 @@ uvicorn apps.api.src.main:app --host 0.0.0.0 --port 8000
 `.env` 传入容器。启用前验证模型账户可用性、额度、`/readyz`、429/超时/撤 key 回退和
 日志中没有 `Authorization`/token。向第三方发送的内容仅包括清理后的问题、泛化上下文、
 NBA 工具 schema 和清洗后的工具观察，不包括 Provider URL、原始 JSON、
-证据/会话 ID 或凭据。
+证据、原始会话 ID 或凭据；只传稳定的单向散列逻辑会话 ID。
 Dockerfile 默认使用清华 PyPI 镜像，并将依赖安装层与源码层分离；国内服务器首次构建仍
 需等待 Hermes 依赖下载，后续源码变更可复用依赖缓存。镜像不可达时可在构建命令追加
 `--build-arg PIP_INDEX_URL=https://pypi.org/simple`。

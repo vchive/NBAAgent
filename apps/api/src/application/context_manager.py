@@ -76,6 +76,7 @@ class ContextManager:
         intent: QueryIntent,
         facts: FactBundle | None = None,
         answer: str = "",
+        user_message: str = "",
     ) -> ConversationContext:
         refs = list(intent.entities[:8])
         fact_ids = [
@@ -84,6 +85,7 @@ class ContextManager:
             if fact.verification.value in {"VERIFIED", "PARTIAL"}
         ][:32]
         summary_text = (answer or f"{intent.intent_name.value} 查询").strip()[:2048]
+        bounded_user_message = " ".join(str(user_message or "").split())[:1000] or None
 
         def build_candidate(base: ConversationContext) -> ConversationContext:
             """Merge this turn onto *base* without crossing session boundaries."""
@@ -103,17 +105,18 @@ class ContextManager:
             turn = TurnSummary(
                 turn_index=base.turn_count + 1,
                 user_intent=intent.intent_name.value,
+                user_message=bounded_user_message,
                 active_refs=refs,
                 verified_fact_ids=fact_ids,
                 text_summary=summary_text,
             )
             summaries = [*base.recent_turn_summaries, turn][-self.max_turns :]
             # Keep summaries under the byte budget, dropping oldest first.
-            while (
-                summaries
-                and len("".join(item.text_summary for item in summaries).encode("utf-8"))
-                > self.max_summary_bytes
-            ):
+            while summaries and sum(
+                len((item.user_message or "").encode("utf-8"))
+                + len(item.text_summary.encode("utf-8"))
+                for item in summaries
+            ) > self.max_summary_bytes:
                 summaries.pop(0)
             return base.model_copy(
                 update={

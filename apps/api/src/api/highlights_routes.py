@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
+from collections.abc import Awaitable, Callable
 from datetime import date, timedelta
 from uuid import uuid4
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from apps.api.src.api.schemas import (
     ErrorResponse,
@@ -23,8 +26,206 @@ from apps.api.src.application.highlights import (
     HighlightsService,
 )
 from apps.api.src.domain.time_policy import validate_timezone
+from apps.api.src.infrastructure.highlights_cache import (
+    SQLiteHighlightsCache,
+    stable_cache_key,
+)
 
 router = APIRouter()
+
+
+def _cache_now(service: HighlightsService):
+    return service._now()
+
+
+def _persistent_cache(request: Request) -> SQLiteHighlightsCache | None:
+    value = getattr(request.app.state, "highlights_cache", None)
+    return value if isinstance(value, SQLiteHighlightsCache) and value.available else None
+
+
+def _cache_ttl(request: Request, name: str, default: int) -> int:
+    settings = getattr(request.app.state, "settings", None)
+    return int(getattr(settings, name, default))
+
+
+def _remember_cached_projection(
+    service: HighlightsService,
+    value: BaseModel,
+    *,
+    timezone_name: str,
+) -> None:
+    if isinstance(value, HighlightDetailResponse):
+        games = [value.game]
+    elif isinstance(value, (HighlightsResponse, HighlightsRangeResponse)):
+        games = value.games
+    else:
+        games = []
+    service.remember_public_games(games, timezone_name=timezone_name)
+
+
+def _refresh_tasks(request: Request) -> set[asyncio.Task[None]]:
+    tasks = getattr(request.app.state, "highlights_refresh_tasks", None)
+    if not isinstance(tasks, set):
+        tasks = set()
+        request.app.state.highlights_refresh_tasks = tasks
+    return tasks
+
+
+def _cache_locks(request: Request) -> dict[str, asyncio.Lock]:
+    locks = getattr(request.app.state, "highlights_cache_locks", None)
+    if not isinstance(locks, dict):
+        locks = {}
+        request.app.state.highlights_cache_locks = locks
+    return locks
+
+
+def _schedule_refresh[ProjectionT: BaseModel](
+    request: Request,
+    *,
+    cache: SQLiteHighlightsCache,
+    key: str,
+    kind: str,
+    ttl_seconds: int | Callable[[ProjectionT], int],
+    now,
+    loader: Callable[[], Awaitable[ProjectionT]],
+) -> None:
+    owner = cache.acquire_refresh(key, now=now)
+    if owner is None:
+        return
+
+    async def refresh() -> None:
+        try:
+            value = await loader()
+            ttl = ttl_seconds(value) if callable(ttl_seconds) else ttl_seconds
+            cache.set(key, kind, value, ttl_seconds=ttl, now=now)
+        except Exception:
+            # A stale historical projection remains valid when a low-priority
+            # refresh fails. The foreground response has already completed.
+            pass
+        finally:
+            cache.release_refresh(key, owner)
+
+    task = asyncio.create_task(refresh())
+    tasks = _refresh_tasks(request)
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
+
+
+async def _load_cached_projection[ProjectionT: BaseModel](
+    request: Request,
+    service: HighlightsService,
+    *,
+    key: str,
+    kind: str,
+    model: type[ProjectionT],
+    ttl_seconds: int | Callable[[ProjectionT], int],
+    timezone_name: str,
+    allow_stale: bool,
+    stale_value_allowed: Callable[[ProjectionT], bool] | None = None,
+    loader: Callable[[], Awaitable[ProjectionT]],
+) -> ProjectionT:
+    cache = _persistent_cache(request)
+    if cache is None:
+        return await loader()
+    now = _cache_now(service)
+    hit = cache.get(key, model, now=now, allow_stale=allow_stale)
+    if hit is not None and (
+        not hit.stale
+        or stale_value_allowed is None
+        or stale_value_allowed(hit.value)
+    ):
+        _remember_cached_projection(
+            service,
+            hit.value,
+            timezone_name=timezone_name,
+        )
+        if hit.stale:
+            _schedule_refresh(
+                request,
+                cache=cache,
+                key=key,
+                kind=kind,
+                ttl_seconds=ttl_seconds,
+                now=now,
+                loader=loader,
+            )
+        return hit.value
+
+    # Coalesce simultaneous misses inside the single-process demo. Recheck
+    # after acquiring the lock because another request may have populated the
+    # SQLite row while this one waited.
+    lock = _cache_locks(request).setdefault(key, asyncio.Lock())
+    async with lock:
+        now = _cache_now(service)
+        hit = cache.get(key, model, now=now, allow_stale=False)
+        if hit is not None:
+            _remember_cached_projection(
+                service,
+                hit.value,
+                timezone_name=timezone_name,
+            )
+            return hit.value
+        value = await loader()
+        ttl = ttl_seconds(value) if callable(ttl_seconds) else ttl_seconds
+        cache.set(key, kind, value, ttl_seconds=ttl, now=now)
+        return value
+
+
+def _schedule_detail_prefetch(
+    request: Request,
+    service: HighlightsService,
+    games,
+    *,
+    timezone_name: str,
+) -> None:
+    """Warm at most five completed details without delaying the list response."""
+
+    cache = _persistent_cache(request)
+    if cache is None:
+        return
+    final_games = [game for game in list(games or []) if game.status == "final"][:5]
+    if not final_games:
+        return
+    settings = getattr(request.app.state, "settings", None)
+    detail_ttl = int(getattr(settings, "highlights_cache_detail_ttl_seconds", 604_800))
+    live_ttl = int(getattr(settings, "highlights_cache_live_ttl_seconds", 45))
+
+    async def prefetch_one(game) -> None:
+        key = stable_cache_key("detail", timezone_name, game.game_id)
+        now = _cache_now(service)
+        if cache.get(
+            key,
+            HighlightDetailResponse,
+            now=now,
+            allow_stale=True,
+            count_metrics=False,
+        ) is not None:
+            return
+        owner = cache.acquire_refresh(key, now=now)
+        if owner is None:
+            return
+        try:
+            value = await service.detail(game.game_id, timezone_name=timezone_name)
+            ttl = detail_ttl if value.game.status == "final" else live_ttl
+            cache.set(key, "detail", value, ttl_seconds=ttl, now=now)
+        except Exception:
+            pass
+        finally:
+            cache.release_refresh(key, owner)
+
+    async def prefetch() -> None:
+        semaphore = asyncio.Semaphore(2)
+
+        async def bounded(game) -> None:
+            async with semaphore:
+                await prefetch_one(game)
+
+        await asyncio.gather(*(bounded(game) for game in final_games))
+
+    task = asyncio.create_task(prefetch())
+    tasks = _refresh_tasks(request)
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
 
 
 @router.get(
@@ -136,10 +337,36 @@ async def highlights_recent(
     try:
         zone = validate_timezone(timezone_name)
         configured_demo = _fixture_demo_date(request)
-        result = await service.recent(
-            limit=limit,
+        reference_day = configured_demo or service._now().astimezone(zone).date()
+        key = stable_cache_key("recent", zone.key, reference_day.isoformat(), limit)
+
+        async def load_recent() -> HighlightsRangeResponse:
+            return await service.recent(
+                limit=limit,
+                timezone_name=zone.key,
+                reference_day=configured_demo,
+            )
+
+        result = await _load_cached_projection(
+            request,
+            service,
+            key=key,
+            kind="recent",
+            model=HighlightsRangeResponse,
+            ttl_seconds=_cache_ttl(
+                request,
+                "highlights_cache_recent_ttl_seconds",
+                900,
+            ),
             timezone_name=zone.key,
-            reference_day=configured_demo,
+            allow_stale=True,
+            loader=load_recent,
+        )
+        _schedule_detail_prefetch(
+            request,
+            service,
+            result.games,
+            timezone_name=zone.key,
         )
     except HighlightsAvailabilityRangeError:
         return _error_response("INVALID_PAYLOAD", "最近比赛数量必须在 1–20 场之间。", 400)
@@ -196,7 +423,37 @@ async def highlights_range(
         game_registry=getattr(request.app.state, "game_registry", None),
     )
     try:
-        result = await service.for_range(start, end, timezone_name=zone.key)
+        local_today = service._now().astimezone(zone).date()
+        historical = end < local_today
+        key = stable_cache_key(
+            "range",
+            zone.key,
+            start.isoformat(),
+            end.isoformat(),
+        )
+
+        async def load_range() -> HighlightsRangeResponse:
+            return await service.for_range(start, end, timezone_name=zone.key)
+
+        result = await _load_cached_projection(
+            request,
+            service,
+            key=key,
+            kind="range",
+            model=HighlightsRangeResponse,
+            ttl_seconds=_cache_ttl(
+                request,
+                (
+                    "highlights_cache_history_ttl_seconds"
+                    if historical
+                    else "highlights_cache_live_ttl_seconds"
+                ),
+                86_400 if historical else 45,
+            ),
+            timezone_name=zone.key,
+            allow_stale=historical,
+            loader=load_range,
+        )
     except FutureHighlightsDateError:
         return _error_response("INVALID_PAYLOAD", "不能查询未来日期。", 400)
     except HighlightsAvailabilityRangeError:
@@ -256,7 +513,32 @@ async def highlights(
     except (ValueError, TypeError):
         return _error_response("INVALID_PAYLOAD", "日期或时区格式不正确。", 400)
     try:
-        result = await service.for_date(target, timezone_name=timezone_name)
+        local_today = service._now().astimezone(zone).date()
+        historical = target < local_today
+        key = stable_cache_key("date", timezone_name, target.isoformat())
+
+        async def load_date() -> HighlightsResponse:
+            return await service.for_date(target, timezone_name=timezone_name)
+
+        result = await _load_cached_projection(
+            request,
+            service,
+            key=key,
+            kind="date",
+            model=HighlightsResponse,
+            ttl_seconds=_cache_ttl(
+                request,
+                (
+                    "highlights_cache_history_ttl_seconds"
+                    if historical
+                    else "highlights_cache_live_ttl_seconds"
+                ),
+                86_400 if historical else 45,
+            ),
+            timezone_name=timezone_name,
+            allow_stale=historical,
+            loader=load_date,
+        )
     except FutureHighlightsDateError:
         return _error_response("INVALID_PAYLOAD", "不能查询未来日期。", 400)
     except HighlightsProviderError as exc:
@@ -301,7 +583,40 @@ async def highlight_detail(
     )
     try:
         timezone_name = validate_timezone(timezone_name).key
-        return await service.detail(game_id, timezone_name=timezone_name)
+
+        async def load_detail() -> HighlightDetailResponse:
+            return await service.detail(game_id, timezone_name=timezone_name)
+
+        key = stable_cache_key("detail", timezone_name, game_id)
+        # Final details are immutable enough for stale-while-revalidate. Live
+        # or scheduled details must be fresh and use the short TTL.
+        final_ttl = _cache_ttl(
+            request,
+            "highlights_cache_detail_ttl_seconds",
+            604_800,
+        )
+        live_ttl = _cache_ttl(
+            request,
+            "highlights_cache_live_ttl_seconds",
+            45,
+        )
+
+        def detail_ttl_for(value: HighlightDetailResponse) -> int:
+            return final_ttl if value.game.status == "final" else live_ttl
+
+        cached = await _load_cached_projection(
+            request,
+            service,
+            key=key,
+            kind="detail",
+            model=HighlightDetailResponse,
+            ttl_seconds=detail_ttl_for,
+            timezone_name=timezone_name,
+            allow_stale=True,
+            stale_value_allowed=lambda value: value.game.status == "final",
+            loader=load_detail,
+        )
+        return cached
     except HighlightsProviderError as exc:
         return _error_response(exc.code, exc.message, exc.status_code, retryable=exc.retryable)
 

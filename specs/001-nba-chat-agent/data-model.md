@@ -88,6 +88,7 @@ PublicCorrection
 TurnSummary
   turn_index: int
   user_intent: string
+  user_message: string? (normalized, max 1000; full-mode logical history only)
   active_refs: EntityRef[]
   verified_fact_ids: string[]
   text_summary: string (max 2048)
@@ -453,6 +454,16 @@ EvaluationRun
 
 `ConversationRecord` 是持久化外壳；运行时 `ConversationContext` 是其中的有界投影，二者
 共享同一 `session_id`，不允许各自维护另一套活动实体。
+
+全智能模式把同一 `session_id` 单向散列为稳定的 `opaque_session_id`，并将最近最多 4 个
+完整 `user_message/text_summary` 对投影为逻辑对话历史。投影必须保持 user/assistant 交替、
+总计不超过 8 条/12 KiB；不完整、含控制字符或危险指令文本的 pair 整体丢弃。每个请求另有
+独立随机 `task_id`，只用于工具 bridge、取消和调用隔离，不能替代逻辑会话 ID。
+
+`TurnSummary` 只保存当前应用会话内的有界问题/回答摘要，并随 24 小时会话 TTL 过期；底层
+Agent 原生 memory、session database 与 trajectory 持久化保持关闭。历史回答不是新的
+`Evidence` 或 `FactAssertion`，当前轮引用其中的比分、统计、PBP 或日期时必须重新调用受控
+NBA 工具核验。
 
 `EvaluationCase.turns` 是评测输入的唯一规范形态：单轮题包含一个 turn，H 类题包含按
 `turn_index` 排序的三轮消息并在同一 `session_id` 中执行。`expected_entities`、

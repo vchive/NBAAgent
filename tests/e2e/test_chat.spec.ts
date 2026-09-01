@@ -201,4 +201,19 @@ test("full intelligence acceptance prompts render Agent provenance", async ({ pa
   }
   expect(requestBodies).toHaveLength(3);
   expect(requestBodies.every((body) => body.intelligence_mode === "full")).toBeTruthy();
+  const logicalSessionId = String(requestBodies[0].session_id);
+  expect(requestBodies.every((body) => body.session_id === logicalSessionId)).toBeTruthy();
+
+  // Refresh continues the same application/Agent logical session. Starting
+  // a new chat rotates it and clears any selected replay card.
+  await page.reload();
+  await expect(page.locator("#message-input")).toBeVisible();
+  expect(await page.evaluate(() => window.sessionStorage.getItem("courtside-demo-session-v1")))
+    .toBe(logicalSessionId);
+  await page.locator('[data-highlight-mode="history"]').click();
+  await expect(page.locator("#game-list .game-list-card").first()).toHaveAttribute("aria-pressed", "true");
+  await page.locator("#new-session").click();
+  const newSessionId = await page.evaluate(() => window.sessionStorage.getItem("courtside-demo-session-v1"));
+  expect(newSessionId).not.toBe(logicalSessionId);
+  await expect(page.locator("#game-list .game-list-card").first()).toHaveAttribute("aria-pressed", "false");
 });

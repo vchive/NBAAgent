@@ -541,9 +541,20 @@ class PublicCorrection(CanonicalModel):
 class TurnSummary(CanonicalModel):
     turn_index: int = Field(ge=1)
     user_intent: str = Field(min_length=1, max_length=120)
+    # The bounded, post-safety user wording lets the full Agent reconstruct a
+    # logical conversation without enabling Hermes' filesystem/native memory.
+    # It remains session-scoped and expires with ConversationContext.
+    user_message: str | None = Field(default=None, max_length=1000)
     active_refs: list[EntityRef] = Field(default_factory=list, max_length=16)
     verified_fact_ids: list[str] = Field(default_factory=list, max_length=128)
     text_summary: str = Field(min_length=1, max_length=2048)
+
+    @field_validator("user_message")
+    @classmethod
+    def _safe_user_message(cls, value: str | None) -> str | None:
+        if value is not None and _has_control_chars(value):
+            raise ValueError("control characters are not allowed")
+        return value
 
 
 class SafetyDecision(CanonicalModel):

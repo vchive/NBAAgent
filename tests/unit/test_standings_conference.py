@@ -3,9 +3,13 @@
 import httpx
 import pytest
 
+from apps.api.src.application.chat_use_case import ChatUseCase
 from apps.api.src.application.parser import IntentParser
 from apps.api.src.application.query_planner import QueryPlanner
+from apps.api.src.config import Settings
 from apps.api.src.main import create_app
+from apps.api.src.providers.fixture_provider import FixtureProvider
+from apps.api.src.providers.gateway import ProviderGateway
 
 
 def test_parser_and_planner_preserve_east_conference_scope() -> None:
@@ -57,3 +61,23 @@ async def test_http_standings_does_not_leak_the_other_conference() -> None:
     assert "雷霆" not in east_answer
     assert "雷霆" in west_answer
     assert "凯尔特人" not in west_answer
+
+
+@pytest.mark.asyncio
+async def test_hybrid_historical_standings_uses_the_bounded_snapshot_when_live_is_empty() -> None:
+    """An empty live archive must not degrade a historical ranking to a schedule no-data answer."""
+
+    primary = FixtureProvider(scenario="empty")
+    fallback = FixtureProvider()
+    usecase = ChatUseCase(
+        primary,
+        gateway=ProviderGateway(primary, fallback=fallback, max_retries=0),
+        settings=Settings(public_data_mode="hybrid"),
+    )
+
+    result = await usecase.handle({"message": "2025-26 赛季东部排名第一的球队是谁？"})
+
+    assert result.status == "completed"
+    assert result.evidence_state == "partial"
+    assert "凯尔特人" in result.answer_markdown
+    assert "60" in result.answer_markdown

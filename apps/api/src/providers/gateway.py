@@ -104,7 +104,13 @@ class ProviderGateway:
                 ),
                 retrieved_at_utc=datetime.now(UTC),
             )
-        key = self._key(operation, args, kwargs)
+        # Whether an empty primary response is allowed to fall back is part of
+        # the retrieval policy, not a provider argument.  It nevertheless
+        # belongs in the cache key: a cached authoritative empty result from a
+        # current schedule lookup must not suppress a later historical lookup
+        # that explicitly permits the bounded snapshot fallback.
+        cache_kwargs = {**kwargs, "_fallback_on_empty": fallback_on_empty}
+        key = self._key(operation, args, cache_kwargs)
         if self.cache is not None:
             self.cache_read_count += 1
             cached = self.cache.get(key)
@@ -290,8 +296,28 @@ class ProviderGateway:
             fallback_on_empty=fallback_on_empty,
         )
 
-    async def get_game_summary(self, game_id: str, budget: RequestBudget) -> ProviderResult[Any]:
-        return await self._invoke("get_game_summary", game_id, budget=budget, ttl_seconds=300)
+    async def get_game_summary(
+        self,
+        game_id: str,
+        budget: RequestBudget,
+        *,
+        fallback_on_empty: bool = False,
+    ) -> ProviderResult[Any]:
+        """Read one explicitly selected game.
+
+        A game id is an unambiguous scope, so a hybrid caller may safely use
+        the bounded snapshot when the live archive has an empty historical
+        index.  The flag remains opt-in to keep the gateway neutral for other
+        callers.
+        """
+
+        return await self._invoke(
+            "get_game_summary",
+            game_id,
+            budget=budget,
+            ttl_seconds=300,
+            fallback_on_empty=fallback_on_empty,
+        )
 
     async def get_play_by_play(self, game_id: str, budget: RequestBudget) -> ProviderResult[Any]:
         return await self._invoke("get_play_by_play", game_id, budget=budget, ttl_seconds=45)
@@ -308,6 +334,7 @@ class ProviderGateway:
         budget: RequestBudget,
         *,
         conference: str | None = None,
+        fallback_on_empty: bool = False,
     ) -> ProviderResult[Any]:
         """Read standings and apply an optional conference projection.
 
@@ -319,7 +346,13 @@ class ProviderGateway:
         verification to handle.
         """
 
-        result = await self._invoke("get_standings", season, budget=budget, ttl_seconds=300)
+        result = await self._invoke(
+            "get_standings",
+            season,
+            budget=budget,
+            ttl_seconds=300,
+            fallback_on_empty=fallback_on_empty,
+        )
         target = canonical_conference(conference)
         if target is None or result.error is not None:
             return result
@@ -331,8 +364,22 @@ class ProviderGateway:
         # only the typed data projection changes.
         return result.model_copy(update={"data": filtered})
 
-    async def get_history(self, query: Any, budget: RequestBudget) -> ProviderResult[Any]:
-        return await self._invoke("get_history", query, budget=budget, ttl_seconds=86_400)
+    async def get_history(
+        self,
+        query: Any,
+        budget: RequestBudget,
+        *,
+        fallback_on_empty: bool = False,
+    ) -> ProviderResult[Any]:
+        """Read structured history with an optional bounded-snapshot policy."""
+
+        return await self._invoke(
+            "get_history",
+            query,
+            budget=budget,
+            ttl_seconds=86_400,
+            fallback_on_empty=fallback_on_empty,
+        )
 
     async def search_news(
         self,

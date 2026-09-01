@@ -201,6 +201,12 @@ class QueryPlanner:
                     description="读取排名",
                 )
             # Series questions need all games so Derivation can count wins.
+            # A season-scoped series request has a historical, bounded scope.
+            # Public scoreboards can omit completed playoff archives, whereas
+            # the local verified snapshot can answer its matching season.
+            # Do not opt in for an unscoped/current-day schedule: that must
+            # remain an honest empty result rather than show a stale fixture.
+            fallback_kwargs = {"fallback_on_empty": True} if intent.season is not None else {}
             return QueryPlan(
                 "search_games",
                 (
@@ -208,6 +214,7 @@ class QueryPlanner:
                         date_range=intent.date_range, season=intent.season, team_ids=team_ids
                     ),
                 ),
+                kwargs=fallback_kwargs,
                 description="读取赛程与赛果",
             )
         if intent.intent_name is IntentName.DATA:

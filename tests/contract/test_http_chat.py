@@ -132,6 +132,26 @@ def test_live_profile_without_key_is_degraded_and_not_ready() -> None:
     assert ready.json()["status"] == "not_ready"
 
 
+def test_health_exposes_privacy_safe_persistent_cache_state(tmp_path) -> None:
+    app = create_app(
+        settings=Settings(
+            highlights_cache_enabled=True,
+            highlights_cache_db=str(tmp_path / "highlights.sqlite3"),
+        )
+    )
+    with TestClient(app) as client:
+        health = client.get("/healthz")
+        ready = client.get("/readyz")
+
+    for response in (health, ready):
+        state = response.json()["dependencies"]["highlights_cache"]
+        assert state["status"] == "ok"
+        assert state["entries"] >= 0
+        assert "persistent_cache_read_count" in state
+        assert str(tmp_path) not in response.text
+        assert "cache_key" not in response.text
+
+
 @pytest.mark.asyncio
 async def test_highlights_date_projection_clears_empty_dates() -> None:
     app = create_app()

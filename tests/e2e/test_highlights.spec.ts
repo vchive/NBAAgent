@@ -39,8 +39,8 @@ test("resolves today's Beijing date before painting the highlights rail", async 
   });
 
   await page.goto("/");
-  await expect(page.locator("#highlights-empty.is-loading")).toBeVisible();
-  await expect(page.locator("#highlights-empty")).toContainText("正在拉取今日赛事");
+  await expect(page.locator("#history-status")).toContainText("正在拉取今日赛事");
+  await expect(page.locator("#highlights-empty.is-loading")).toHaveCount(0);
   await expect(page.locator("#featured-game")).toBeHidden();
   await expect(page.locator("#highlights-empty")).toContainText("今天没有 NBA 比赛");
   expect(requestedDate).toBe(today);
@@ -68,7 +68,20 @@ test("shows recent five games and supports a custom history range", async ({ pag
   await expect(page.locator("#highlights-title")).toContainText("2026/06/06");
 });
 
-test("announces a visible loading state while fetching history", async ({ page }) => {
+test("a fast cached history response does not flash loading", async ({ page }) => {
+  await page.route("**/api/v1/highlights/recent**", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await route.continue();
+  });
+  await page.goto("/");
+  await page.locator('[data-highlight-mode="history"]').click();
+  await page.waitForTimeout(100);
+  await expect(page.locator("#history-status")).not.toContainText("正在拉取");
+  await expect(page.locator("#highlights-empty.is-loading")).toHaveCount(0);
+  await expect(page.locator("#game-list .game-list-card")).toHaveCount(5);
+});
+
+test("announces one visible loading state while fetching slow history", async ({ page }) => {
   await page.route("**/api/v1/highlights/recent**", async (route) => {
     await new Promise((resolve) => setTimeout(resolve, 300));
     await route.continue();
@@ -76,7 +89,7 @@ test("announces a visible loading state while fetching history", async ({ page }
   await page.goto("/");
   await page.locator('[data-highlight-mode="history"]').click();
   await expect(page.locator("#history-status")).toContainText("正在拉取");
-  await expect(page.locator("#highlights-empty.is-loading")).toBeVisible();
+  await expect(page.locator("#highlights-empty.is-loading")).toHaveCount(0);
   await expect(page.locator("#game-list .game-list-card")).toHaveCount(5);
 });
 

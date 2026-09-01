@@ -1,10 +1,10 @@
 # NBA Chat Agent — High-Level Design (HLD)
 
 **Feature**: [001-nba-chat-agent](spec.md)
-**Status**: 官方 Hermes Agent 已实现并完成公网 live 验收
-**Date**: 2026-08-30
+**Status**: 官方 Hermes Agent、逻辑会话连续性与受控工具核验已实现
+**Date**: 2026-09-01
 **Audience**: 面试评审、实现人员和部署维护人员
-**Revision**: v0.3 — 正式 Hermes Agent、受控 NBA 工具循环与双通道路由
+**Revision**: v0.4 — 正式 Hermes Agent、受控 NBA 工具循环与逻辑会话连续性
 
 ## 1. Design goals
 
@@ -203,7 +203,20 @@ SafetyGuard 和会话加载后、规则解析之前进入 Hermes。问候可零�
 显式关闭隐藏思考，并用 `LLM_TIMEOUT_SECONDS` 约束每次模型调用；这不会放宽工具、事实或
 输出守卫边界。若更换模型后确需增加推理深度，必须先重跑 live 时延、超时和事实回归。
 
-### 5.1.1 受控 DuckDuckGo 搜索
+#### 5.1.1 Logical session continuity
+
+应用会话是唯一的连续性所有者。浏览器在 `sessionStorage` 保存一个应用 `session_id`，页面
+刷新仍复用该 ID；只有用户点击“新对话”才生成新 ID、清空消息和活动比赛。服务端将应用 ID
+单向散列为稳定的 `opaque_session_id` 交给 Agent，并在每轮另行生成随机 `task_id`：前者只
+划分逻辑对话边界，后者只服务本轮工具 bridge、截止时间、取消和去重。
+
+Agent 原生磁盘 memory、session database、context files 和 trajectory 全部关闭。应用从
+`ConversationContext` 显式投影最近 4 个完整用户/助手回合（最多 8 条、12 KiB），并过滤
+控制字符和危险文本。历史只帮助理解“那场”“最后那个球”等指代，不进入事实证据链；每个
+包含赛程、比分、统计、历史、新闻、战术或 PBP 的新轮次仍必须调用获准 NBA 工具重新核验。
+新应用会话不会收到旧历史或旧活动比赛。
+
+### 5.1.2 受控 DuckDuckGo 搜索
 
 DuckDuckGo 只作为新闻、背景和长尾问题的候选检索源，不作为 NBA 比分、排名、统计或 PBP
 的唯一事实来源。`WebSearchGateway` 固定 HTTPS 端点和查询策略，限制结果数、响应大小、
@@ -213,8 +226,9 @@ DuckDuckGo 只作为新闻、背景和长尾问题的候选检索源，不作为
 
 面试演示的 `embedded_agent` 在 API 进程内加载官方 Hermes 包，模型 egress 固定为
 SiliconFlow OpenAI-compatible endpoint，默认模型为 `deepseek-ai/DeepSeek-V4-Flash`。
-Hermes 只看到清理后的问题、当前北京时间、泛化会话上下文、NBA 工具 schema 和清洗后的
-工具观察；不携带证据/会话 ID、Provider 原文、URL 或凭据。`sidecar` 是后续生产隔离形态，
+Hermes 只看到清理后的问题、当前北京时间、泛化会话上下文、稳定的单向散列会话 ID、
+有界对话历史、NBA 工具 schema 和清洗后的工具观察；不携带原始会话 ID、证据、Provider
+原文、URL 或凭据。`sidecar` 是后续生产隔离形态，
 当前仓库不得把进程内嵌入描述为已完成的生产隔离。
 
 生产环境的 Hermes 只允许 `SIDECAR` 模式：独立非 root UID、只读 rootfs、drop capabilities、
@@ -538,7 +552,7 @@ P50/P90/P95、超时/错误率、SSE 断开率、准入拒绝率和 fallback 率
 
 | 需求 | HLD 组件/策略 | LLD/测试落点 |
 |---|---|---|
-| FR-001–007 | Web UI、Chat API、Answer Policy | `contracts/http-api.md`、UI/E2E |
+| FR-001–007 | Web UI、Chat API、Answer Policy、稳定逻辑会话与新会话隔离 | `contracts/http-api.md`、Agent runtime contract、UI/E2E、多轮集成测试 |
 | FR-008–012 | Intent/Time Parser、Season Clock、Entity Resolver | `data-model.md`、解析单测 |
 | FR-013–018 | Provider Gateway、Normalizer、Verifier、Derivation | `contracts/provider-adapter.md`、fixture/集成测 |
 | FR-019–021 | Pre-retrieval Safety Guard、Refusal Templates | 安全红队测试、provider call=0 断言 |
@@ -546,7 +560,7 @@ P50/P90/P95、超时/错误率、SSE 断开率、准入拒绝率和 fallback 率
 | FR-024–026 | Evaluation Runner、报告和方案文档 | `contracts/evaluation.md`、黄金题回放 |
 | FR-027 | Highlights API、最近 5 场/日期范围投影、加载反馈、文字 PBP 投影 | `contracts/http-api.md`、最近赛事/区间/空状态 UI 验收 |
 | FR-029 | Web Search Gateway、DuckDuckGo adapter、搜索证据分级与注入隔离 | `tests/contract/test_web_search.py`, `tests/integration/test_web_search.py` |
-| FR-030 | Full-intelligence RuntimeSelector、会话偏好、模型回退与状态展示 | `tests/contract/test_intelligence_mode.py`, `tests/integration/test_full_intelligence.py`, `tests/e2e/test_chat.spec.ts` |
+| FR-030–031 | Full-intelligence Agent 路由、稳定逻辑会话、每轮受控工具核验、模型回退与状态展示 | `tests/contract/test_hermes_agent_runtime.py`, `tests/integration/test_full_intelligence.py`, `tests/e2e/test_chat.spec.ts` |
 | ARCH-HERMES-001 | Official Hermes Agent boundary/capability self-test | `tests/contract/test_hermes_agent_runtime.py`, `tests/integration/test_agent_safety.py` |
 | ARCH-CAPACITY-001 | Admission budget、bounded queue、backpressure | `CAP-ADMISSION-001`, `E2E-SSE-001` |
 | ARCH-FAILURE-001 | Failure/degradation matrix and cancellation | `CHAOS-UPSTREAM-001`, `INT-CANCEL-001` |

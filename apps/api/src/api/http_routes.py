@@ -76,6 +76,17 @@ def _wire(result: ChatResult) -> ChatResponse | ErrorResponse:
         )
 
 
+def _highlights_cache_state(request: Request) -> dict[str, str | int]:
+    settings = request.app.state.settings
+    if not bool(getattr(settings, "highlights_cache_enabled", False)):
+        return {"status": "disabled", "entries": 0}
+    cache = getattr(request.app.state, "highlights_cache", None)
+    snapshot = getattr(cache, "health_snapshot", None)
+    if callable(snapshot):
+        return snapshot()
+    return {"status": "degraded", "entries": 0}
+
+
 @router.get("/healthz")
 async def healthz(request: Request):
     settings = request.app.state.settings
@@ -106,6 +117,7 @@ async def healthz(request: Request):
     search_status = (
         "enabled" if bool(getattr(settings, "ddg_search_enabled", False)) else "disabled"
     )
+    highlights_cache_state = _highlights_cache_state(request)
     dependency_values = (session_status, cache_status, hermes_status, auth_status)
     status = "degraded" if "degraded" in dependency_values else "ok"
     return {
@@ -122,6 +134,7 @@ async def healthz(request: Request):
             "hermes": hermes_status,
             "auth": auth_status,
             "web_search": search_status,
+            "highlights_cache": highlights_cache_state,
         },
     }
 
@@ -160,6 +173,7 @@ async def readyz(request: Request):
     search_status = (
         "enabled" if bool(getattr(settings, "ddg_search_enabled", False)) else "disabled"
     )
+    highlights_cache_state = _highlights_cache_state(request)
     # When a live composer is explicitly enabled, its local capability/key
     # check is part of readiness.  We do not perform a paid remote probe; a
     # missing key or malformed adapter simply keeps the instance out of the
@@ -184,6 +198,7 @@ async def readyz(request: Request):
             "hermes": hermes_status,
             "auth": auth_status,
             "web_search": search_status,
+            "highlights_cache": highlights_cache_state,
         },
     }
     return JSONResponse(status_code=200 if status == "ok" else 503, content=payload)

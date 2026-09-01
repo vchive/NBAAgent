@@ -159,6 +159,7 @@
     historyRangeFrom: "",
     historyRangeTo: "",
     historyLoading: false,
+    historyLoadingTimer: null,
     activeGame: null,
     activePbp: PBP,
     highlightGames: [],
@@ -432,11 +433,26 @@
     if (el.historyTo) el.historyTo.value = end;
   }
 
-  function renderHighlightsLoading(message) {
-    state.historyLoading = true;
+  function cancelHighlightsLoading() {
+    window.clearTimeout(state.historyLoadingTimer);
+    state.historyLoadingTimer = null;
+    state.historyLoading = false;
     setHistoryControls(state.highlightMode, state.historyView);
-    setHistoryStatus(message, true, "loading");
-    clearHighlightProjection(message, { loading: true });
+    if (el.historyStatus?.dataset.state === "loading") setHistoryStatus();
+  }
+
+  function renderHighlightsLoading(message, requestNumber) {
+    // A persistent-cache hit normally returns before this threshold. Keep the
+    // current cards visible during that short window and announce only one
+    // loading state when the request is genuinely perceptible.
+    cancelHighlightsLoading();
+    state.historyLoadingTimer = window.setTimeout(() => {
+      state.historyLoadingTimer = null;
+      if (requestNumber !== state.highlightRequest) return;
+      state.historyLoading = true;
+      setHistoryControls(state.highlightMode, state.historyView);
+      setHistoryStatus(message, true, "loading");
+    }, 250);
   }
 
   function nearBottom() {
@@ -1972,6 +1988,15 @@
     state.contextRequest = null;
     state.retryCount = 0;
     state.intelligenceMode = "hybrid";
+    // A new chat is also a new game-context boundary. Keep the reusable
+    // highlights list visible, but remove its selected card so the next
+    // request cannot silently seed the fresh server session with the prior
+    // conversation's matchup.
+    state.detailRequest += 1;
+    state.detailLoadingGameId = null;
+    state.activeGame = null;
+    state.activePbp = null;
+    state.selectedGameId = null;
     if (el.intelligenceMode) el.intelligenceMode.checked = false;
     try {
       window.sessionStorage.setItem(STORAGE_KEY, state.sessionId);
@@ -1980,6 +2005,10 @@
     }
     $$(".dynamic-message").forEach((message) => message.remove());
     if (el.recommendations) el.recommendations.hidden = true;
+    if (el.featuredGame) el.featuredGame.hidden = true;
+    updateGameListSelection();
+    resetHud();
+    renderPbp("Q4");
     showToast("已开始新对话，会话上下文已隔离");
     el.input.value = "";
     updateCharCount();
@@ -2433,12 +2462,12 @@
   }
 
   function renderHighlightProjection(games, mode, dateValue, options = {}) {
+    cancelHighlightsLoading();
     const values = normalizeHighlightGames(games);
     const previousId = state.selectedGameId;
     const game = values.find((item) => String(item.game_id) === String(previousId || "")) || values[0];
     state.highlightGames = values;
     state.highlightMode = mode;
-    state.historyLoading = false;
     if (mode === "history") {
       state.historyView = options.historyView || state.historyView || "recent";
       if (options.rangeFrom) state.historyRangeFrom = options.rangeFrom;
@@ -2544,7 +2573,7 @@
     state.highlightMode = "history";
     state.historyView = "recent";
     setHistoryControls("history", "recent");
-    renderHighlightsLoading("正在拉取最近 5 场比赛…");
+    renderHighlightsLoading("正在拉取最近 5 场比赛…", requestNumber);
     if (state.apiAvailable && window.CourtsideApi?.highlightsRecent) {
       try {
         const payload = await window.CourtsideApi.highlightsRecent(5, "Asia/Shanghai");
@@ -2620,7 +2649,10 @@
     setHistoryControls("history", "range");
     const requestNumber = ++state.highlightRequest;
     state.highlightMode = "history";
-    renderHighlightsLoading(`正在拉取 ${formatShortDate(fromDate)}—${formatShortDate(toDate)} 的比赛…`);
+    renderHighlightsLoading(
+      `正在拉取 ${formatShortDate(fromDate)}—${formatShortDate(toDate)} 的比赛…`,
+      requestNumber,
+    );
     if (state.apiAvailable && window.CourtsideApi?.highlightsRange) {
       try {
         const payload = await window.CourtsideApi.highlightsRange(fromDate, toDate, "Asia/Shanghai");
@@ -2682,7 +2714,10 @@
       state.historyDate = selectedDate;
     }
     if (state.apiAvailable && window.CourtsideApi) {
-      renderHighlightsLoading(mode === "today" ? "正在拉取今日赛事…" : "正在拉取比赛…");
+      renderHighlightsLoading(
+        mode === "today" ? "正在拉取今日赛事…" : "正在拉取比赛…",
+        requestNumber,
+      );
       try {
         // In live/hybrid deployments send the browser's Beijing date
         // explicitly. Fixture mode intentionally keeps the unscoped request
@@ -2802,8 +2837,8 @@
     loadHighlights("history", value);
   }
 
-  function clearHighlightProjection(message = "这一天暂无可用比赛记录。", options = {}) {
-    state.historyLoading = Boolean(options.loading);
+  function clearHighlightProjection(message = "这一天暂无可用比赛记录。") {
+    cancelHighlightsLoading();
     state.activeGame = null;
     state.activePbp = null;
     state.highlightGames = [];
@@ -2813,7 +2848,7 @@
     if (el.highlightsEmpty) {
       el.highlightsEmpty.textContent = message;
       el.highlightsEmpty.hidden = false;
-      el.highlightsEmpty.classList.toggle("is-loading", Boolean(options.loading));
+      el.highlightsEmpty.classList.remove("is-loading");
     }
     resetHud();
     renderPbp("Q4");
@@ -3260,7 +3295,10 @@
       // failed API probe, never as a transient “today” answer.
       state.highlightMode = "today";
       setWelcomeLoading(today);
-      renderHighlightsLoading(`正在拉取今日赛事（${formatShortDate(today)}）…`);
+      renderHighlightsLoading(
+        `正在拉取今日赛事（${formatShortDate(today)}）…`,
+        state.highlightRequest,
+      );
     } else {
       renderHighlightProjection(fixtureGamesForDate("2026-06-12"), "today", "2026-06-12");
       setWelcomeForOfflineFixture();

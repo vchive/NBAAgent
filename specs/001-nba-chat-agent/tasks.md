@@ -338,3 +338,42 @@ zero Agent/tool calls, and timeout/repeated-tool cases fall back safely.
   ranking intent (for example “得分第三”), add bounded final-minute evidence to tactical
   answers, and state missing terminal shooter/location fields without guessing; cover parser,
   multi-turn, full-intelligence, HTTP, and browser regression gates.
+
+## Phase 22: Evaluation baseline convergence
+
+- [X] T093 [US4] Align the multi-turn golden evaluation's terminal-shot expectation with the
+  explicit `PLAY_BY_PLAY` intent, and add a regression that fails if a fresh event question is
+  scored as a generic follow-up again (partial).
+
+## Phase 23: Hybrid historical standings convergence
+
+- [X] T094 [US1] Preserve verified historical standings in hybrid public-data mode when the
+  live archive has no row for the requested season: make the bounded snapshot fallback an
+  explicit `get_standings` policy, retain `partial` evidence state, and cover the East-rank
+  regression per US1/AC3 and FR-014 (partial).
+
+## Phase 24: Historical snapshot fallback convergence
+
+- [X] T095 [US1] Apply an explicit, cache-safe bounded snapshot fallback to historical
+  championship/franchise-record lookups, explicit fixture game snapshots, and season-scoped
+  series queries when the live archive is empty; retain `partial` evidence and do not change
+  current-day schedule empty semantics per US1/AC3 and FR-014 (partial).
+
+## Phase 25: Selected-game full-intelligence routing convergence
+
+- [X] T096 [US6/US7] Allow authenticated full-intelligence requests to enter the bounded Agent
+  loop when a highlights game is selected, preserve the server-resolved game as the immutable
+  shorthand/tool scope without overriding an explicitly named different game, retain deterministic
+  fallback and output guards, and add selected-game objective/tactical routing regressions in
+  `apps/api/src/application/chat_use_case.py`,
+  `apps/api/src/infrastructure/hermes_agent_runtime.py`, and
+  `tests/integration/test_full_intelligence.py` per FR-030/FR-031/SC-014 (contradicts).
+
+## Phase 26: Full-intelligence logical session continuity
+
+- [X] T097 [US4/US7] Map each application chat session to one stable opaque Hermes logical
+  session, pass a bounded and sanitised user/assistant conversation history on every full-mode
+  turn while retaining per-request tool task IDs, clear continuity through a new application
+  session, and keep prior facts non-authoritative so every factual follow-up still uses verified
+  NBA tools; update the official runtime contract, multi-turn integration/evaluation coverage,
+  HLD/LLD and reviewer documentation per FR-002/FR-030/FR-031/SC-003/SC-014 (partial).

@@ -10,6 +10,8 @@ services:
       # Quote the ISO date: Compose's YAML parser otherwise converts it to a
       # Go time value ("2026-06-12 00:00:00 +0000 UTC") before injection.
       HIGHLIGHTS_DEMO_DATE: "2026-06-12"
+      HIGHLIGHTS_CACHE_ENABLED: "true"
+      HIGHLIGHTS_CACHE_DB: /app/data/highlights.sqlite3
       LLM_MODE: mock
       RUNTIME_PROFILE: template
       HERMES_LITE_MODE: off
@@ -19,6 +21,8 @@ services:
     read_only: true
     tmpfs:
       - /tmp:size=16m,noexec,nosuid
+    volumes:
+      - nbaagent-data:/app/data
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -35,3 +39,6 @@ services:
       timeout: 3s
       start_period: 8s
       retries: 3
+
+volumes:
+  nbaagent-data:
