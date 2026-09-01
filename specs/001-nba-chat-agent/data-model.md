@@ -430,6 +430,19 @@ AgentToolObservation
   as_of_beijing: string?
   data_origin: PUBLIC | DEMO_SNAPSHOT | MIXED | NONE
 
+HighlightGameProjection
+  game_id: string
+  start_utc: Instant
+  home_name/away_name: string
+  home_score/away_score: int?
+  status: SCHEDULED|LIVE|FINAL|POSTPONED|UNKNOWN
+  venue_name/city/state/country: string?
+  data_origin: PUBLIC | DEMO_SNAPSHOT | NONE
+
+HighlightsEnvelope
+  games: HighlightGameProjection[]
+  data_origin: PUBLIC | DEMO_SNAPSHOT | MIXED | NONE  # aggregate only
+
 EvaluationTurn
   turn_index: int (1-based, contiguous within the case)
   prompt: string (1..2000 Unicode characters)
@@ -488,6 +501,12 @@ NBA 工具核验。
 `source_snapshot` 只标识版本化 fixture，不进入用户响应。公开响应只投影泛化的
 `data_origin=demo_snapshot`/“演示快照”，不暴露 fixture 版本、Provider 名或内部来源标识；
 演示快照不携带伪装成当前公开核验时间的 `as_of_beijing`。
+
+`HighlightsEnvelope.data_origin=mixed` 不能下沉覆盖单场。每个 `HighlightGameProjection` 的
+来源由产生该比赛记录的检索结果确定，并与服务器 `game_id → Game` registry 的并行
+`game_id → data_origin` registry 一起更新。SQLite projection schema v4 持久化该字段并按实际
+返回行推导 envelope；v3
+记录强制 miss 后重新拉取，防止混合列表在重启后把所有卡误标为同一来源。
 
 ## 5. Relationships and lifecycle
 

@@ -83,6 +83,8 @@ class ProviderGateway:
         ttl_seconds: int | None = None,
         budget: RequestBudget,
         fallback_on_empty: bool = False,
+        allow_fallback: bool = True,
+        force_refresh: bool = False,
         **kwargs: Any,
     ) -> ProviderResult[Any]:
         # Admission/deadline checks happen before *any* cache read.  This keeps
@@ -111,7 +113,7 @@ class ProviderGateway:
         # that explicitly permits the bounded snapshot fallback.
         cache_kwargs = {**kwargs, "_fallback_on_empty": fallback_on_empty}
         key = self._key(operation, args, cache_kwargs)
-        if self.cache is not None:
+        if self.cache is not None and not force_refresh:
             self.cache_read_count += 1
             cached = self.cache.get(key)
             self.cache_hit_count = self.cache.hit_count
@@ -241,7 +243,7 @@ class ProviderGateway:
         # demo snapshot.
         empty_result = last.error is None and (last.data is None or last.data == [])
         should_fallback = last.error is not None or (fallback_on_empty and empty_result)
-        if should_fallback and self.fallback is not None:
+        if allow_fallback and should_fallback and self.fallback is not None:
             fallback_method = getattr(self.fallback, operation, None)
             if fallback_method is not None and budget.remaining_ms() > 0:
                 try:
@@ -287,6 +289,8 @@ class ProviderGateway:
         budget: RequestBudget,
         *,
         fallback_on_empty: bool = False,
+        allow_fallback: bool = True,
+        force_refresh: bool = False,
     ) -> ProviderResult[Any]:
         return await self._invoke(
             "search_games",
@@ -294,6 +298,8 @@ class ProviderGateway:
             budget=budget,
             ttl_seconds=45,
             fallback_on_empty=fallback_on_empty,
+            allow_fallback=allow_fallback,
+            force_refresh=force_refresh,
         )
 
     async def get_game_summary(
@@ -302,6 +308,8 @@ class ProviderGateway:
         budget: RequestBudget,
         *,
         fallback_on_empty: bool = False,
+        allow_fallback: bool = True,
+        force_refresh: bool = False,
     ) -> ProviderResult[Any]:
         """Read one explicitly selected game.
 
@@ -317,6 +325,8 @@ class ProviderGateway:
             budget=budget,
             ttl_seconds=300,
             fallback_on_empty=fallback_on_empty,
+            allow_fallback=allow_fallback,
+            force_refresh=force_refresh,
         )
 
     async def get_play_by_play(self, game_id: str, budget: RequestBudget) -> ProviderResult[Any]:

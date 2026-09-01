@@ -351,6 +351,7 @@ class OutputGuard:
         r"(?:\bespn\b|nba[_ -]?api|sportsradar|basketball[- ]reference)",
         r"(?:api[_ -]?key|authorization|bearer\s+[a-z0-9._-]+|sk-[a-z0-9]{8,})",
         r"(?:system\s+prompt|developer\s+message|ignore\s+(?:all\s+)?previous\s+instructions|tool\s*call|filesystem|shell\s+command)",
+        r"(?:nba_query|nba_schedule|nba_news|这三个工具|三个工具|工具返回|调用(?:了)?(?:这个|这些|受控)?工具|无法实时联网)",
     )
     _HTML_LEAK_PATTERNS = _compile(
         r"<\s*/?\s*(?:script|iframe|object|embed|style|form|img|svg)\b",
@@ -365,6 +366,10 @@ class OutputGuard:
     _CLOCK_SPAN_RE = re.compile(r"(?<![A-Za-z0-9_])\d{1,2}:\d{2}(?![A-Za-z0-9_])")
     _DATE_TOKEN_RE = re.compile(
         r"^(?:19\d{2}|20\d{2}|21\d{2})(?:[-/.](?:0?[1-9]|1[0-2])(?:[-/.](?:0?[1-9]|[12]\d|3[01]))?)?$"
+    )
+    _FACTUAL_PROPER_NAME_RE = re.compile(
+        r"\b[A-Z][A-Za-z'’-]{1,24}(?:[ .-]+[A-Z][A-Za-z'’-]{1,24}){1,4}\b"
+        r"|[\u4e00-\u9fff]{1,8}·[\u4e00-\u9fff·-]{1,20}"
     )
 
     @staticmethod
@@ -706,6 +711,25 @@ class OutputGuard:
             raise OutputGuardError(
                 "Agent 回答包含观察中不存在的数字",
                 reasons=("unobserved_number", *unknown[:8]),
+            )
+        observation_text = "\n".join(cls._walk_text(usable))
+        unsupported_names = sorted(
+            {
+                name.strip()
+                for name in cls._FACTUAL_PROPER_NAME_RE.findall(all_text)
+                if name.strip()
+                and name.casefold() not in observation_text.casefold()
+                and name.casefold()
+                not in {
+                    "national basketball association",
+                    "most valuable player",
+                }
+            }
+        )
+        if unsupported_names:
+            raise OutputGuardError(
+                "Agent 回答包含观察中不存在的事实专名",
+                reasons=("unsupported_proper_name", *unsupported_names[:8]),
             )
         return draft
 

@@ -129,3 +129,20 @@ Resolver 补齐会话能力，通过 PBP/统计解析补齐“刚才那个球”
 - HTTP/SSE 共用同一用例，浏览器 E2E 验证刷新和新对话边界。
 
 最终的质量门、部署版本和公网验收结果记录在项目测试报告与交付清单中。
+
+## 7. 关系级事实、公开复核与来源审计（2026-09-01）
+
+本轮继续检查了 Agent、Provider Gateway、Highlights、SQLite 与 Web 的端到端边界，发现并
+关闭三类相邻漏洞：
+
+1. 原输出守卫只检查“数字是否出现过”，无法阻止模型把 108–104 的胜者说反，或把罚球/
+   终场标记说成投篮。现在客观、元数据和 PBP 回答由服务器 observation 直接 grounding；
+   分析题仍可由 Agent 组织，但观察外专名与内部工具/联网能力措辞会被拒绝。
+2. 原选中演示 ID 会被直接传给公开 summary，失败后进入 fixture fallback。“联网实时查验”
+   现在使用专用检索策略：跳过 TTL、禁止 fallback、按北京时间日期+主客别名匹配唯一公开
+   event ID，再读取公开详情；无唯一匹配只说明不能升级核验。
+3. 原 mixed recent 只在 envelope 保存来源，浏览器会把 `mixed` 套到每张卡。现在 API 每场
+   保存 `public/demo_snapshot/none`，服务器 origin registry、SQLite v4 和 Web 均按单场恢复。
+
+新增对抗回归覆盖错误胜者、罚球改写、终场标记、观察外专名、内部工具措辞、公开匹配/不匹配、
+强制刷新零 fallback、混合列表和缓存重启来源恢复。该修复不扩大 Agent、网络或数据权限。

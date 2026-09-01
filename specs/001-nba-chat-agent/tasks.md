@@ -422,3 +422,28 @@ zero Agent/tool calls, and timeout/repeated-tool cases fall back safely.
   winner premise when a team and selected game are present, explicitly correct a losing-team
   premise before analysis, and add parser/integration regressions per US2/AC3, FR-017 and FR-018
   (partial).
+
+## Phase 30: Public re-verification and semantic grounding convergence
+
+- [X] T108 [US1/US2/US7] CRITICAL: Make the server-owned deterministic NBA observation
+  authoritative for objective, metadata and play-by-play Agent answers; reject or replace Agent
+  paraphrases that invert winner/team-score relations, turn a free throw or terminal marker into a
+  field-goal claim, introduce unsupported factual proper names, or expose internal tool/runtime
+  capability wording, with adversarial unit/integration regressions per Constitution II/IV,
+  FR-007/FR-014/FR-016/FR-017/FR-031/FR-034 (contradicts).
+- [X] T109 [US1/US7] Add explicit public re-verification semantics for prompts such as “联网实时查验”:
+  bypass stale cache and fixture fallback, resolve a selected snapshot by exact Beijing date and
+  matchup against the primary public scoreboard before using the provider event id, return only a
+  public result when uniquely matched, and otherwise state that no public match was found without
+  claiming the service lacks network access; add gateway/provider/application tests per
+  FR-013/FR-014/FR-022/FR-030/FR-033 (partial).
+- [X] T110 [US6/US7] Preserve trusted per-game `public` versus `demo_snapshot` provenance through
+  highlights list/detail projections, the server-owned selected-game registry, SQLite schema
+  rehydration and the Web UI so a mixed recent-five response never labels every card with one
+  aggregate origin; add cache schema migration and contract/E2E regressions per Constitution II,
+  US6/AC1-AC3, FR-007/FR-027 and SC-010/SC-011 (partial).
+- [X] T111 [US1/US2/US6/US7] Specify the public re-verification and semantic-grounding acceptance
+  rules in spec/HLD/LLD/data model/provider and Agent contracts, extend the golden/live regression
+  matrix, run every quality/security/browser/evaluation gate, redeploy the authenticated live
+  profile, verify both matched-public and unmatched-snapshot behavior, update the independent test
+  report, and push the completed branch per FR-024/FR-025/FR-026 and Constitution I/IV/V (partial).

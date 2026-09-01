@@ -1,10 +1,10 @@
 # NBA Chat Agent — High-Level Design (HLD)
 
 **Feature**: [001-nba-chat-agent](spec.md)
-**Status**: 官方 Agent、逻辑会话连续性、会话元问题与受控工具核验已实现
+**Status**: 官方 Agent、语义 grounding、公开复核、逐场来源与会话能力已实现
 **Date**: 2026-09-01
 **Audience**: 面试评审、实现人员和部署维护人员
-**Revision**: v0.5 — 会话元问题确定性路由与准确轮次
+**Revision**: v0.6 — 语义 grounding、公开复核与逐场来源
 
 ## 1. Design goals
 
@@ -203,6 +203,25 @@ SafetyGuard 和会话加载后、规则解析之前进入 Hermes。问候可零�
 服务端还会比较问题类型与成功工具观察；若模型只返回与问题无关的赛程/新闻观察，则拒绝该
 结果并回退到对应的确定性核验流程，避免把工具成功误判为回答相关。
 
+客观、比赛元数据和 PBP 回答增加 `Semantic Grounding`：Agent 仍决定理解与工具选择，但
+最终用户事实文本直接采用服务器生成的 observation。这样即使模型复用了所有正确数字，也
+不能交换球队—比分—胜者关系，不能把罚球或终场标记改写成运动战投篮。战术/原因类回答仍
+可由 Agent 组织分析，但输出守卫拒绝内部工具名称、工具数量、“无法联网”等能力措辞和观察外
+事实；失败后使用同一份核验事实安全回退。
+
+当用户明确要求联网重新核验选中的比赛时，NBA 工具进入 `Public Re-verification` 子流程：
+
+```text
+selected server game → Beijing local date + exact matchup
+  → primary scoreboard (force refresh, no cache read, no fixture fallback)
+  → exactly one public event ID
+  → primary summary/PBP (force refresh, no fixture fallback)
+  → deterministic observation
+```
+
+零匹配、多匹配、主源错误或详情缺失都不会回落演示快照，也不会被描述为服务没有联网能力；
+应用只说明本次未找到可升级的公开匹配。
+
 面试演示的三工具规划默认使用 `AGENT_REASONING_EFFORT=none`，同时在 SiliconFlow 请求中
 显式关闭隐藏思考，并用 `LLM_TIMEOUT_SECONDS` 约束每次模型调用；这不会放宽工具、事实或
 输出守卫边界。若更换模型后确需增加推理深度，必须先重跑 live 时延、超时和事实回归。
@@ -385,6 +404,9 @@ SSE 断开会传播取消信号，已持久化的会话事实不回滚，也不�
   高风险 PBP/纠偏/冠军事实不得无标注混用不同来源；
 - 公开响应仅投影 `public/demo_snapshot/mixed/none`；演示快照不使用当前公开数据时间戳，
   Web UI 明确标记为固定演示数据；
+- 列表级来源可为 `mixed`，但每个 `HighlightGame` 必须单独保留 `public/demo_snapshot/none`；
+  服务端选卡 registry 与 SQLite v4 投影一并保存该来源，缓存恢复和 Web 渲染不得用 aggregate
+  `mixed` 覆盖所有卡片；
 - 遵守服务条款、robots 和访问频率，禁止绕过访问控制。
 
 缓存按新鲜度分层：实时赛程/比分约 30–60 秒、box score 约 5 分钟、历史资料约 24 小时；

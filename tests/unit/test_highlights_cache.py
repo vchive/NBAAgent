@@ -69,7 +69,7 @@ def _detail(*, plays: int = 2, home_score: int = 108) -> HighlightDetailResponse
 
 def test_stable_cache_key_is_bounded_and_rejects_unvalidated_parts() -> None:
     assert stable_cache_key("recent", "Asia/Shanghai", "2026-09-01", 5) == (
-        "recent:v2:Asia/Shanghai:2026-09-01:5"
+        "recent:v4:Asia/Shanghai:2026-09-01:5"
     )
     try:
         stable_cache_key("recent", "bad\nvalue")
@@ -214,9 +214,9 @@ def test_unwritable_database_fails_open(tmp_path) -> None:
     # Parent directories are deliberately not auto-created by the storage
     # object; application startup owns the configured mount point.
     assert cache.available is False
-    assert cache.get("recent:v2:x", HighlightsRangeResponse, now=NOW) is None
+    assert cache.get("recent:v4:x", HighlightsRangeResponse, now=NOW) is None
     assert not cache.set(
-        "recent:v2:x", "recent", _recent(), ttl_seconds=60, now=NOW
+        "recent:v4:x", "recent", _recent(), ttl_seconds=60, now=NOW
     )
 
 
@@ -227,7 +227,7 @@ def test_previous_projection_schema_key_is_never_rehydrated(tmp_path) -> None:
     assert cache.set(current_key, "recent", _recent(), ttl_seconds=60, now=NOW)
     cache.close()
 
-    previous_key = current_key.replace("recent:v2:", "recent:v1:", 1)
+    previous_key = current_key.replace("recent:v4:", "recent:v3:", 1)
     with sqlite3.connect(path) as connection:
         connection.execute(
             "UPDATE highlights_cache SET cache_key = ?, schema_version = 1 WHERE cache_key = ?",

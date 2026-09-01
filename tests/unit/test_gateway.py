@@ -72,6 +72,48 @@ async def test_gateway_does_not_replace_authoritative_empty_result() -> None:
 
 
 @pytest.mark.asyncio
+async def test_explicit_public_refresh_bypasses_cache_and_disables_fallback() -> None:
+    """A user-requested public recheck must touch only the primary source."""
+
+    primary = _Provider(value="first-public")
+    fallback = _Provider(value="fixture")
+    gateway = ProviderGateway(
+        primary,
+        fallback_provider=fallback,
+        cache=InMemoryTTLCache(),
+        max_retries=0,
+    )
+    filters = GameFilters()
+
+    first = await gateway.search_games(
+        filters,
+        budget=RequestBudget(datetime.now(UTC) + timedelta(seconds=2)),
+    )
+    primary.value = "fresh-public"
+    refreshed = await gateway.search_games(
+        filters,
+        budget=RequestBudget(datetime.now(UTC) + timedelta(seconds=2)),
+        force_refresh=True,
+        allow_fallback=False,
+    )
+
+    assert first.data == ["first-public"]
+    assert refreshed.data == ["fresh-public"]
+    assert primary.calls == 2
+    assert fallback.calls == 0
+
+    primary.error = True
+    failed = await gateway.search_games(
+        GameFilters(season=None),
+        budget=RequestBudget(datetime.now(UTC) + timedelta(seconds=2)),
+        force_refresh=True,
+        allow_fallback=False,
+    )
+    assert failed.error is not None
+    assert fallback.calls == 0
+
+
+@pytest.mark.asyncio
 async def test_history_empty_cache_does_not_disable_an_explicit_snapshot_fallback() -> None:
     """Fallback policy is part of the cache key, even though it is not a provider argument."""
 

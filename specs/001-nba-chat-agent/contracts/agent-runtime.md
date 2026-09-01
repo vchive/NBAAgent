@@ -83,6 +83,12 @@ Input:
 pipeline in internal-tool mode. It may perform typed game, summary, stats, history or PBP provider
 operations, then returns a sanitized `AgentToolObservation`.
 
+When the original user wording explicitly requests public/online re-verification and a server-owned
+selected game exists, the bridge overrides ordinary tool arguments with the public re-verification
+policy. It force-refreshes only the primary scoreboard, resolves the internal selection to one exact
+date+matchup public event ID, and disables fixture fallback for the subsequent summary. The Agent
+cannot opt out of or broaden that policy.
+
 ### `nba_schedule`
 
 Input:
@@ -118,7 +124,8 @@ All tool outputs have this public-to-agent shape:
   "answer_markdown":"……",
   "blocks":[],
   "evidence_state":"verified|partial|none",
-  "as_of_beijing":"2026-08-30 18:04"
+  "as_of_beijing":"2026-08-30 18:04",
+  "data_origin":"public|demo_snapshot|mixed|none"
 }
 ```
 
@@ -150,6 +157,13 @@ The final guard rejects control text, prompt/tool instructions, internal/provide
 unobserved numeric claims and factual entities unsupported by observations. Server clock values and
 numbers present in the user's question are separately tagged; they do not authorize unrelated NBA
 facts.
+
+Objective NBA, metadata and PBP output is grounded before the final guard: the final factual markdown
+is the server-owned deterministic observation, not the Agent paraphrase. This prevents relation-level
+hallucinations that numeric membership alone cannot detect (winner/team-score inversion, free throw
+described as a field goal, or a terminal marker described as a shot). Analytical wording may remain
+Agent-authored, but must not mention tool names/counts, claim inability to connect, or introduce
+unsupported facts. Public-reverification observations are always authoritative, including no-match.
 
 Accepted output uses:
 

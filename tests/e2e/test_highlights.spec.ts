@@ -68,6 +68,69 @@ test("shows recent five games and supports a custom history range", async ({ pag
   await expect(page.locator("#highlights-title")).toContainText("2026/06/06");
 });
 
+test("keeps public and snapshot provenance separate in a mixed recent list", async ({ page }) => {
+  await page.route("**/healthz", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        status: "ok",
+        version: "v1",
+        mode: "hybrid",
+        dependencies: { session_store: "ok", cache: "ok", hermes: "ok" },
+        capabilities: { full_intelligence: true },
+      }),
+    });
+  });
+  await page.route("**/api/v1/highlights/recent**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        timezone: "Asia/Shanghai",
+        from: "2026-06-01",
+        to: "2026-08-31",
+        games: [
+          {
+            game_id: "public-1",
+            start_utc: "2026-08-30T12:00:00Z",
+            home_name: "湖人",
+            home_abbreviation: "LAL",
+            away_name: "勇士",
+            away_abbreviation: "GSW",
+            status: "final",
+            home_score: 110,
+            away_score: 105,
+            data_origin: "public",
+          },
+          {
+            game_id: "snapshot-1",
+            start_utc: "2026-06-12T01:30:00Z",
+            home_name: "凯尔特人",
+            home_abbreviation: "BOS",
+            away_name: "雷霆",
+            away_abbreviation: "OKC",
+            status: "final",
+            home_score: 108,
+            away_score: 104,
+            data_origin: "demo_snapshot",
+          },
+        ],
+        as_of_beijing: "2026-08-31 20:00",
+        evidence_state: "partial",
+        data_origin: "mixed",
+      }),
+    });
+  });
+
+  await page.goto("/");
+  await page.locator('[data-highlight-mode="history"]').click();
+  const cards = page.locator("#game-list .game-list-card");
+  await expect(cards).toHaveCount(2);
+  await expect(cards.nth(0).locator(".game-list-card-foot")).not.toContainText("DEMO");
+  await expect(cards.nth(1).locator(".game-list-card-foot")).toContainText("DEMO");
+});
+
 test("a fast cached history response does not flash loading", async ({ page }) => {
   await page.route("**/api/v1/highlights/recent**", async (route) => {
     await new Promise((resolve) => setTimeout(resolve, 50));

@@ -22,9 +22,9 @@ from apps.api.src.api.schemas import (
 )
 
 # Version the serialized projection contract, not only the SQLite table shape.
-# v2 adds venue metadata and data-origin semantics; accepting a v1 key would
-# silently hydrate those required semantics as ``None`` from an older payload.
-CACHE_SCHEMA_VERSION = 2
+# v4 preserves origin on every game row and derives the envelope from actual
+# returned rows; accepting v3 could retain an early aggregate-only projection.
+CACHE_SCHEMA_VERSION = 4
 _MODEL_BY_KIND: dict[str, type[BaseModel]] = {
     "date": HighlightsResponse,
     "range": HighlightsRangeResponse,

@@ -101,6 +101,20 @@ series arithmetic or PBP. A search error must not replace an otherwise valid NBA
   high-risk facts become `PARTIAL/UNVERIFIED`, never an arbitrary winner.
 - Fixtures must represent success, empty, partial, timeout, 429, invalid JSON and conflicting data.
 
+Gateway retrieval-policy parameters are application-only and are never forwarded to an adapter:
+
+```text
+allow_fallback: boolean = true
+force_refresh: boolean = false
+```
+
+`force_refresh=true` bypasses the in-memory TTL read but may write a successful primary result back
+to the normal canonical key. `allow_fallback=false` forbids fixture/fallback use for both typed errors
+and empty results. An explicit public re-verification sets both `force_refresh=true` and
+`allow_fallback=false`, searches the selected game's Beijing date without an internal fixture ID,
+matches exactly one home/away alias pair, and only then calls summary/PBP with the returned public
+event ID. Zero/multiple matches or a primary error remain non-public results.
+
 ## 6. Data freshness defaults (configurable targets)
 
 | Scope | Default TTL | Use |

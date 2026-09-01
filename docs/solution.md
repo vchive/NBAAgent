@@ -113,6 +113,8 @@ Highlights API 在公开响应模型与数据源之间增加失败可退化的 S
 历史终场数据采用 stale-while-revalidate；今日、进行中比赛和未结束详情只允许短时 fresh
 命中。详情按比分、leaders 和 PBP 完整度单调升级，低完整度或终场比分冲突的刷新不会覆盖
 已有记录。Docker 具名卷使镜像重建和容器替换后仍能复用缓存；缓存不可写时保持原数据链路。
+混合 recent 响应只在 envelope 使用 `mixed`，每场卡片单独保存 `public/demo_snapshot`；
+SQLite v4 和服务端选卡 registry 都保留这一逐场来源，页面不会再把聚合来源套到全部比赛。
 
 ## 3. 一次请求如何被处理
 
@@ -127,8 +129,10 @@ Highlights API 在公开响应模型与数据源之间增加失败可退化的 S
 5. Verifier 检查证据可信度、新鲜度、实体/时间一致性和用户前提。系列赛累计、连胜和
    最后 5 秒等结果由确定性 Derivation 从真实比赛/PBP 记录计算，模型不负责算术或选球。
 6. 默认 hybrid 模式下客观题优先由确定性模板渲染；战术/复盘可在核验后使用旧单轮 composer。
-   full 模式由 Hermes 理解错别字、日期和追问，工具返回清洗后的状态/时间范围/事实块，Agent
-   再生成最终回答。shell、通用网络、文件系统、浏览器、MCP、memory、skills 和子代理全部
+   full 模式由 Hermes 理解错别字、日期和追问，工具返回清洗后的状态/时间范围/事实块。客观、
+   场馆等元数据及 PBP 的最终事实文字直接采用服务器确定性观察；Agent 可以组织战术/原因分析，
+   但不能重新组合球队—比分—胜者关系，也不能把罚球/终场标记改写为运动战投篮。shell、通用
+   网络、文件系统、浏览器、MCP、memory、skills 和子代理全部
    关闭。Output Guard 检查未观察数字、提示注入、敏感内容和内部字段泄露；Hermes 不可用、
    超时、超预算或输出不合规时回退确定性通道。SafetyGuard、Provider、Verifier、Derivation
    和 Output Guard 的事实与安全所有权不变。
@@ -139,6 +143,11 @@ Highlights API 在公开响应模型与数据源之间增加失败可退化的 S
 
    如果模型选择了与问题类型不符的工具（例如用赛程空结果回答球员数据或战术问题），服务端
    会拒绝该 Agent 结果并回退到对应的核验流程，避免“工具调用成功但答非所问”。
+
+   用户明确要求“联网实时查验”时，系统不把内部演示 ID 直接交给公开详情端点，而是按选中
+   比赛的北京时间日期和主客对阵强制刷新主 scoreboard；只有唯一匹配到公开 event ID 才继续
+   读取详情。该路径跳过旧缓存并禁用快照 fallback；未匹配只说明无法升级为公开核验，不会
+   错说服务没有联网能力。
 
    同步和 SSE 的完成 envelope 还带有 provider-neutral 的 `composition` 标记：客观题为
    `deterministic`，官方 Agent 回答被接受时为 `agent/used`，旧 composer 为 `model/used`，
@@ -183,7 +192,7 @@ Safety Guard 在任何外部检索前运行；一条消息同时包含正常篮�
 - FastAPI 同步聊天、POST SSE、健康检查、日期范围 highlights 和按需比赛详情接口；
 - 中文意图/实体/赛季解析、事实核验、系列赛与最后 5 秒 PBP 确定性推导；
 - 会话隔离、幂等重放、取消传播、TTL 缓存、重试/fallback、检索前安全短路和脱敏 telemetry；
-- SQLite 精彩回顾缓存、历史 SWR、今日 fresh-only、最多五场详情预热和完整度防倒退；
+- SQLite v4 精彩回顾缓存、逐场来源、历史 SWR、今日 fresh-only、最多五场详情预热和完整度防倒退；
 - 官方 Hermes Agent、三个任务级 NBA 工具、旧 composer（默认关闭）与确定性回退；
 - 受控 DuckDuckGo 新闻/背景搜索，以及会话级“全智能分析”开关；
 - 赛事转播风格静态 UI，支持“今日赛事 / 精彩回顾”切换；精彩回顾默认列出最近 5 场，

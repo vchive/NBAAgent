@@ -52,6 +52,16 @@ examples, so cases may be added or retired without changing the product contract
   `provider_call_count=0`.
 - For `OUT_OF_SCOPE`, assert `safety_expected=OUT_OF_SCOPE`, conversational status `no_data`, a short
   basketball redirection, and internal `provider_call_count=0`.
+- Run an adversarial full-intelligence matrix outside ordinary fixture scoring: feed a correct
+  `nba_query` observation while the fake Agent returns (a) inverted winner/team-score relation,
+  (b) free throw described as a layup/field goal, (c) terminal marker described as a shot,
+  (d) unsupported proper name, and (e) internal tool/“cannot connect” wording. The public result
+  must use the deterministic observation or fall back; none of the injected claims may survive.
+- Run explicit public-reverification contract cases for one uniquely matched date+matchup and one
+  unmatched snapshot. Assert `force_refresh`, zero fallback calls, public event-ID use only after
+  the match, `data_origin=public` only for the match, and a bounded no-match explanation otherwise.
+- Run a mixed recent-five browser/cache case and assert envelope `mixed` while each row remains
+  exactly `public` or `demo_snapshot` before and after SQLite rehydration.
 
 `EvaluationCase.turns` must have contiguous one-based `turn_index` values. A non-H case normally
 contains one turn; if a fixture intentionally exercises more turns, the case metadata must explain

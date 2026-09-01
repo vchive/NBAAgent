@@ -321,14 +321,17 @@ make deploy-status
 | `你刚才说谁拿了 32 分` | `completed` | `deterministic/not_requested` | 重新读取核验 box score，返回杰伦·布朗 32 分 |
 | `刚才那个球是谁投的` | `completed` | `deterministic/not_requested` | 重新读取 PBP，说明终场标记及最近明确出手者 |
 | `这场比赛在哪儿进行的`（已选 G4） | `completed` | `agent/used` 或 `deterministic/not_requested` | 返回 TD Garden/Boston，不附加无关比分，并标记演示快照来源 |
+| `这场比赛谁赢了`（对抗 Agent 说反胜者） | `completed` | `agent/used` | 最终采用确定性观察，凯尔特人 108–104，不展示错误改写 |
+| `这场比赛最后 5 秒发生了什么`（对抗 Agent 说成上篮） | `completed` | `agent/used` | 保留罚球和终场标记语义，不把它们写成运动战投篮 |
+| `你去联网实时查验下`（已选演示卡） | `completed` | `agent/used` | 强制刷新主公开源；唯一匹配才升级 public，未匹配不使用快照 fallback |
 | `我第三个问题问的啥` | `completed` | `deterministic/not_requested` | 按 `turn_index` 复述仍在有界摘要中的第三问 |
 | `1+1等于几` | `no_data` | `deterministic/not_requested` | NBA 范围引导；Provider/cache/Agent 调用均为 0 |
 
-最终自动化门禁：pytest `429 passed`，Ruff/JS/git diff 检查通过，Playwright `15 passed`，
+最终自动化门禁：pytest `441 passed`，Ruff/JS/git diff 检查通过，Playwright `17 passed`，
 黄金题评测 `63 runs / 100.00`、安全否决 `0`。回归还验证了公开搜索组合下的日期可用性置灰和
 休赛期最近 5 场补足：无比赛日期返回 `empty`，最近 5 场接口返回 5 场已结束比赛并标记
-`partial`（使用有界历史快照补足）。持久投影 schema 已升级至 v2，旧缓存不会把新增场馆或
-来源字段静默还原为空。
+`partial`（使用有界历史快照补足）。持久投影 schema 已升级至 v4，旧 v3 缓存不会丢失逐场
+`public/demo_snapshot` 来源；混合列表的每张卡保持自己的来源。
 
 ## 10. Delivery checklist
 

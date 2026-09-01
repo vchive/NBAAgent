@@ -7,7 +7,9 @@ import pytest
 
 from apps.api.src.application.chat_use_case import ChatUseCase
 from apps.api.src.application.highlights import HighlightsService
+from apps.api.src.application.ports import ProviderResult
 from apps.api.src.config import Settings
+from apps.api.src.domain.models import SourceClass
 from apps.api.src.domain.time_policy import FixedClock
 from apps.api.src.infrastructure.cache import InMemoryTTLCache
 from apps.api.src.main import create_app
@@ -173,9 +175,51 @@ async def test_hybrid_recent_fills_offseason_from_snapshot_without_long_live_sca
         "2026-finals-g2",
     ]
     assert result.evidence_state == "partial"
+    assert result.data_origin == "demo_snapshot"
+    assert {game.data_origin for game in result.games} == {"demo_snapshot"}
     # The live path only scans the short window; it must not fan out across
     # the entire 120-day lookback before consulting the bounded snapshot.
     assert primary.operation_calls.get("search_games", 0) <= 4
+
+
+@pytest.mark.asyncio
+async def test_mixed_recent_list_preserves_origin_on_each_game_card() -> None:
+    """Aggregate ``mixed`` must not erase which rows came from the public source."""
+
+    class OnePublicGame(FixtureProvider):
+        async def search_games(self, filters, budget):
+            result = await super().search_games(filters, budget)
+            self._load()
+            public_game = self._games[0].model_copy(
+                update={
+                    "game_id": "public-live-game",
+                    "start_utc": datetime(2026, 8, 30, 12, tzinfo=UTC),
+                }
+            )
+            evidence = [
+                item.model_copy(update={"source_class": SourceClass.ESTABLISHED_SPORTS})
+                for item in result.evidence
+            ]
+            return ProviderResult(
+                data=[public_game],
+                evidence=evidence,
+                retrieved_at_utc=result.retrieved_at_utc,
+            )
+
+    primary = OnePublicGame()
+    primary.max_date_slices = 7
+    fallback = FixtureProvider()
+    gateway = ProviderGateway(primary, fallback=fallback, max_retries=0)
+    clock = FixedClock(datetime(2026, 8, 31, 12, tzinfo=UTC))
+    service = HighlightsService(gateway, clock=clock)
+
+    result = await service.recent(limit=5, timezone_name="Asia/Shanghai")
+
+    assert result.data_origin == "mixed"
+    origins = {game.game_id: game.data_origin for game in result.games}
+    assert origins["public-live-game"] == "public"
+    assert origins["2026-finals-g4"] == "demo_snapshot"
+    assert set(origins.values()) == {"public", "demo_snapshot"}
 
 
 @pytest.mark.asyncio

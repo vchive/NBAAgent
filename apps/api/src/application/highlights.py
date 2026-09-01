@@ -78,12 +78,18 @@ class HighlightsService:
         *,
         clock: Any | None = None,
         game_registry: MutableMapping[str, Game] | None = None,
+        game_origin_registry: MutableMapping[str, str] | None = None,
     ) -> None:
         self.gateway = gateway
         self.clock = clock
         self.game_registry = game_registry
+        self.game_origin_registry = game_origin_registry
 
-    def _remember_games(self, games: Any) -> None:
+    @staticmethod
+    def _single_game_origin(value: str) -> str:
+        return value if value in {"public", "demo_snapshot"} else "none"
+
+    def _remember_games(self, games: Any, *, data_origin: str = "none") -> None:
         """Keep typed highlight games available for a subsequent chat turn."""
 
         if self.game_registry is None:
@@ -91,6 +97,13 @@ class HighlightsService:
         for game in list(games or []):
             if isinstance(game, Game):
                 self.game_registry[game.game_id] = game
+                if self.game_origin_registry is not None:
+                    origin = self._single_game_origin(data_origin)
+                    current = self.game_origin_registry.get(game.game_id, "none")
+                    # A later snapshot/cache projection must never downgrade a
+                    # game already resolved from the public source.
+                    if current != "public" or origin == "public":
+                        self.game_origin_registry[game.game_id] = origin
 
     def remember_public_games(
         self,
@@ -152,6 +165,11 @@ class HighlightsService:
             except (TypeError, ValueError):
                 continue
             self.game_registry[game.game_id] = game
+            if self.game_origin_registry is not None:
+                origin = self._single_game_origin(item.data_origin)
+                current = self.game_origin_registry.get(game.game_id, "none")
+                if current != "public" or origin == "public":
+                    self.game_origin_registry[game.game_id] = origin
 
     def _now(self) -> datetime:
         if self.clock is None:
@@ -277,8 +295,14 @@ class HighlightsService:
             )
             raise HighlightsProviderError(code, message, retryable, status_code)
         games = result.data or []
-        self._remember_games(games)
-        public_games = [self._public_game(game) for game in games if isinstance(game, Game)]
+        data_origin = self._data_origin(result.evidence)
+        item_origin = self._single_game_origin(data_origin)
+        self._remember_games(games, data_origin=item_origin)
+        public_games = [
+            self._public_game(game, data_origin=item_origin)
+            for game in games
+            if isinstance(game, Game)
+        ]
         evidence_state = (
             EvidenceState.NONE
             if not public_games
@@ -286,7 +310,6 @@ class HighlightsService:
             if result.partial or getattr(result, "used_fallback", False)
             else EvidenceState.VERIFIED
         )
-        data_origin = self._data_origin(result.evidence)
         as_of = (
             format_beijing(result.retrieved_at_utc)
             if public_games and data_origin != "demo_snapshot"
@@ -393,30 +416,34 @@ class HighlightsService:
                 continue
             game_day = game.start_utc.astimezone(zone).date()
             if start_day <= game_day <= end_day:
-                self._remember_games([game])
-                public = self._public_game(game)
+                self._remember_games([game], data_origin="demo_snapshot")
+                public = self._public_game(game, data_origin="demo_snapshot")
                 combined.setdefault(public.game_id, public)
         games = sorted(combined.values(), key=lambda item: item.start_utc, reverse=True)[:limit]
         if len(games) == len(live_result.games):
             return live_result
-        fallback_as_of = (
-            format_beijing(snapshot.retrieved_at_utc)
-            if isinstance(snapshot.retrieved_at_utc, datetime)
-            else None
+        row_origins = {
+            game.data_origin
+            for game in games
+            if game.data_origin in {"public", "demo_snapshot"}
+        }
+        data_origin = (
+            "none"
+            if not row_origins
+            else next(iter(row_origins))
+            if len(row_origins) == 1
+            else "mixed"
         )
-        as_of_values = [value for value in (live_result.as_of_beijing, fallback_as_of) if value]
         return HighlightsRangeResponse(
             timezone=zone.key,
             from_date=start_day.isoformat(),
             to_date=end_day.isoformat(),
             games=games,
-            as_of_beijing=max(as_of_values) if as_of_values else None,
-            evidence_state=EvidenceState.PARTIAL.value.lower(),
-            data_origin=(
-                "demo_snapshot"
-                if live_result.data_origin in {"none", "demo_snapshot"}
-                else "mixed"
+            as_of_beijing=(
+                live_result.as_of_beijing if "public" in row_origins else None
             ),
+            evidence_state=EvidenceState.PARTIAL.value.lower(),
+            data_origin=data_origin,
         )
 
     async def _range(
@@ -472,6 +499,7 @@ class HighlightsService:
             clock=self.clock,
         )
         games_by_id: dict[str, Game] = {}
+        origins_by_id: dict[str, str] = {}
         retrieved: list[datetime] = []
         had_success = False
         had_unknown = False
@@ -502,6 +530,7 @@ class HighlightsService:
                 continue
             had_success = True
             origin = self._data_origin(result.evidence)
+            item_origin = self._single_game_origin(origin)
             if origin != "none":
                 origins.add(origin)
             had_unknown = had_unknown or bool(result.partial) or bool(
@@ -516,6 +545,7 @@ class HighlightsService:
                 game_day = game.start_utc.astimezone(zone).date()
                 if start_day <= game_day <= end_day:
                     games_by_id[game.game_id] = game
+                    origins_by_id[game.game_id] = item_origin
             if limit is not None and len(games_by_id) >= limit:
                 break
 
@@ -540,8 +570,18 @@ class HighlightsService:
         games = sorted(games_by_id.values(), key=lambda item: item.start_utc, reverse=True)
         if limit is not None:
             games = games[:limit]
-        public_games = [self._public_game(game) for game in games]
-        self._remember_games(games)
+        public_games = [
+            self._public_game(
+                game,
+                data_origin=origins_by_id.get(game.game_id, "none"),
+            )
+            for game in games
+        ]
+        for game in games:
+            self._remember_games(
+                [game],
+                data_origin=origins_by_id.get(game.game_id, "none"),
+            )
         evidence_state = (
             EvidenceState.PARTIAL
             if had_unknown
@@ -611,13 +651,14 @@ class HighlightsService:
             raise HighlightsProviderError(
                 "INVALID_UPSTREAM_DATA", "公开数据格式异常，暂时无法核验。", False, 502
             )
-        self._remember_games([bundle.game])
+        data_origin = self._data_origin(result.evidence)
+        item_origin = self._single_game_origin(data_origin)
+        self._remember_games([bundle.game], data_origin=item_origin)
         plays = self._public_plays(bundle)
         leaders = self._public_leaders(bundle.leaders or bundle.stat_lines)
         evidence_state = EvidenceState.PARTIAL if result.partial else EvidenceState.VERIFIED
-        data_origin = self._data_origin(result.evidence)
         return HighlightDetailResponse(
-            game=self._public_game(bundle.game),
+            game=self._public_game(bundle.game, data_origin=item_origin),
             leaders=leaders,
             plays=plays,
             as_of_beijing=(
@@ -808,7 +849,7 @@ class HighlightsService:
         )
 
     @staticmethod
-    def _public_game(game: Game) -> HighlightGame:
+    def _public_game(game: Game, *, data_origin: str = "none") -> HighlightGame:
         return HighlightGame(
             game_id=game.game_id,
             start_utc=game.start_utc,
@@ -830,6 +871,7 @@ class HighlightsService:
             venue_city=game.venue.city if game.venue is not None else None,
             venue_state=game.venue.state if game.venue is not None else None,
             venue_country=game.venue.country if game.venue is not None else None,
+            data_origin=HighlightsService._single_game_origin(data_origin),
         )
 
     @staticmethod

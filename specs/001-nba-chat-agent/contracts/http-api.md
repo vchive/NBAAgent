@@ -254,7 +254,8 @@ facts:
       "venue_name": "TD Garden",
       "venue_city": "Boston",
       "venue_state": "MA",
-      "venue_country": "USA"
+      "venue_country": "USA",
+      "data_origin": "public|demo_snapshot|none"
     }
   ],
   "as_of_beijing": "2026-08-28 15:50",
@@ -262,6 +263,11 @@ facts:
   "data_origin": "public|demo_snapshot|mixed|none"
 }
 ```
+
+The envelope origin is an aggregate. `mixed` is valid only there; a game row never uses `mixed`.
+Clients MUST prefer `game.data_origin` and may use the envelope only as a backward-compatible fallback
+when talking to an older server. A cached response rehydrates both the selected-game record and its
+per-game origin into server-owned registries; the browser cannot supply or upgrade that provenance.
 
 ## 5. Technical error envelope
 

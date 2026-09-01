@@ -182,6 +182,7 @@ async def test_cached_recent_games_are_rebound_to_selected_game_registry(tmp_pat
     assert second.status_code == 200
     assert game_id in app.state.game_registry
     assert app.state.game_registry[game_id].game_id == game_id
+    assert app.state.game_origin_registry[game_id] == "demo_snapshot"
 
 
 @pytest.mark.asyncio

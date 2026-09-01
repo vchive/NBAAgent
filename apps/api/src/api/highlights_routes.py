@@ -268,6 +268,7 @@ async def highlights_availability(
         gateway,
         clock=getattr(usecase, "clock", None),
         game_registry=getattr(request.app.state, "game_registry", None),
+        game_origin_registry=getattr(request.app.state, "game_origin_registry", None),
     )
     try:
         zone = validate_timezone(timezone_name)
@@ -333,6 +334,7 @@ async def highlights_recent(
         gateway,
         clock=getattr(usecase, "clock", None),
         game_registry=getattr(request.app.state, "game_registry", None),
+        game_origin_registry=getattr(request.app.state, "game_origin_registry", None),
     )
     try:
         zone = validate_timezone(timezone_name)
@@ -421,6 +423,7 @@ async def highlights_range(
         gateway,
         clock=getattr(usecase, "clock", None),
         game_registry=getattr(request.app.state, "game_registry", None),
+        game_origin_registry=getattr(request.app.state, "game_origin_registry", None),
     )
     try:
         local_today = service._now().astimezone(zone).date()
@@ -496,6 +499,7 @@ async def highlights(
         gateway,
         clock=getattr(usecase, "clock", None),
         game_registry=getattr(request.app.state, "game_registry", None),
+        game_origin_registry=getattr(request.app.state, "game_origin_registry", None),
     )
     try:
         zone = validate_timezone(timezone_name)
@@ -580,6 +584,7 @@ async def highlight_detail(
         gateway,
         clock=getattr(usecase, "clock", None),
         game_registry=getattr(request.app.state, "game_registry", None),
+        game_origin_registry=getattr(request.app.state, "game_origin_registry", None),
     )
     try:
         timezone_name = validate_timezone(timezone_name).key

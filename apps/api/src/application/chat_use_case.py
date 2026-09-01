@@ -70,7 +70,14 @@ from apps.api.src.domain.models import (
     VerificationState,
 )
 from apps.api.src.domain.safety import OutputGuard, OutputGuardError, SafetyGuard
-from apps.api.src.domain.time_policy import SystemClock, format_beijing, game_end_window, now_utc
+from apps.api.src.domain.time_policy import (
+    SystemClock,
+    format_beijing,
+    game_end_window,
+    local_date_range,
+    now_utc,
+    validate_timezone,
+)
 from apps.api.src.domain.verifier import (
     verify_bundle,
     verify_game,
@@ -122,6 +129,12 @@ _CAPABILITY_RE = re.compile(
     re.IGNORECASE,
 )
 
+_PUBLIC_REVERIFICATION_RE = re.compile(
+    r"(?:联网|在线|公开(?:资料|数据|来源)?).{0,10}(?:实时|重新|再|最新)?(?:查验|核验|查询|查一下|确认)"
+    r"|(?:实时|重新|再).{0,8}(?:联网|在线|公开(?:资料|数据|来源)?).{0,8}(?:查验|核验|查询|确认)",
+    re.IGNORECASE,
+)
+
 
 def _is_model_meta_question(message: str) -> bool:
     return bool(_MODEL_META_RE.search(str(message or "").strip()))
@@ -143,6 +156,12 @@ def _is_zero_tool_question(message: str) -> bool:
     return bool(_GREETING_RE.fullmatch(str(message or "").strip())) or _is_capability_question(
         message
     )
+
+
+def _requests_public_reverification(message: str) -> bool:
+    """Recognize an explicit request to upgrade a prior fact to public data."""
+
+    return bool(_PUBLIC_REVERIFICATION_RE.search(str(message or "").strip()))
 
 
 @dataclass(slots=True)
@@ -242,6 +261,7 @@ class ChatUseCase:
         gateway: Any | None = None,
         admission: AdmissionController | None = None,
         game_registry: Mapping[str, Game] | None = None,
+        game_origin_registry: Mapping[str, str] | None = None,
     ) -> None:
         self.settings = settings
         self.clock = clock or SystemClock()
@@ -277,6 +297,9 @@ class ChatUseCase:
         # client-supplied team names or scores.  Fixture IDs are also resolved
         # from the parser catalog for direct use-case tests.
         self.game_registry = game_registry if game_registry is not None else {}
+        self.game_origin_registry = (
+            game_origin_registry if game_origin_registry is not None else {}
+        )
         self.parser = IntentParser(clock=self.clock)
         self.planner = QueryPlanner()
         self.template_composer = TemplateComposer()
@@ -379,6 +402,24 @@ class ChatUseCase:
                 if isinstance(item, Game) and item.game_id == value:
                     return item
         return None
+
+    def _selected_game_origin(self, game_id: str | None) -> str:
+        if not game_id:
+            return "none"
+        origin = str(self.game_origin_registry.get(str(game_id), "none")).lower()
+        if origin in {"public", "demo_snapshot"}:
+            return origin
+        # A fixture-owned ID discovered without first loading highlights is a
+        # snapshot by construction.  Do not let it masquerade as public just
+        # because the origin registry has not yet been populated.
+        for owner in (self.provider, getattr(self.gateway, "fallback", None)):
+            if owner is None:
+                continue
+            if owner.__class__.__name__ == "FixtureProvider":
+                game = self._selected_game(str(game_id))
+                if game is not None:
+                    return "demo_snapshot"
+        return "none"
 
     @staticmethod
     def _selected_game_ref(game_id: str, game: Game | None) -> EntityRef:
@@ -915,6 +956,7 @@ class ChatUseCase:
                         telemetry.fallback_reason = "agent_tool_mismatch"
                     else:
                         agent_answer = self._ground_agent_answer(
+                            req.message,
                             agent_turn.answer_markdown,
                             agent_turn.observations,
                         )
@@ -1903,18 +1945,59 @@ class ChatUseCase:
 
     @staticmethod
     def _ground_agent_answer(
+        question: str,
         answer: str,
         observations: list[dict[str, Any]],
     ) -> str:
-        """Make bounded empty-schedule answers deterministic.
+        """Project objective NBA observations through server-owned wording.
 
-        A model may abbreviate a tool's ISO dates or speculate that an empty
-        schedule means the offseason.  The server-owned schedule observation
-        already contains the complete Beijing range and is the only truthful
-        statement available, so project that canonical result instead.  Hermes
-        still owns question understanding and tool selection; it does not own
-        the factual wording of an empty result.
+        The Agent owns intent understanding and tool selection.  It does not
+        own score/team, venue, statistic or play-event relations: fluent model
+        paraphrases can invert a winner or turn a free throw/terminal marker
+        into a field goal while reusing only observed names and numbers.  For
+        non-analytical ``nba_query`` turns, return the deterministic sanitized
+        observation verbatim.  Analytical turns may still use the model, while
+        the normal output guard enforces numbers, safety and implementation
+        secrecy.
         """
+
+        analytical = bool(
+            re.search(
+                r"(?:为什么|为何|原因|战术|挡拆|防守策略|怎么限制|如何限制|复盘|"
+                r"关键转折|表现如何|评价|分析|解读)",
+                str(question or ""),
+                re.IGNORECASE,
+            )
+        )
+        for item in reversed(observations):
+            if not isinstance(item, Mapping):
+                continue
+            if str(item.get("intent", "")).lower() != "public_reverification":
+                continue
+            if str(item.get("status", "")).lower() not in {
+                "completed",
+                "no_data",
+                "needs_clarification",
+            }:
+                continue
+            grounded = str(item.get("answer_markdown") or "").strip()
+            if grounded:
+                return grounded
+        if not analytical:
+            for item in reversed(observations):
+                if not isinstance(item, Mapping):
+                    continue
+                if str(item.get("intent", "")).lower() != "nba_query":
+                    continue
+                if str(item.get("status", "")).lower() not in {
+                    "completed",
+                    "no_data",
+                    "needs_clarification",
+                }:
+                    continue
+                grounded = str(item.get("answer_markdown") or "").strip()
+                if grounded:
+                    return grounded
 
         for item in reversed(observations):
             if not isinstance(item, Mapping):
@@ -1937,6 +2020,247 @@ class ChatUseCase:
                 )
         return answer
 
+    @staticmethod
+    def _team_match_tokens(team: EntityRef) -> set[str]:
+        values = [team.display_name, *team.aliases]
+        tokens: set[str] = set()
+        for value in values:
+            normalized = unicodedata.normalize("NFKC", str(value)).casefold()
+            token = "".join(char for char in normalized if char.isalnum())
+            if token:
+                tokens.add(token)
+        return tokens
+
+    @classmethod
+    def _same_matchup(cls, selected: Game, candidate: Game) -> bool:
+        return bool(
+            cls._team_match_tokens(selected.home)
+            & cls._team_match_tokens(candidate.home)
+        ) and bool(
+            cls._team_match_tokens(selected.away)
+            & cls._team_match_tokens(candidate.away)
+        )
+
+    @staticmethod
+    def _public_reverification_target(question: str, context: Any) -> str:
+        """Recover the prior factual question for a short “recheck online” turn."""
+
+        stripped = _PUBLIC_REVERIFICATION_RE.sub("", str(question or "")).strip()
+        stripped = stripped.strip("，,。.!！?？下")
+        if len(stripped) >= 4 and re.search(
+            r"(?:比分|谁|什么|哪里|哪儿|场馆|地点|最后|得分|篮板|助攻|战术|为什么)",
+            stripped,
+        ):
+            return stripped
+        for summary in reversed(
+            list(getattr(context, "recent_turn_summaries", []) or [])
+        ):
+            previous = str(getattr(summary, "user_message", "") or "").strip()
+            if previous and not _requests_public_reverification(previous):
+                return previous
+        return "这场比赛的结果和场馆信息"
+
+    async def _agent_public_reverification_observation(
+        self,
+        *,
+        selected_game_id: str,
+        question: str,
+        context: Any,
+        deadline_at_utc: datetime,
+        token: CancelToken,
+    ) -> Mapping[str, Any]:
+        """Resolve a selected card to one primary-source event without fallback.
+
+        Internal snapshot IDs are never sent to the public summary endpoint.
+        The selected date and matchup are first matched against a force-refreshed
+        public scoreboard.  Only one exact match authorizes a public summary;
+        zero or multiple matches remain an honest, non-upgraded snapshot.
+        """
+
+        selected = self._selected_game(selected_game_id)
+        if selected is None:
+            message = "当前选中的比赛无法从服务器记录中确认，请重新选择比赛后再核验。"
+            return {
+                "status": "needs_clarification",
+                "intent": "public_reverification",
+                "query_scope": None,
+                "answer_markdown": message,
+                "blocks": [],
+                "evidence_state": "none",
+                "as_of_beijing": None,
+                "data_origin": "none",
+            }
+
+        zone_name = str(getattr(context, "timezone", "Asia/Shanghai"))
+        # The calendar scope must use the caller's display timezone.  Convert
+        # the selected UTC instant first; passing its UTC date directly would
+        # be wrong for evening games crossing Beijing midnight.
+        selected_local_day = selected.start_utc.astimezone(
+            validate_timezone(zone_name)
+        ).date()
+        date_range = local_date_range(selected_local_day, zone_name)
+        budget = RequestBudget(
+            deadline_at_utc,
+            max_provider_operations=max(
+                2, getattr(self.settings, "max_provider_operations", 4)
+            ),
+            max_retries_per_operation=getattr(
+                self.settings, "provider_max_retries", 2
+            ),
+            clock=self.clock,
+        )
+        try:
+            scoreboard = await self._await_with_cancel(
+                self.gateway.search_games(
+                    GameFilters(date_range=date_range),
+                    budget=budget,
+                    allow_fallback=False,
+                    force_refresh=True,
+                ),
+                token,
+            )
+        except (TypeError, ValueError):
+            scoreboard = None
+
+        candidates: list[Game] = []
+        if (
+            scoreboard is not None
+            and getattr(scoreboard, "error", None) is None
+            and self._data_origin(getattr(scoreboard, "evidence", [])) == "public"
+        ):
+            for item in list(getattr(scoreboard, "data", None) or []):
+                if not isinstance(item, Game):
+                    continue
+                item_day = item.start_utc.astimezone(
+                    validate_timezone(zone_name)
+                ).date()
+                if item_day != selected_local_day:
+                    continue
+                if self._same_matchup(selected, item):
+                    candidates.append(item)
+        unique = {item.game_id: item for item in candidates}
+        if len(unique) != 1:
+            message = (
+                f"已重新查询北京时间 **{selected_local_day.isoformat()}** 的公开赛事记录，"
+                "但没有找到与当前对阵唯一匹配的比赛。当前选中内容仍是固定演示快照，"
+                "不能升级为实时公开核验。"
+            )
+            return {
+                "status": "no_data",
+                "intent": "public_reverification",
+                "query_scope": {"date": selected_local_day.isoformat()},
+                "answer_markdown": message,
+                "blocks": [],
+                "evidence_state": "none",
+                "as_of_beijing": None,
+                "data_origin": "none",
+            }
+
+        matched = next(iter(unique.values()))
+        try:
+            summary = await self._await_with_cancel(
+                self.gateway.get_game_summary(
+                    matched.game_id,
+                    budget=budget,
+                    allow_fallback=False,
+                    force_refresh=True,
+                ),
+                token,
+            )
+        except (TypeError, ValueError):
+            summary = None
+        if (
+            summary is None
+            or getattr(summary, "error", None) is not None
+            or not isinstance(getattr(summary, "data", None), GameBundle)
+            or self._data_origin(getattr(summary, "evidence", [])) != "public"
+        ):
+            message = (
+                "已在公开赛程中唯一匹配到这场比赛，但比赛详情暂时没有返回可核验记录；"
+                "当前演示快照中的细节不会被当作实时公开结果。"
+            )
+            return {
+                "status": "no_data",
+                "intent": "public_reverification",
+                "query_scope": {
+                    "date": selected_local_day.isoformat(),
+                    "game_id": matched.game_id,
+                },
+                "answer_markdown": message,
+                "blocks": [],
+                "evidence_state": "none",
+                "as_of_beijing": None,
+                "data_origin": "none",
+            }
+
+        bundle = summary.data
+        try:
+            self.game_registry[matched.game_id] = bundle.game
+            self.game_origin_registry[matched.game_id] = "public"
+        except (AttributeError, TypeError):
+            # Embedders may inject a read-only Mapping.  The current answer is
+            # still grounded by the local public bundle; only future selected-
+            # card reuse is unavailable in that non-standard configuration.
+            pass
+        target = self._public_reverification_target(question, context)
+        parser = IntentParser(clock=self.clock, input_timezone=zone_name)
+        try:
+            parsed = parser.parse(target, context)
+            parsed = self._attach_selected_game(
+                parsed,
+                bundle.game,
+                self._selected_game_ref(matched.game_id, bundle.game),
+            )
+            facts, game, parsed_bundle, derived = self._facts_for(
+                parsed,
+                bundle,
+                summary.evidence,
+                provider_partial=bool(summary.partial),
+            )
+            draft = self.template_composer.compose(
+                parsed.intent,
+                facts,
+                game=game,
+                bundle=parsed_bundle,
+                derived=derived,
+                retrieved_at=summary.retrieved_at_utc,
+                corrections=facts.corrections,
+            )
+            guarded = self.output_guard.validate(draft, facts)
+            answer = (
+                "已通过公开赛事记录重新核验。\n\n" + guarded.markdown
+            )
+            blocks = [
+                block.model_dump(mode="json") for block in guarded.blocks
+            ]
+            evidence_state = guarded.evidence_state.value.lower()
+        except (TypeError, ValueError, OutputGuardError):
+            game = bundle.game
+            score = (
+                f"{game.away_score}–{game.home_score}"
+                if game.away_score is not None and game.home_score is not None
+                else "尚未产生终场比分"
+            )
+            answer = (
+                "已通过公开赛事记录重新核验："
+                f"{game.away.display_name} 对 {game.home.display_name}，{score}。"
+            )
+            blocks = []
+            evidence_state = "partial" if summary.partial else "verified"
+        return {
+            "status": "completed",
+            "intent": "public_reverification",
+            "query_scope": {
+                "date": selected_local_day.isoformat(),
+                "game_id": matched.game_id,
+            },
+            "answer_markdown": answer,
+            "blocks": blocks,
+            "evidence_state": evidence_state,
+            "as_of_beijing": format_beijing(summary.retrieved_at_utc),
+            "data_origin": "public",
+        }
+
     def _agent_tool_runner(
         self,
         *,
@@ -1955,6 +2279,14 @@ class ChatUseCase:
                 "run.status",
                 {"stage": "agent_tool", "text": "正在调用受控 NBA 数据工具"},
             )
+            if selected_game_id and _requests_public_reverification(original_question):
+                return await self._agent_public_reverification_observation(
+                    selected_game_id=selected_game_id,
+                    question=original_question,
+                    context=context,
+                    deadline_at_utc=deadline_at_utc,
+                    token=token,
+                )
             if tool_name == "nba_schedule":
                 return await self._agent_schedule_observation(
                     arguments,

@@ -120,6 +120,7 @@ def create_app(*, settings: Settings | None = None, usecase: ChatUseCase | None 
     # requests may refer to a selected card by ID; resolving that ID here
     # prevents the browser from supplying untrusted team/score metadata.
     app.state.game_registry = {}
+    app.state.game_origin_registry = {}
     app.state.auth_manager = AuthManager(
         password=getattr(config, "app_password", ""),
         password_file=getattr(config, "app_password_file", ""),
@@ -147,6 +148,7 @@ def create_app(*, settings: Settings | None = None, usecase: ChatUseCase | None 
             settings=config,
             gateway=gateway,
             game_registry=app.state.game_registry,
+            game_origin_registry=app.state.game_origin_registry,
         )
         app.state.provider = provider
         app.state.fallback_provider = fallback
@@ -160,6 +162,10 @@ def create_app(*, settings: Settings | None = None, usecase: ChatUseCase | None 
             if isinstance(existing_registry, dict) and existing_registry:
                 app.state.game_registry.update(existing_registry)
             usecase.game_registry = app.state.game_registry
+            existing_origins = getattr(usecase, "game_origin_registry", None)
+            if isinstance(existing_origins, dict) and existing_origins:
+                app.state.game_origin_registry.update(existing_origins)
+            usecase.game_origin_registry = app.state.game_origin_registry
         except (AttributeError, TypeError):
             pass
     app.state.chat_use_case = usecase

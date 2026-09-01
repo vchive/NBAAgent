@@ -160,3 +160,37 @@ def test_output_guard_rejects_provider_leakage() -> None:
         OutputGuard.validate(
             {"markdown": "详情见 https://example.invalid", "evidence_state": "none"}
         )
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "我只能再次调用这三个工具确认。",
+        "工具返回里没有这个字段。",
+        "我无法实时联网，只能使用当前快照。",
+        "我调用 nba_query 后得到这个结论。",
+    ],
+)
+def test_agent_output_guard_rejects_internal_capability_wording(answer: str) -> None:
+    observation = {
+        "status": "completed",
+        "intent": "nba_query",
+        "answer_markdown": "凯尔特人以 108–104 击败雷霆。",
+        "evidence_state": "verified",
+    }
+    with pytest.raises(OutputGuardError):
+        OutputGuard.validate_agent(answer, [observation])
+
+
+def test_agent_output_guard_rejects_unsupported_factual_proper_name() -> None:
+    observation = {
+        "status": "completed",
+        "intent": "nba_query",
+        "answer_markdown": "凯尔特人以 108–104 击败雷霆。",
+        "evidence_state": "verified",
+    }
+    with pytest.raises(OutputGuardError, match="事实专名"):
+        OutputGuard.validate_agent(
+            "Kevin Durant 帮助凯尔特人以 108–104 获胜。",
+            [observation],
+        )

@@ -141,16 +141,16 @@ docs/
 | FR-004 | HLD answer policy；LLD composition | `UNIT-STYLE-001` 中文/称呼 |
 | FR-005 | HLD design goals；LLD answer policy | `UNIT-STYLE-002` 中立官方语气 |
 | FR-006 | HLD UI；LLD composition | `E2E-004` 结构、加粗和简洁 |
-| FR-007 | HLD trust boundary；HTTP contract | `CONTRACT-API-001` 内部字段不泄露 |
+| FR-007 | HLD trust boundary；HTTP/Agent contract | `tests/unit/test_safety.py` 内部工具/联网能力措辞不泄露 |
 | FR-008 | HLD scope；LLD intent mapping | `EVAL-A-I-*` 核心/扩展题型 |
 | FR-009 | LLD parsing/entity resolution；data model | `UNIT-PARSE-001` 槽位和歧义 |
 | FR-010 | LLD time policy；data model | `UNIT-TIME-001` UTC+8 跨日 |
 | FR-011 | LLD SeasonClock；research | `UNIT-TIME-002` `YYYY-YY` 映射 |
 | FR-012 | LLD latestness rule；Provider contract | `EVAL-C-002` 最新冠军核验 |
 | FR-013 | HLD data-source strategy；provider contract | `CONTRACT-PROVIDER-001` 公网/fixture |
-| FR-014 | LLD verification；data model | `EVAL-A/B-001` 可靠事实 |
+| FR-014 | LLD verification/semantic grounding；data model | `tests/integration/test_full_intelligence.py` 胜者—比分关系不能被模型反转 |
 | FR-015 | LLD derivation | `UNIT-DERIVE-001` 逐场累计 |
-| FR-016 | LLD PBP algorithm | `UNIT-DERIVE-002` 最后 5 秒 |
+| FR-016 | LLD PBP algorithm/authoritative observation | `UNIT-DERIVE-002`、full-intelligence 对抗回归（罚球/终场标记） |
 | FR-017 | LLD premise verification | `INT-CORRECT-001` 错误前提纠正 |
 | FR-018 | LLD analysis composition | `EVAL-F/G-001` 事实/推断分层 |
 | FR-019 | HLD Safety Guard；LLD safety policy | `SEC-REDLINE-001..010` 检索前拦截 |
@@ -161,14 +161,14 @@ docs/
 | FR-024 | HLD delivery；evaluation contract | `DOC-001` 方案 PDF 清单 |
 | FR-025 | Quickstart；evaluation contract | `DOC-002`, `EVAL-RUN-001` 可复现 |
 | FR-026 | Evaluation contract | `EVAL-REPORT-001` 七维汇总 |
-| FR-027 | HLD highlights projection；日期可用性三态接口；HTTP contract；Web Demo | `CONTRACT-HIGHLIGHTS-001`, `E2E-HIGHLIGHTS-001` 日期/无赛日置灰/空状态/隔离 |
+| FR-027 | HLD highlights projection；逐场来源；SQLite v4；HTTP contract；Web Demo | `tests/contract/test_highlights.py`, `tests/contract/test_highlights_cache.py`, `E2E-HIGHLIGHTS-001` |
 | FR-028 | HLD public demo access control；Cookie session；Compose secret | `tests/contract/test_auth.py`, `DOC-AUTH-001` |
 | FR-029 | HLD web-search boundary；DuckDuckGo adapter；evidence ranking | `tests/contract/test_web_search.py`, `tests/integration/test_web_search.py` |
-| FR-030 | HLD full-intelligence routing；runtime selector；OutputGuard fallback | `tests/contract/test_intelligence_mode.py`, `tests/integration/test_full_intelligence.py`, `tests/e2e/test_chat.spec.ts` |
+| FR-030 | HLD full-intelligence routing；server-owned objective grounding；OutputGuard fallback | `tests/contract/test_intelligence_mode.py`, `tests/integration/test_full_intelligence.py`, `tests/e2e/test_chat.spec.ts` |
 | FR-031 | HLD Agent tool boundary；agent runtime contract | `tests/contract/test_hermes_agent_runtime.py`, `tests/integration/test_agent_tools.py` |
 | FR-032 | LLD conversational fast path and typo-tolerant Agent routing | `tests/integration/test_full_intelligence.py` |
 | FR-033 | LLD empty-result observation and scoped explanation | `tests/integration/test_full_intelligence.py`, `tests/evaluation/test_agent_cases.py` |
-| FR-034 | Agent fallback/provenance contract；Web status projection | `tests/contract/test_hermes_agent_runtime.py`, `tests/e2e/test_chat.spec.ts` |
+| FR-034 | Agent fallback/provenance；显式公开复核（force refresh/no fallback） | `tests/unit/test_gateway.py`, `tests/integration/test_full_intelligence.py`, `tests/e2e/test_chat.spec.ts` |
 | FR-035 | HLD pre-Agent safety；tool result trust boundary | `tests/integration/test_agent_safety.py` |
 | FR-036 | HLD/LLD Session Meta Resolver；准确计数与有界摘要分离 | `tests/unit/test_session_meta.py`, `tests/integration/test_session_meta.py`, `tests/e2e/test_chat.spec.ts` |
 | SC-001 | HLD deployment；quickstart | `OPS-001` 公网 URL/HTTPS 探活 |

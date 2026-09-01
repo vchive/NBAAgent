@@ -2172,14 +2172,12 @@
     const origin = String(payload?.data_origin || "none").toLowerCase();
     return normalizeHighlightGames(payload?.games || []).map((game) => ({
       ...game,
-      data_origin: origin,
+      data_origin: String(game?.data_origin || origin || "none").toLowerCase(),
     }));
   }
 
   function isDemoGame(game) {
-    return ["demo_snapshot", "mixed"].includes(
-      String(game?.data_origin || "none").toLowerCase(),
-    )
+    return String(game?.data_origin || "none").toLowerCase() === "demo_snapshot"
       || String(game?.game_id || "").startsWith("2026-demo-")
       || state.apiDataMode === "fixture";
   }

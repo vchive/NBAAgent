@@ -539,6 +539,9 @@ class HighlightGame(_WireBase):
     venue_city: str | None = Field(default=None, max_length=160)
     venue_state: str | None = Field(default=None, max_length=120)
     venue_country: str | None = Field(default=None, max_length=120)
+    # ``mixed`` is meaningful only for a list envelope.  Every selected card
+    # must retain one server-owned trust origin of its own.
+    data_origin: Literal["public", "demo_snapshot", "none"] = "none"
 
     @field_validator("start_utc")
     @classmethod

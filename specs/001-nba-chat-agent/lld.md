@@ -2,9 +2,9 @@
 
 **Feature**: [spec.md](spec.md)
 **HLD**: [hld.md](hld.md)
-**Status**: 官方 Agent、逻辑会话连续性、会话元问题与受控工具核验已实现
+**Status**: 官方 Agent、语义 grounding、公开复核、逐场来源与会话能力已实现
 **Date**: 2026-09-01
-**Revision**: v0.6 — 场馆/来源语义、索引会话元问题与范围外边界
+**Revision**: v0.7 — 关系级事实守卫、主源强制复核与缓存来源 v4
 
 本文把 HLD 的组件落到可实现的模块、类型、状态、协议和测试。字段名是内部契约示例；
 除明确标注为用户字段的内容外，不得原样回传浏览器。
@@ -616,6 +616,21 @@ AgentOutputGuard 执行：长度/控制字符、提示注入/供应商字段、�
 `mode=agent,status=used`；所有失败统一为 `mode=fallback,status=fallback`，内部 telemetry
 才记录具体 finish reason。
 
+在 guard 之前执行服务端 `ground_agent_answer(question, observations)`：
+
+- 非分析型 `nba_query`（比分、胜者、球员指标、场馆、日期/时长字段、PBP）直接返回最后一个
+  成功确定性 observation 的 `answer_markdown`，不接受模型对事实关系的自由改写；
+- 空赛程直接投影 observation 中完整的北京时间范围；
+- `public_reverification` observation 对模型始终权威；
+- 战术/原因/评价类允许 Agent 组织推断，但内部工具/能力描述、无观察数字或观察外事实触发
+  guard/fallback。
+
+显式“联网实时查验”由工具 bridge 截获并使用选中比赛的服务器记录执行：将开赛时刻转为请求
+时区本地日期，不携带内部 fixture ID 查询 summary；先对 primary scoreboard 使用
+`force_refresh=true, allow_fallback=false`，再按主客双方 display name/alias/abbreviation
+精确匹配。只有唯一 event ID 才允许再次以同一策略读取 summary/PBP；其余结果返回
+`public_reverification/no_data`，绝不读取快照或声称网络能力缺失。
+
 进入 AgentOutputGuard 前，`ChatUseCase` 还执行窄范围的观察相关性检查：赛程/新闻工具不得
 单独满足球员数据、战术、复盘或 PBP 问题；不相关结果统一回退确定性通道。
 
@@ -754,15 +769,20 @@ Provider。
 `GET /api/v1/highlights?date=YYYY-MM-DD&timezone=...` is a read-only scoreboard projection,
 separate from the chat `HISTORY` intent. The service converts the requested local calendar day
 to a half-open UTC range, rejects dates later than the injected clock's local day, and returns a
-provider-free `games` projection plus `evidence_state`/`as_of_beijing`/`data_origin`. The `games` array is never
+provider-free `games` projection plus `evidence_state`/`as_of_beijing`/`data_origin`. Every game
+also carries `data_origin=public|demo_snapshot|none`; envelope `mixed` is aggregate-only and must
+never be copied over rows that already have their own origin. The `games` array is never
 truncated: a normal NBA slate may contain multiple games. The browser renders a compact list,
 keeps one selected game as the featured card, and updates HUD/PBP atomically when a list item is
 clicked. An empty successful result is represented by `games: []`; the browser must clear the
 prior card before rendering it. Missing PBP is rendered as an explicit no-data state rather than
 reusing events from another game. The static demo uses `2026-06-12` as its explicit offline
 fixture date and labels the PBP panel as text-only; no third-party media URL is accepted by this
-contract. Fixture/fallback responses use `data_origin=demo_snapshot|mixed`; a pure demo snapshot
-does not carry a freshly generated public-data timestamp, and the browser labels its cards as DEMO.
+contract. Fixture/fallback responses use envelope `data_origin=demo_snapshot|mixed`; a pure demo
+snapshot does not carry a freshly generated public-data timestamp, and the browser labels its cards
+as DEMO. The server-owned selected-game registry keeps a parallel per-ID origin registry. SQLite
+serialized projection schema v4 persists the row-level field/aggregate semantics and treats v3 keys as misses, so
+restart/cache rehydration cannot erase provenance.
 
 ### 9.2 Date availability projection
 

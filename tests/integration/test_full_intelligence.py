@@ -7,10 +7,12 @@ import pytest
 from apps.api.src.application.chat_use_case import ChatUseCase
 from apps.api.src.application.ports import RuntimeStatus
 from apps.api.src.config import Settings
+from apps.api.src.domain.models import SourceClass
 from apps.api.src.domain.time_policy import FixedClock
 from apps.api.src.infrastructure.agent_tools import AgentToolCall
 from apps.api.src.infrastructure.hermes_agent_runtime import AgentTurnResult
 from apps.api.src.providers.fixture_provider import FixtureProvider
+from apps.api.src.providers.gateway import ProviderGateway
 
 
 class FakeSmartAgent:
@@ -93,6 +95,62 @@ class QueryingSmartAgent(FakeSmartAgent):
             latency_ms=2,
             iteration_count=2,
         )
+
+
+class AdversarialQueryingAgent(QueryingSmartAgent):
+    """Return a fluent but factually unsafe paraphrase after a valid NBA call."""
+
+    def __init__(self, answer: str) -> None:
+        super().__init__()
+        self.answer = answer
+
+    async def run(self, turn, *, tool_runner, cancel):
+        self.turns.append(turn)
+        self.tool_names.append("nba_query")
+        observation = dict(
+            await tool_runner("nba_query", {"question": turn.sanitized_question})
+        )
+        return AgentTurnResult(
+            status=RuntimeStatus.OK,
+            answer_markdown=self.answer,
+            evidence_state=observation["evidence_state"],
+            observations=[observation],
+            tool_calls=[AgentToolCall("nba_query", "hash", "completed", 1)],
+            latency_ms=2,
+            iteration_count=2,
+        )
+
+
+class PublicMirrorProvider(FixtureProvider):
+    """Expose the fixture shape as a primary public source with external IDs."""
+
+    @staticmethod
+    def _public(result):
+        return result.model_copy(
+            update={
+                "evidence": [
+                    item.model_copy(
+                        update={"source_class": SourceClass.ESTABLISHED_SPORTS}
+                    )
+                    for item in result.evidence
+                ]
+            }
+        )
+
+    async def search_games(self, filters, budget):
+        result = await super().search_games(filters, budget)
+        if result.error is not None:
+            return result
+        games = [
+            game.model_copy(update={"game_id": f"public-{game.game_id}"})
+            for game in (result.data or [])
+        ]
+        return self._public(result.model_copy(update={"data": games}))
+
+    async def get_game_summary(self, game_id, budget):
+        internal_id = str(game_id).removeprefix("public-")
+        result = await super().get_game_summary(internal_id, budget)
+        return self._public(result)
 
 
 def settings() -> Settings:
@@ -244,6 +302,104 @@ async def test_full_mode_selected_game_venue_keeps_snapshot_origin() -> None:
     assert result.data_origin == "demo_snapshot"
     assert result.as_of_beijing is None
     assert result.composition["mode"] == "agent"
+
+
+@pytest.mark.asyncio
+async def test_objective_agent_paraphrase_cannot_invert_selected_game_winner() -> None:
+    agent = AdversarialQueryingAgent("雷霆以 108–104 战胜凯尔特人。")
+    usecase = ChatUseCase(FixtureProvider(), settings=settings(), agent_runtime=agent)
+
+    result = await usecase.handle(
+        {
+            "message": "这场比赛谁赢了？",
+            "selected_game_id": "2026-finals-g4",
+            "intelligence_mode": "full",
+        }
+    )
+
+    assert "凯尔特人" in result.answer_markdown
+    assert "雷霆以 108–104 战胜凯尔特人" not in result.answer_markdown
+    assert "108–104" in result.answer_markdown
+    assert result.composition["mode"] == "agent"
+
+
+@pytest.mark.asyncio
+async def test_objective_agent_paraphrase_cannot_turn_free_throw_into_field_goal() -> None:
+    agent = AdversarialQueryingAgent(
+        "最后一投是谢伊·吉尔杰斯-亚历山大在 5 秒时完成的上篮。"
+    )
+    usecase = ChatUseCase(FixtureProvider(), settings=settings(), agent_runtime=agent)
+
+    result = await usecase.handle(
+        {
+            "message": "这场比赛最后 5 秒发生了什么？",
+            "selected_game_id": "2026-finals-g4",
+            "intelligence_mode": "full",
+        }
+    )
+
+    assert "罚球" in result.answer_markdown
+    assert "上篮" not in result.answer_markdown
+    assert "终场" in result.answer_markdown
+    assert result.composition["mode"] == "agent"
+
+
+@pytest.mark.asyncio
+async def test_explicit_public_reverification_resolves_snapshot_to_public_event() -> None:
+    primary = PublicMirrorProvider()
+    snapshot = FixtureProvider()
+    gateway = ProviderGateway(primary, fallback=snapshot, max_retries=0)
+    usecase = ChatUseCase(
+        primary,
+        gateway=gateway,
+        settings=settings(),
+        agent_runtime=QueryingSmartAgent(),
+    )
+
+    result = await usecase.handle(
+        {
+            "message": "你去联网实时查验下",
+            "selected_game_id": "2026-finals-g4",
+            "intelligence_mode": "full",
+        }
+    )
+
+    assert result.status == "completed"
+    assert result.data_origin == "public"
+    assert "已通过公开赛事记录重新核验" in result.answer_markdown
+    assert "TD Garden" in result.answer_markdown
+    assert "无法实时联网" not in result.answer_markdown
+    assert snapshot.calls == 0
+    assert primary.operation_calls["search_games"] == 1
+    assert primary.operation_calls["get_game_summary"] == 1
+
+
+@pytest.mark.asyncio
+async def test_explicit_public_reverification_never_falls_back_to_snapshot() -> None:
+    primary = PublicMirrorProvider(scenario="empty")
+    snapshot = FixtureProvider()
+    gateway = ProviderGateway(primary, fallback=snapshot, max_retries=0)
+    usecase = ChatUseCase(
+        primary,
+        gateway=gateway,
+        settings=settings(),
+        agent_runtime=QueryingSmartAgent(),
+    )
+
+    result = await usecase.handle(
+        {
+            "message": "请用公开数据联网重新核验",
+            "selected_game_id": "2026-finals-g4",
+            "intelligence_mode": "full",
+        }
+    )
+
+    assert result.status == "completed"
+    assert result.data_origin == "none"
+    assert "没有找到与当前对阵唯一匹配的比赛" in result.answer_markdown
+    assert "不能升级为实时公开核验" in result.answer_markdown
+    assert "无法实时联网" not in result.answer_markdown
+    assert snapshot.calls == 0
 
 
 @pytest.mark.asyncio
