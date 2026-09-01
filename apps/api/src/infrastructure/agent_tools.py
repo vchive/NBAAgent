@@ -202,6 +202,9 @@ def sanitise_observation(value: Mapping[str, Any], *, max_bytes: int) -> dict[st
             safe_scope = None
     answer = str(value.get("answer_markdown", "")).strip()
     answer = _CONTROL_RE.sub(" ", answer)[:12_000]
+    data_origin = str(value.get("data_origin", "none")).lower()
+    if data_origin not in {"public", "demo_snapshot", "mixed", "none"}:
+        data_origin = "none"
     observation: dict[str, Any] = {
         "status": status,
         "intent": str(value.get("intent", "unknown"))[:80],
@@ -214,6 +217,7 @@ def sanitise_observation(value: Mapping[str, Any], *, max_bytes: int) -> dict[st
             if value.get("as_of_beijing") is not None
             else None
         ),
+        "data_origin": data_origin,
     }
     encoded = json.dumps(observation, ensure_ascii=False, separators=(",", ":")).encode()
     if len(encoded) > max_bytes:

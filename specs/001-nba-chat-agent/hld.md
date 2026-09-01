@@ -223,10 +223,13 @@ Agent 原生磁盘 memory、session database、context files 和 trajectory 全�
 #### 5.1.2 Session Meta Resolver
 
 安全检查通过并加载当前 `ConversationContext` 后，系统先执行一个窄的会话元问题分类器，再
-进入 hybrid/full 分流。它只接受“我问了几个问题”“上一问/答是什么”“当前在聊哪场”
+进入 hybrid/full 分流。它只接受“我问了几个问题”“上一问/答是什么”“第 N 个问题是什么”“当前在聊哪场”
 “总结当前对话”“当前是什么模式”等应用状态问题，并直接读取服务端状态生成回答。该分支
 不调用模型、Provider 或 NBA 工具，full 模式也一样；会话状态属于确定性应用数据，不能让
 模型依据最近 4 个投影回合猜测。
+
+索引问题按 `TurnSummary.turn_index` 读取；目标仍在有界摘要时精确复述，已经被最多 8 条的
+窗口裁剪时只说明记录边界，不调用模型猜测。
 
 系统维护独立的 `completed_user_turn_count`，不会随最多 8 条的摘要窗口截断。安全允许且形成
 `completed/no_data/needs_clarification` 结果的请求计入，幂等重放只复用旧 envelope，技术失败、
@@ -375,10 +378,13 @@ SSE 断开会传播取消信号，已持久化的会话事实不回滚，也不�
 
 - 请求超时、429/5xx 重试和熔断；
 - 原始响应校验及缺字段保留 `null`；
+- `Game` 保留可选场馆名称及 city/state/country，名称缺失时 venue 整体保持 `null`；
 - 统一 `Evidence`（内部来源标识、URL、获取时间、数据截至时间、可信度）；
 - 可用 fixture，便于无网测试和面试演示；
 - 同一查询优先使用单一 source snapshot；fallback、冲突和 freshness 变化写入内部记录，
   高风险 PBP/纠偏/冠军事实不得无标注混用不同来源；
+- 公开响应仅投影 `public/demo_snapshot/mixed/none`；演示快照不使用当前公开数据时间戳，
+  Web UI 明确标记为固定演示数据；
 - 遵守服务条款、robots 和访问频率，禁止绕过访问控制。
 
 缓存按新鲜度分层：实时赛程/比分约 30–60 秒、box score 约 5 分钟、历史资料约 24 小时；

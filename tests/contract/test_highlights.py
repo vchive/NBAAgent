@@ -26,6 +26,10 @@ async def test_highlights_contract_valid_empty_and_future_dates() -> None:
         future = await client.get("/api/v1/highlights?date=2999-01-01&timezone=Asia/Shanghai")
     assert good.status_code == 200 and good.json()["games"]
     assert good.json()["date"] == "2026-06-12"
+    assert good.json()["data_origin"] == "demo_snapshot"
+    assert good.json()["as_of_beijing"] is None
+    assert good.json()["games"][0]["venue_name"] == "TD Garden"
+    assert good.json()["games"][0]["venue_city"] == "Boston"
     # A normal NBA slate can contain multiple games on one local calendar
     # date.  The highlights projection must preserve every normalized game;
     # the UI is responsible for selecting one card for the detailed HUD.
@@ -117,6 +121,10 @@ async def test_hybrid_historical_empty_fills_review_from_snapshot() -> None:
     assert len(ranged.json()["games"]) == 3
     assert dated.json()["evidence_state"] == "partial"
     assert ranged.json()["evidence_state"] == "partial"
+    assert dated.json()["data_origin"] == "demo_snapshot"
+    assert ranged.json()["data_origin"] == "demo_snapshot"
+    assert dated.json()["as_of_beijing"] is None
+    assert ranged.json()["as_of_beijing"] is None
 
 
 @pytest.mark.asyncio
@@ -191,6 +199,8 @@ async def test_highlights_range_returns_all_games_in_interval() -> None:
     assert payload["to"] == "2026-06-12"
     assert len(payload["games"]) == 6
     assert payload["games"][0]["game_id"] == "2026-finals-g4"
+    assert payload["data_origin"] == "demo_snapshot"
+    assert payload["as_of_beijing"] is None
 
 
 @pytest.mark.asyncio
@@ -229,6 +239,10 @@ async def test_highlight_detail_returns_leaders_and_play_by_play() -> None:
     payload = response.json()
     assert payload["game"]["home_score"] == 108
     assert payload["game"]["away_score"] == 104
+    assert payload["game"]["venue_name"] == "TD Garden"
+    assert payload["game"]["venue_city"] == "Boston"
+    assert payload["data_origin"] == "demo_snapshot"
+    assert payload["as_of_beijing"] is None
     assert payload["leaders"][0]["player_name"] == "杰伦·布朗"
     assert payload["leaders"][0]["points"] == 32
     assert len(payload["plays"]) == 6

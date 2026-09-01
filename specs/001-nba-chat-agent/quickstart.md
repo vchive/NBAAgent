@@ -320,11 +320,15 @@ make deploy-status
 | `我开启全智能了吗` | `completed` | `deterministic/not_requested` | 从本轮服务端配置确认 full，不让模型猜测应用状态 |
 | `你刚才说谁拿了 32 分` | `completed` | `deterministic/not_requested` | 重新读取核验 box score，返回杰伦·布朗 32 分 |
 | `刚才那个球是谁投的` | `completed` | `deterministic/not_requested` | 重新读取 PBP，说明终场标记及最近明确出手者 |
+| `这场比赛在哪儿进行的`（已选 G4） | `completed` | `agent/used` 或 `deterministic/not_requested` | 返回 TD Garden/Boston，不附加无关比分，并标记演示快照来源 |
+| `我第三个问题问的啥` | `completed` | `deterministic/not_requested` | 按 `turn_index` 复述仍在有界摘要中的第三问 |
+| `1+1等于几` | `no_data` | `deterministic/not_requested` | NBA 范围引导；Provider/cache/Agent 调用均为 0 |
 
-最终自动化门禁：pytest `415 passed`，Ruff/JS/compileall/git diff 检查通过，Playwright `13 passed`，
+最终自动化门禁：pytest `429 passed`，Ruff/JS/git diff 检查通过，Playwright `15 passed`，
 黄金题评测 `63 runs / 100.00`、安全否决 `0`。回归还验证了公开搜索组合下的日期可用性置灰和
 休赛期最近 5 场补足：无比赛日期返回 `empty`，最近 5 场接口返回 5 场已结束比赛并标记
-`partial`（使用有界历史快照补足）。
+`partial`（使用有界历史快照补足）。持久投影 schema 已升级至 v2，旧缓存不会把新增场馆或
+来源字段静默还原为空。
 
 ## 10. Delivery checklist
 

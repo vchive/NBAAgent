@@ -391,3 +391,23 @@ zero Agent/tool calls, and timeout/repeated-tool cases fall back safely.
   reviewer quickstart per FR-002/FR-036/SC-003/SC-017.
 - [X] T101 [US8] Run all quality/evaluation/browser gates, redeploy the public live profile, verify
   the session-meta matrix through the authenticated API, record evidence and push the branch.
+
+## Phase 28: Evidence metadata, venue and conversational edge convergence
+
+- [X] T102 [US1/US6] Preserve optional venue name/city/state/country from public game payloads
+  through the canonical `Game`, ESPN normalization, persistent highlights projection/rehydration,
+  selected-game tools and deterministic composition; keep absent venue null and answer only the
+  requested field, with contract/unit/integration regressions and design-contract updates per
+  FR-008/FR-013/FR-014 (partial).
+- [X] T103 [US1/US6] Distinguish fixture/demo snapshot evidence from live public verification in
+  chat/highlights responses, never stamp a synthetic snapshot as freshly verified public data or
+  imply that a general web search occurred, and add public-label/provenance regressions plus
+  reviewer documentation per Constitution II/FR-007/FR-014 (contradicts, CRITICAL).
+- [X] T104 [US8] Extend the deterministic Session Meta Resolver to answer bounded indexed prior
+  user-question references such as “我第三个问题问的啥”, resolve the requested retained turn by
+  monotonic `turn_index`, explain when it falls outside the bounded summary, and add classifier,
+  integration and E2E regressions plus spec/design updates per US8/AC2-AC3/FR-036/SC-017 (partial).
+- [X] T105 [US5] Recognize explicit arithmetic/general-knowledge forms such as `1+1等于几` as
+  out-of-scope before parser/provider/Agent execution, return the concise NBA redirection instead
+  of a query-object clarification, and add zero-downstream-call unit/integration regressions per
+  US5/AC1/FR-020/SC-004 (partial).

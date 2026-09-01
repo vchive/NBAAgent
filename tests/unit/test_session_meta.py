@@ -17,6 +17,8 @@ from apps.api.src.application.session_meta import (
         ("我问了多少次", SessionMetaKind.TURN_COUNT),
         ("我刚才问了什么？", SessionMetaKind.LAST_USER_MESSAGE),
         ("上一问是什么", SessionMetaKind.LAST_USER_MESSAGE),
+        ("我第三个问题问的啥", SessionMetaKind.INDEXED_USER_MESSAGE),
+        ("我第3个问题是什么？", SessionMetaKind.INDEXED_USER_MESSAGE),
         ("你刚才回答了什么", SessionMetaKind.LAST_ASSISTANT_MESSAGE),
         ("上一次你怎么回答的", SessionMetaKind.LAST_ASSISTANT_MESSAGE),
         ("总结一下我们刚才聊了什么", SessionMetaKind.CONVERSATION_SUMMARY),
@@ -33,6 +35,22 @@ def test_classifies_narrow_session_meta_questions(
     query = classify_session_meta_question(message)
     assert query is not None
     assert query.kind is kind
+
+
+@pytest.mark.parametrize(
+    "message,index",
+    [
+        ("我第三个问题问的啥", 3),
+        ("我第3个问题是什么？", 3),
+        ("第十个问题问了什么", 10),
+        ("我第12个问题是啥", 12),
+    ],
+)
+def test_indexed_question_preserves_requested_turn(message: str, index: int) -> None:
+    query = classify_session_meta_question(message)
+    assert query is not None
+    assert query.kind is SessionMetaKind.INDEXED_USER_MESSAGE
+    assert query.turn_index == index
 
 
 @pytest.mark.parametrize(

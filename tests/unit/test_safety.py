@@ -26,7 +26,13 @@ def test_red_line_is_classified_before_any_retrieval() -> None:
 
 @pytest.mark.parametrize(
     "message",
-    ["帮我写一段 Python 代码", "今天上海天气如何", "英超昨晚谁赢了"],
+    [
+        "帮我写一段 Python 代码",
+        "今天上海天气如何",
+        "英超昨晚谁赢了",
+        "1+1等于几",
+        "12 除以 3 是多少",
+    ],
 )
 def test_clear_non_nba_request_is_out_of_scope(message: str) -> None:
     decision = SafetyGuard().classify(message)

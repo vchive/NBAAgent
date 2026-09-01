@@ -345,6 +345,7 @@ class ChatResponse(_WireBase):
     blocks: list[AnswerBlock] = Field(default_factory=list, max_length=64)
     as_of_beijing: str | None = None
     evidence_state: EvidenceState
+    data_origin: Literal["public", "demo_snapshot", "mixed", "none"] = "none"
     corrections: list[PublicCorrection] = Field(default_factory=list, max_length=16)
     follow_up: str | None = Field(default=None, max_length=1000)
     latency_ms: int = Field(ge=0)
@@ -402,6 +403,7 @@ class ChatResponse(_WireBase):
             markdown = answer.markdown
             blocks = [AnswerBlock.from_domain(block) for block in answer.blocks]
             evidence_state = answer.evidence_state
+            data_origin = "none"
             corrections = [PublicCorrection.from_domain(item) for item in answer.corrections]
             follow_up = answer.follow_up
         else:
@@ -409,6 +411,7 @@ class ChatResponse(_WireBase):
             markdown = payload.get("markdown", payload.get("answer_markdown", ""))
             blocks = [AnswerBlock.from_domain(item) for item in payload.get("blocks", []) or []]
             evidence_state = payload.get("evidence_state", EvidenceState.NONE)
+            data_origin = payload.get("data_origin", "none")
             corrections = [
                 PublicCorrection.from_domain(item) for item in payload.get("corrections", []) or []
             ]
@@ -424,6 +427,7 @@ class ChatResponse(_WireBase):
             blocks=blocks,
             as_of_beijing=as_of_beijing,
             evidence_state=evidence_state,
+            data_origin=data_origin,
             corrections=corrections,
             follow_up=follow_up,
             latency_ms=latency_ms,
@@ -531,6 +535,10 @@ class HighlightGame(_WireBase):
     home_score: int | None = Field(default=None, ge=0)
     away_score: int | None = Field(default=None, ge=0)
     series_game_number: int | None = Field(default=None, ge=1, le=20)
+    venue_name: str | None = Field(default=None, max_length=240)
+    venue_city: str | None = Field(default=None, max_length=160)
+    venue_state: str | None = Field(default=None, max_length=120)
+    venue_country: str | None = Field(default=None, max_length=120)
 
     @field_validator("start_utc")
     @classmethod
@@ -582,6 +590,7 @@ class HighlightDetailResponse(_WireBase):
     plays: list[HighlightPlay] = Field(default_factory=list, max_length=2000)
     as_of_beijing: str | None = None
     evidence_state: EvidenceState
+    data_origin: Literal["public", "demo_snapshot", "mixed", "none"] = "none"
 
     @field_validator("as_of_beijing")
     @classmethod
@@ -603,6 +612,7 @@ class HighlightsResponse(_WireBase):
     games: list[HighlightGame] = Field(default_factory=list)
     as_of_beijing: str | None = None
     evidence_state: EvidenceState
+    data_origin: Literal["public", "demo_snapshot", "mixed", "none"] = "none"
 
     @field_validator("date")
     @classmethod
@@ -653,6 +663,7 @@ class HighlightsRangeResponse(_WireBase):
     games: list[HighlightGame] = Field(default_factory=list, max_length=2000)
     as_of_beijing: str | None = None
     evidence_state: EvidenceState
+    data_origin: Literal["public", "demo_snapshot", "mixed", "none"] = "none"
 
     @field_validator("from_date", "to_date")
     @classmethod

@@ -116,6 +116,21 @@ def verify_game(game: Game, evidence_ids: Iterable[str] = ()) -> FactBundle:
     ):
         winner = game.home if game.home_score > game.away_score else game.away
         facts.append(_fact(f"{game.game_id}:winner", game_ref, "winner", winner.display_name, ids))
+    if game.venue is not None:
+        facts.append(
+            _fact(
+                f"{game.game_id}:venue",
+                game_ref,
+                "venue",
+                {
+                    "name": game.venue.name,
+                    "city": game.venue.city,
+                    "state": game.venue.state,
+                    "country": game.venue.country,
+                },
+                ids,
+            )
+        )
     state = (
         EvidenceState.VERIFIED
         if all(item.verification is VerificationState.VERIFIED for item in facts)

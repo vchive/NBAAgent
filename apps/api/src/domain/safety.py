@@ -209,6 +209,11 @@ _OUT_OF_SCOPE_PATTERNS = _compile(
     r"(?:足球|英超|西甲|欧冠|f1|网球|电竞|英雄联盟|lol|电影|电视剧|小说|星座)",
     r"\b(?:weather|stocks?|exchange rate|program(?:ming)?|python|recipe|travel|"
     r"soccer|football|tennis|movie)\b",
+    # Explicit standalone arithmetic belongs to a general assistant, not an
+    # NBA fact lookup. Keep this pattern narrow so score lines such as
+    # “108-104” or basketball plus/minus wording remain in scope.
+    r"^\s*\d+(?:\.\d+)?\s*(?:\+|-|\*|×|/|÷|加|减|乘以?|除以?)\s*"
+    r"\d+(?:\.\d+)?\s*(?:等于|是|=)?\s*(?:多少|几|什么)?\s*[?？]?\s*$",
 )
 
 

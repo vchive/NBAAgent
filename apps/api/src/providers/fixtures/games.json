@@ -11,7 +11,8 @@
       "home_score": 108,
       "away_score": 104,
       "series_id": "2026-finals-bos-okc",
-      "series_game_number": 4
+      "series_game_number": 4,
+      "venue": {"name": "TD Garden", "city": "Boston", "state": "MA", "country": "USA"}
     },
     {
       "game_id": "2026-demo-lal-nyk",
@@ -23,7 +24,8 @@
       "home_score": 112,
       "away_score": 106,
       "series_id": null,
-      "series_game_number": null
+      "series_game_number": null,
+      "venue": {"name": "Crypto.com Arena", "city": "Los Angeles", "state": "CA", "country": "USA"}
     },
     {
       "game_id": "2026-demo-den-gsw",
@@ -35,7 +37,8 @@
       "home_score": 103,
       "away_score": 99,
       "series_id": null,
-      "series_game_number": null
+      "series_game_number": null,
+      "venue": {"name": "Ball Arena", "city": "Denver", "state": "CO", "country": "USA"}
     },
     {
       "game_id": "2026-finals-g3",
@@ -47,7 +50,8 @@
       "home_score": 101,
       "away_score": 112,
       "series_id": "2026-finals-bos-okc",
-      "series_game_number": 3
+      "series_game_number": 3,
+      "venue": {"name": "Paycom Center", "city": "Oklahoma City", "state": "OK", "country": "USA"}
     },
     {
       "game_id": "2026-finals-g2",
@@ -59,7 +63,8 @@
       "home_score": 107,
       "away_score": 99,
       "series_id": "2026-finals-bos-okc",
-      "series_game_number": 2
+      "series_game_number": 2,
+      "venue": {"name": "Paycom Center", "city": "Oklahoma City", "state": "OK", "country": "USA"}
     },
     {
       "game_id": "2026-finals-g1",
@@ -71,7 +76,8 @@
       "home_score": 118,
       "away_score": 110,
       "series_id": "2026-finals-bos-okc",
-      "series_game_number": 1
+      "series_game_number": 1,
+      "venue": {"name": "TD Garden", "city": "Boston", "state": "MA", "country": "USA"}
     },
     {
       "game_id": "2026-regular-bos-okc",
@@ -83,7 +89,8 @@
       "home_score": 106,
       "away_score": 103,
       "series_id": null,
-      "series_game_number": null
+      "series_game_number": null,
+      "venue": {"name": "TD Garden", "city": "Boston", "state": "MA", "country": "USA"}
     }
   ]
 }

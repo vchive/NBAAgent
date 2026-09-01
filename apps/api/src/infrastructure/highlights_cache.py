@@ -21,7 +21,10 @@ from apps.api.src.api.schemas import (
     HighlightsResponse,
 )
 
-CACHE_SCHEMA_VERSION = 1
+# Version the serialized projection contract, not only the SQLite table shape.
+# v2 adds venue metadata and data-origin semantics; accepting a v1 key would
+# silently hydrate those required semantics as ``None`` from an older payload.
+CACHE_SCHEMA_VERSION = 2
 _MODEL_BY_KIND: dict[str, type[BaseModel]] = {
     "date": HighlightsResponse,
     "range": HighlightsRangeResponse,
@@ -85,6 +88,8 @@ def _game_score(game: HighlightGame) -> int:
     score += int(game.away_score is not None) * 4
     score += int(game.status == "final") * 4
     score += int(game.series_game_number is not None)
+    score += int(game.venue_name is not None) * 2
+    score += int(game.venue_city is not None)
     return score
 
 

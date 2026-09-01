@@ -313,18 +313,21 @@ def _metric_refs(text: str, *, scope: StatScope = StatScope.GAME) -> list[Metric
     ranked_stat = _ranked_stat_rank(text)
     if any(token in text for token in ("什么时候", "几点开打", "几点开始", "开赛时间", "比赛时间")):
         metrics.append(MetricRef(name="start_time", unit=None, scope=scope))
-    # The first-release game contract does not yet carry venue or elapsed
-    # duration fields. Keep these as explicit typed metrics so the composer
-    # can state that limitation instead of falling through to unrelated box
-    # score facts (for example answering a venue question with a points
-    # leader).
+    # Venue is an optional canonical field while elapsed duration remains
+    # unavailable. Keep both as typed metrics so missing metadata never falls
+    # through to unrelated box-score facts.
     if any(
         token in text
         for token in (
             "在哪儿举办",
             "在哪里举办",
             "在哪举办",
+            "在哪儿进行",
+            "在哪里进行",
+            "在哪进行",
             "比赛地点",
+            "比赛在哪儿",
+            "比赛在哪里",
             "举办地",
             "场馆",
             "球馆",

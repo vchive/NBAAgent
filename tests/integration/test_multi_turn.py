@@ -57,19 +57,30 @@ async def test_selected_highlight_game_binds_chat_context_for_shorthand_and_matc
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("question", ["这场比赛在哪儿举办的？", "这场比赛时长多久？"])
-async def test_selected_game_missing_metadata_stays_bound_and_does_not_add_unrelated_facts(
-    question: str,
-) -> None:
+async def test_selected_game_venue_stays_bound_and_does_not_add_unrelated_facts() -> None:
     usecase = ChatUseCase(FixtureProvider())
     result = await usecase.handle(
-        {"message": question, "selected_game_id": "2026-finals-g4"}
+        {"message": "这场比赛在哪儿举办的？", "selected_game_id": "2026-finals-g4"}
+    )
+    assert result.status == "completed"
+    assert "TD Garden" in result.answer_markdown
+    assert "Boston" in result.answer_markdown
+    assert "勇士" not in result.answer_markdown
+    assert "掘金" not in result.answer_markdown
+    assert "分差" not in result.answer_markdown
+    assert "总得分" not in result.answer_markdown
+
+
+@pytest.mark.asyncio
+async def test_selected_game_missing_duration_stays_bound_without_unrelated_facts() -> None:
+    usecase = ChatUseCase(FixtureProvider())
+    result = await usecase.handle(
+        {"message": "这场比赛时长多久？", "selected_game_id": "2026-finals-g4"}
     )
     assert result.status == "completed"
     assert "雷霆" in result.answer_markdown
     assert "凯尔特人" in result.answer_markdown
-    assert "勇士" not in result.answer_markdown
-    assert "掘金" not in result.answer_markdown
+    assert "暂时无法核验" in result.answer_markdown
     assert "分差" not in result.answer_markdown
     assert "总得分" not in result.answer_markdown
 

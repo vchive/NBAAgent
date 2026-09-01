@@ -39,6 +39,14 @@ def _scoreboard() -> dict:
                 "status": {"type": {"state": "post", "completed": True}},
                 "competitions": [
                     {
+                        "venue": {
+                            "fullName": "TD Garden",
+                            "address": {
+                                "city": "Boston",
+                                "state": "MA",
+                                "country": "USA",
+                            },
+                        },
                         "competitors": [
                             {
                                 "homeAway": "home",
@@ -140,12 +148,19 @@ async def test_scoreboard_and_summary_are_normalized() -> None:
         assert game.status.value == "FINAL"
         assert game.home.kind is EntityKind.TEAM
         assert game.series_game_number == 4
+        assert game.venue is not None
+        assert game.venue.name == "TD Garden"
+        assert game.venue.city == "Boston"
+        assert game.venue.state == "MA"
+        assert game.venue.country == "USA"
         assert result.evidence[0].source_class.value == "ESTABLISHED_SPORTS"
 
         summary = await adapter.get_game_summary("401-test", _budget())
         assert summary.error is None
         assert summary.data is not None
         assert summary.data.game.status.value == "FINAL"
+        assert summary.data.game.venue is not None
+        assert summary.data.game.venue.name == "TD Garden"
         assert summary.data.leaders[0].metrics["points"] == 32
         assert summary.data.plays is not None
         assert summary.data.plays.events[0].event_type is PlayEventType.FREE_THROW

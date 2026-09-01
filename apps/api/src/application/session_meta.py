@@ -18,6 +18,7 @@ from apps.api.src.domain.models import ConversationContext
 class SessionMetaKind(StrEnum):
     TURN_COUNT = "TURN_COUNT"
     LAST_USER_MESSAGE = "LAST_USER_MESSAGE"
+    INDEXED_USER_MESSAGE = "INDEXED_USER_MESSAGE"
     LAST_ASSISTANT_MESSAGE = "LAST_ASSISTANT_MESSAGE"
     CONVERSATION_SUMMARY = "CONVERSATION_SUMMARY"
     ACTIVE_SUBJECT = "ACTIVE_SUBJECT"
@@ -27,9 +28,15 @@ class SessionMetaKind(StrEnum):
 @dataclass(frozen=True, slots=True)
 class SessionMetaQuery:
     kind: SessionMetaKind
+    turn_index: int | None = None
 
 
 _END = r"(?:[!！,.，。?？\s]*)$"
+_INDEXED_USER_MESSAGE_RE = re.compile(
+    r"^(?:我)?第(?P<index>\d{1,4}|[零〇一二两三四五六七八九十百千]+)个"
+    r"(?:问题|提问)(?:是|问的是|问的|问了)?(?:啥|什么)(?:内容)?" + _END,
+    re.IGNORECASE,
+)
 _PATTERNS: tuple[tuple[SessionMetaKind, re.Pattern[str]], ...] = (
     (
         SessionMetaKind.TURN_COUNT,
@@ -92,10 +99,59 @@ _PATTERNS: tuple[tuple[SessionMetaKind, re.Pattern[str]], ...] = (
 )
 
 
+_CHINESE_DIGITS = {
+    "零": 0,
+    "〇": 0,
+    "一": 1,
+    "二": 2,
+    "两": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+}
+
+
+def _positive_index(value: str) -> int | None:
+    """Parse a bounded Arabic/Chinese ordinal without guessing malformed text."""
+
+    if value.isdigit():
+        parsed = int(value)
+        return parsed if 1 <= parsed <= 9999 else None
+    total = 0
+    section = 0
+    number = 0
+    units = {"十": 10, "百": 100, "千": 1000}
+    for token in value:
+        if token in _CHINESE_DIGITS:
+            number = _CHINESE_DIGITS[token]
+            continue
+        unit = units.get(token)
+        if unit is None:
+            return None
+        if number == 0:
+            number = 1
+        section += number * unit
+        number = 0
+    total = section + number
+    return total if 1 <= total <= 9999 else None
+
+
 def classify_session_meta_question(message: str) -> SessionMetaQuery | None:
     """Classify only narrow, non-factual questions about application state."""
 
     text = " ".join(str(message or "").strip().split())
+    indexed = _INDEXED_USER_MESSAGE_RE.fullmatch(text)
+    if indexed is not None:
+        turn_index = _positive_index(indexed.group("index"))
+        if turn_index is not None:
+            return SessionMetaQuery(
+                kind=SessionMetaKind.INDEXED_USER_MESSAGE,
+                turn_index=turn_index,
+            )
     for kind, pattern in _PATTERNS:
         if pattern.fullmatch(text):
             return SessionMetaQuery(kind=kind)
@@ -134,6 +190,32 @@ def render_session_meta_answer(
         if last is None or not last.user_message:
             return "这是当前会话的第一条问题，之前没有可复述的问题记录。"
         return f"您上一条问题是：“{_escape_inline_markdown(last.user_message)}”"
+
+    if query.kind is SessionMetaKind.INDEXED_USER_MESSAGE:
+        turn_index = query.turn_index or 0
+        if turn_index > count:
+            return (
+                f"当前会话此前只有 **{count}** 个已记录问题，"
+                f"还没有第 **{turn_index}** 个问题。"
+            )
+        retained = next(
+            (
+                item
+                for item in context.recent_turn_summaries
+                if item.turn_index == turn_index and item.user_message
+            ),
+            None,
+        )
+        if retained is None:
+            kept = len(context.recent_turn_summaries)
+            return (
+                f"第 **{turn_index}** 个问题已超出当前保留的最近 **{kept}** 条对话记录，"
+                "因此现在无法准确复述。"
+            )
+        return (
+            f"您第 **{turn_index}** 个问题是：“"
+            f"{_escape_inline_markdown(retained.user_message or '')}”"
+        )
 
     if query.kind is SessionMetaKind.LAST_ASSISTANT_MESSAGE:
         if last is None:

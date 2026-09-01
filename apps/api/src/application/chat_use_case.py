@@ -154,6 +154,9 @@ class ChatResult:
     blocks: list[Any] = field(default_factory=list)
     as_of_beijing: str | None = None
     evidence_state: str = "none"
+    # Generic, provider-neutral origin classification used to distinguish a
+    # fixed demo snapshot from a freshly retrieved public record.
+    data_origin: str = "none"
     corrections: list[Any] = field(default_factory=list)
     follow_up: str | None = None
     latency_ms: int = 0
@@ -189,6 +192,7 @@ class ChatResult:
             "blocks": dump(self.blocks),
             "as_of_beijing": self.as_of_beijing,
             "evidence_state": self.evidence_state,
+            "data_origin": self.data_origin,
             "corrections": dump(self.corrections),
             "follow_up": self.follow_up,
             "latency_ms": self.latency_ms,
@@ -596,6 +600,7 @@ class ChatUseCase:
                         blocks=replay.get("blocks", []),
                         as_of_beijing=replay.get("as_of_beijing"),
                         evidence_state=replay.get("evidence_state", "none"),
+                        data_origin=replay.get("data_origin", "none"),
                         corrections=replay.get("corrections", []),
                         follow_up=replay.get("follow_up"),
                         latency_ms=replay.get("latency_ms", 0),
@@ -976,6 +981,9 @@ class ChatUseCase:
                                 user_message=req.message,
                             )
                             as_of = self._agent_as_of(agent_turn.observations)
+                            data_origin = self._agent_data_origin(
+                                agent_turn.observations
+                            )
                             result = self._result_from_draft(
                                 request_id,
                                 session_id,
@@ -983,6 +991,7 @@ class ChatUseCase:
                                 guarded,
                                 started,
                                 as_of=as_of,
+                                data_origin=data_origin,
                                 composition=self._composition_from_telemetry(telemetry),
                             )
                             telemetry.finish(
@@ -1482,7 +1491,13 @@ class ChatUseCase:
                 "completed",
                 guarded,
                 started,
-                as_of=format_beijing(provider_result.retrieved_at_utc),
+                as_of=(
+                    None
+                    if self._data_origin(provider_result.evidence)
+                    == "demo_snapshot"
+                    else format_beijing(provider_result.retrieved_at_utc)
+                ),
+                data_origin=self._data_origin(provider_result.evidence),
                 composition=self._composition_from_telemetry(telemetry),
             )
             telemetry.finish(outcome="completed", total_latency_ms=result.latency_ms)
@@ -1757,6 +1772,43 @@ class ChatUseCase:
         return max(values) if values else None
 
     @staticmethod
+    def _agent_data_origin(observations: list[dict[str, Any]]) -> str:
+        values = {
+            str(item.get("data_origin") or "none")
+            for item in observations
+            if isinstance(item, Mapping)
+        }
+        values.discard("none")
+        if not values:
+            return "none"
+        if values == {"demo_snapshot"}:
+            return "demo_snapshot"
+        if values == {"public"}:
+            return "public"
+        return "mixed"
+
+    @staticmethod
+    def _data_origin(evidence: Any) -> str:
+        classes = {
+            str(
+                getattr(
+                    getattr(item, "source_class", None),
+                    "value",
+                    getattr(item, "source_class", ""),
+                )
+            ).upper()
+            for item in list(evidence or [])
+        }
+        classes.discard("")
+        if not classes:
+            return "none"
+        if classes == {"FIXTURE"}:
+            return "demo_snapshot"
+        if "FIXTURE" in classes:
+            return "mixed"
+        return "public"
+
+    @staticmethod
     def _agent_result_relevant(question: str, result: AgentTurnResult) -> bool:
         """Reject a successful Agent turn whose observations answer another task.
 
@@ -1967,6 +2019,7 @@ class ChatUseCase:
                 ],
                 "evidence_state": nested.evidence_state,
                 "as_of_beijing": nested.as_of_beijing,
+                "data_origin": nested.data_origin,
             }
 
         return run
@@ -2042,7 +2095,12 @@ class ChatUseCase:
                 "as_of_beijing": None,
             }
         games = [item for item in (provider_result.data or []) if isinstance(item, Game)]
-        as_of = format_beijing(provider_result.retrieved_at_utc)
+        data_origin = self._data_origin(provider_result.evidence)
+        as_of = (
+            None
+            if data_origin == "demo_snapshot"
+            else format_beijing(provider_result.retrieved_at_utc)
+        )
         if not games:
             message = (
                 f"北京时间 **{scope['start_date']} 至 {scope['end_date']}** 的公开赛程查询"
@@ -2058,6 +2116,7 @@ class ChatUseCase:
                 ],
                 "evidence_state": "none",
                 "as_of_beijing": as_of,
+                "data_origin": data_origin,
             }
         intent = QueryIntent(
             category=Category.B,
@@ -2123,6 +2182,7 @@ class ChatUseCase:
                 "blocks": [],
                 "evidence_state": "none",
                 "as_of_beijing": as_of,
+                "data_origin": data_origin,
             }
         return {
             "status": "completed",
@@ -2132,6 +2192,7 @@ class ChatUseCase:
             "blocks": [block.model_dump(mode="json") for block in guarded.blocks],
             "evidence_state": guarded.evidence_state.value.lower(),
             "as_of_beijing": as_of,
+            "data_origin": data_origin,
         }
 
     async def _call_plan(self, plan: QueryPlan, budget: RequestBudget, token: CancelToken):
@@ -2777,6 +2838,7 @@ class ChatUseCase:
         started: float,
         *,
         as_of: str | None,
+        data_origin: str = "none",
         composition: Mapping[str, Any] | None = None,
     ) -> ChatResult:
         return ChatResult(
@@ -2789,6 +2851,7 @@ class ChatUseCase:
             evidence_state=draft.evidence_state.value.lower()
             if hasattr(draft.evidence_state, "value")
             else str(draft.evidence_state).lower(),
+            data_origin=data_origin,
             corrections=draft.corrections,
             follow_up=draft.follow_up,
             latency_ms=max(0, int((time.monotonic() - started) * 1000)),

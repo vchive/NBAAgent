@@ -51,6 +51,7 @@ def _wire(result: ChatResult) -> ChatResponse | ErrorResponse:
                 "markdown": result.answer_markdown,
                 "blocks": result.blocks,
                 "evidence_state": result.evidence_state,
+                "data_origin": result.data_origin,
                 "corrections": result.corrections,
                 "follow_up": result.follow_up,
                 "composition": result.composition,

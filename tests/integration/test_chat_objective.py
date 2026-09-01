@@ -44,6 +44,8 @@ async def test_objective_chat_creates_session_and_returns_traceable_fact() -> No
     assert payload["session_id"]
     assert payload["request_id"]
     assert payload["evidence_state"] == "verified"
+    assert payload["data_origin"] == "demo_snapshot"
+    assert payload["as_of_beijing"] is None
     assert "杰伦·布朗" in payload["answer_markdown"]
     assert "32" in payload["answer_markdown"]
     assert "provider" not in response.text.lower()

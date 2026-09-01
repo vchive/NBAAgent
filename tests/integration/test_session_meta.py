@@ -115,6 +115,61 @@ async def test_last_question_last_answer_and_summary_use_only_current_session() 
 
 
 @pytest.mark.asyncio
+async def test_indexed_question_reads_the_requested_retained_turn_without_agent() -> None:
+    agent = CountingAgent()
+    usecase = ChatUseCase(
+        FixtureProvider(), settings=full_settings(), agent_runtime=agent
+    )
+    session_id = uuid4()
+    questions = [
+        "你好",
+        "你是谁",
+        "2025-26 总决赛 G4 最后 5 秒发生了什么？",
+        "当前选中的比赛是什么",
+    ]
+    for question in questions:
+        result = await usecase.handle(
+            {
+                "session_id": session_id,
+                "message": question,
+                "intelligence_mode": "full",
+            }
+        )
+        assert result.status in {"completed", "no_data", "needs_clarification"}
+
+    calls_before_indexed_question = agent.calls
+
+    indexed = await usecase.handle(
+        {
+            "session_id": session_id,
+            "message": "我第三个问题问的啥",
+            "intelligence_mode": "full",
+        }
+    )
+
+    assert indexed.status == "completed"
+    assert "第 **3** 个问题" in indexed.answer_markdown
+    assert "最后 5 秒" in indexed.answer_markdown
+    assert agent.calls == calls_before_indexed_question
+
+
+@pytest.mark.asyncio
+async def test_indexed_question_explains_bounded_history_eviction() -> None:
+    usecase = ChatUseCase(FixtureProvider())
+    session_id = uuid4()
+    for _ in range(10):
+        await usecase.handle({"session_id": session_id, "message": "你好"})
+
+    result = await usecase.handle(
+        {"session_id": session_id, "message": "我第一个问题是什么"}
+    )
+
+    assert result.status == "completed"
+    assert "超出当前保留的最近" in result.answer_markdown
+    assert "第 **1** 个问题" in result.answer_markdown
+
+
+@pytest.mark.asyncio
 async def test_active_game_and_mode_are_resolved_before_agent_routing() -> None:
     agent = CountingAgent()
     usecase = ChatUseCase(

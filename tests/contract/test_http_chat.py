@@ -62,20 +62,42 @@ async def test_selected_game_id_is_forwarded_to_sync_and_sse_chat() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "message",
-    ["这场比赛在哪儿举办的？", "这场比赛时长多久？"],
-)
-async def test_missing_game_metadata_does_not_fall_through_to_unrelated_leader(
-    message: str,
-) -> None:
+async def test_selected_game_venue_is_answered_without_unrelated_score_facts() -> None:
     app = create_app()
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
         response = await client.post(
             "/api/v1/chat",
-            json={"message": message, "selected_game_id": "2026-finals-g4"},
+            json={
+                "message": "这场比赛在哪儿举办的？",
+                "selected_game_id": "2026-finals-g4",
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    answer = payload["answer_markdown"]
+    assert "TD Garden" in answer
+    assert "Boston" in answer
+    assert "108–104" not in answer
+    assert "得分王" not in answer
+    assert payload["data_origin"] == "demo_snapshot"
+    assert payload["as_of_beijing"] is None
+
+
+@pytest.mark.asyncio
+async def test_missing_game_duration_does_not_fall_through_to_unrelated_leader() -> None:
+    app = create_app()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/v1/chat",
+            json={
+                "message": "这场比赛时长多久？",
+                "selected_game_id": "2026-finals-g4",
+            },
         )
 
     assert response.status_code == 200

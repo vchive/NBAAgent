@@ -255,9 +255,17 @@ Game
   away_score: int?
   series_id: string?
   series_game_number: int?
+  venue: Venue?
+
+Venue
+  name: string
+  city: string?
+  state: string?
+  country: string?
 ```
 
-唯一性由 `game_id` 保证；比分只有在 `FINAL` 或来源明确标记时才可用于最终赛果。
+唯一性由 `game_id` 保证；比分只有在 `FINAL` 或来源明确标记时才可用于最终赛果。场馆为
+可选公开元数据，适配器缺失时整体为 `null`，不得从主队名称猜测球馆。
 
 ### Statistics and standings
 
@@ -420,6 +428,7 @@ AgentToolObservation
   blocks: AnswerBlock[]
   evidence_state: EvidenceState
   as_of_beijing: string?
+  data_origin: PUBLIC | DEMO_SNAPSHOT | MIXED | NONE
 
 EvaluationTurn
   turn_index: int (1-based, contiguous within the case)
@@ -476,7 +485,9 @@ NBA 工具核验。
 `EvaluationCase.turns` 是评测输入的唯一规范形态：单轮题包含一个 turn，H 类题包含按
 `turn_index` 排序的三轮消息并在同一 `session_id` 中执行。`expected_entities`、
 `reference_facts` 和 `tolerance` 可按轮定义，避免把三轮追问压缩成一个字符串；
-`source_snapshot` 只标识版本化 fixture，不进入用户响应。
+`source_snapshot` 只标识版本化 fixture，不进入用户响应。公开响应只投影泛化的
+`data_origin=demo_snapshot`/“演示快照”，不暴露 fixture 版本、Provider 名或内部来源标识；
+演示快照不携带伪装成当前公开核验时间的 `as_of_beijing`。
 
 ## 5. Relationships and lifecycle
 

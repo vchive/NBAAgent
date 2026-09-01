@@ -27,6 +27,8 @@ def _game(*, game_id: str = "g1", status: str = "final") -> HighlightGame:
         home_score=108 if status == "final" else None,
         away_score=104 if status == "final" else None,
         series_game_number=4,
+        venue_name="TD Garden",
+        venue_city="Boston",
     )
 
 
@@ -67,7 +69,7 @@ def _detail(*, plays: int = 2, home_score: int = 108) -> HighlightDetailResponse
 
 def test_stable_cache_key_is_bounded_and_rejects_unvalidated_parts() -> None:
     assert stable_cache_key("recent", "Asia/Shanghai", "2026-09-01", 5) == (
-        "recent:v1:Asia/Shanghai:2026-09-01:5"
+        "recent:v2:Asia/Shanghai:2026-09-01:5"
     )
     try:
         stable_cache_key("recent", "bad\nvalue")
@@ -85,6 +87,8 @@ def test_typed_round_trip_and_stale_policy(tmp_path) -> None:
     fresh = cache.get(key, HighlightsRangeResponse, now=NOW + timedelta(seconds=59))
     assert fresh is not None and fresh.stale is False
     assert fresh.value.games[0].home_score == 108
+    assert fresh.value.games[0].venue_name == "TD Garden"
+    assert fresh.value.games[0].venue_city == "Boston"
     assert cache.get(key, HighlightsRangeResponse, now=NOW + timedelta(seconds=61)) is None
     stale = cache.get(
         key,
@@ -210,7 +214,27 @@ def test_unwritable_database_fails_open(tmp_path) -> None:
     # Parent directories are deliberately not auto-created by the storage
     # object; application startup owns the configured mount point.
     assert cache.available is False
-    assert cache.get("recent:v1:x", HighlightsRangeResponse, now=NOW) is None
+    assert cache.get("recent:v2:x", HighlightsRangeResponse, now=NOW) is None
     assert not cache.set(
-        "recent:v1:x", "recent", _recent(), ttl_seconds=60, now=NOW
+        "recent:v2:x", "recent", _recent(), ttl_seconds=60, now=NOW
     )
+
+
+def test_previous_projection_schema_key_is_never_rehydrated(tmp_path) -> None:
+    path = tmp_path / "highlights.sqlite3"
+    cache = SQLiteHighlightsCache(path)
+    current_key = stable_cache_key("recent", "Asia/Shanghai", "2026-09-01", 5)
+    assert cache.set(current_key, "recent", _recent(), ttl_seconds=60, now=NOW)
+    cache.close()
+
+    previous_key = current_key.replace("recent:v2:", "recent:v1:", 1)
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "UPDATE highlights_cache SET cache_key = ?, schema_version = 1 WHERE cache_key = ?",
+            (previous_key, current_key),
+        )
+        connection.commit()
+
+    reopened = SQLiteHighlightsCache(path)
+    assert reopened.get(current_key, HighlightsRangeResponse, now=NOW) is None
+    assert reopened.get(previous_key, HighlightsRangeResponse, now=NOW) is None

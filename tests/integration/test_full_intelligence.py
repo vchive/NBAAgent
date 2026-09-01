@@ -225,6 +225,28 @@ async def test_full_mode_selected_game_uses_agent_with_verified_tool_scope() -> 
 
 
 @pytest.mark.asyncio
+async def test_full_mode_selected_game_venue_keeps_snapshot_origin() -> None:
+    agent = QueryingSmartAgent()
+    usecase = ChatUseCase(FixtureProvider(), settings=settings(), agent_runtime=agent)
+
+    result = await usecase.handle(
+        {
+            "message": "这场比赛在哪儿进行的？",
+            "selected_game_id": "2026-finals-g4",
+            "intelligence_mode": "full",
+        }
+    )
+
+    assert result.status == "completed"
+    assert "TD Garden" in result.answer_markdown
+    assert "Boston" in result.answer_markdown
+    assert "108–104" not in result.answer_markdown
+    assert result.data_origin == "demo_snapshot"
+    assert result.as_of_beijing is None
+    assert result.composition["mode"] == "agent"
+
+
+@pytest.mark.asyncio
 async def test_full_mode_selected_game_tactical_question_uses_agent() -> None:
     agent = QueryingSmartAgent()
     usecase = ChatUseCase(FixtureProvider(), settings=settings(), agent_runtime=agent)

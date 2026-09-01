@@ -6,6 +6,10 @@
       "season": {"year": 2026, "displayName": "2025-26"},
       "status": {"type": {"state": "post", "completed": true}},
       "competitions": [{
+        "venue": {
+          "fullName": "TD Garden",
+          "address": {"city": "Boston", "state": "MA", "country": "USA"}
+        },
         "competitors": [
           {"homeAway": "home", "score": "108", "team": {"id": "2", "displayName": "Boston Celtics", "abbreviation": "BOS"}},
           {"homeAway": "away", "score": "104", "team": {"id": "25", "displayName": "Oklahoma City Thunder", "abbreviation": "OKC"}}

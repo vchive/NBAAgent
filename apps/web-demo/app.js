@@ -202,6 +202,8 @@
         home_score: 108,
         away_score: 104,
         series_game_number: 4,
+        venue_name: "TD Garden",
+        venue_city: "Boston",
         status: "final",
         start_utc: "2026-06-12T01:30:00Z",
         quarter_scores: { Q1: "27–24", Q2: "25–31", Q3: "28–31", Q4: "24–22" },
@@ -219,6 +221,8 @@
         away_score: 99,
         status: "final",
         series_game_number: null,
+        venue_name: "Ball Arena",
+        venue_city: "Denver",
         start_utc: "2026-06-11T21:30:00Z",
       },
       {
@@ -232,6 +236,8 @@
         away_score: 106,
         status: "final",
         series_game_number: null,
+        venue_name: "Crypto.com Arena",
+        venue_city: "Los Angeles",
         start_utc: "2026-06-11T18:00:00Z",
       },
     ],
@@ -245,6 +251,8 @@
       home_score: 101,
       away_score: 112,
       series_game_number: 3,
+      venue_name: "Paycom Center",
+      venue_city: "Oklahoma City",
       status: "final",
       start_utc: "2026-06-10T01:30:00Z",
     },
@@ -258,6 +266,8 @@
       home_score: 107,
       away_score: 99,
       series_game_number: 2,
+      venue_name: "Paycom Center",
+      venue_city: "Oklahoma City",
       status: "final",
       start_utc: "2026-06-08T01:30:00Z",
     },
@@ -271,6 +281,8 @@
       home_score: 118,
       away_score: 110,
       series_game_number: 1,
+      venue_name: "TD Garden",
+      venue_city: "Boston",
       status: "final",
       start_utc: "2026-06-06T01:30:00Z",
     },
@@ -1429,7 +1441,16 @@
     name.textContent = "COURTSIDE";
     const time = document.createElement("span");
     time.textContent = currentShortTime();
-    const evidence = evidenceLabel(response.evidence_state, response.status);
+    const dataOrigin = String(response.data_origin || "none").toLowerCase();
+    const demoSnapshot = dataOrigin === "demo_snapshot"
+      && String(response.evidence_state || "none").toLowerCase() !== "none";
+    const mixedSnapshot = dataOrigin === "mixed"
+      && String(response.evidence_state || "none").toLowerCase() !== "none";
+    const evidence = demoSnapshot
+      ? { text: "演示快照", className: "partial", icon: "◇" }
+      : mixedSnapshot
+        ? { text: "部分核验 · 含演示快照", className: "partial", icon: "△" }
+      : evidenceLabel(response.evidence_state, response.status);
     const mark = document.createElement("span");
     mark.className = "verified-mark";
     mark.textContent = `${evidence.icon} ${evidence.text}`;
@@ -1485,7 +1506,13 @@
     chip.className = `evidence-chip ${evidence.className}`;
     chip.append(document.createTextNode(`${evidence.icon} ${evidence.text}`));
     const asOf = document.createElement("span");
-    asOf.textContent = response.as_of_beijing
+    asOf.textContent = demoSnapshot
+      ? "固定演示快照 · 不代表实时公开赛事记录"
+      : mixedSnapshot
+        ? response.as_of_beijing
+          ? `公开查询 + 固定演示快照 · 查询截至北京时间 ${response.as_of_beijing}`
+          : "公开查询 + 固定演示快照 · 不代表完整实时赛事记录"
+      : response.as_of_beijing
       ? `公开资料 · 数据截至北京时间 ${response.as_of_beijing}`
       : response.status === "completed" && String(response.evidence_state || "none").toLowerCase() === "none"
         ? "本轮回答 · 无需展示时间"
@@ -1628,6 +1655,7 @@
       latency_ms: 1680,
       as_of_beijing: "2026-06-13 11:42",
       evidence_state: "verified",
+      data_origin: "demo_snapshot",
       corrections: [],
       follow_up: null,
       composition: { mode: "deterministic", status: "not_requested", latency_ms: 0 },
@@ -1689,6 +1717,21 @@
           answer_markdown: `${matchup}于 **${formatGameStart(selected.start_utc)}**（北京时间）开赛。`,
           blocks: [{ type: "fact", label: "开赛时间", value: formatGameStart(selected.start_utc), unit: "北京时间" }],
           follow_up: "还可以问我这场比赛的得分王或关键回合。",
+        };
+      }
+      if (selected && /在哪儿|在哪里|在哪进行|比赛地点|场馆|球馆|举办地/i.test(text)) {
+        const venue = selected.venue_name || "当前快照未提供场馆";
+        const city = selected.venue_city ? `（${selected.venue_city}）` : "";
+        return {
+          ...base,
+          status: "completed",
+          answer_markdown: selected.venue_name
+            ? `这场比赛在 **${venue}** 举行${city}。`
+            : "当前演示快照未提供这场比赛的场馆信息。",
+          blocks: selected.venue_name
+            ? [{ type: "fact", label: "比赛场馆", value: venue, unit: selected.venue_city || null }]
+            : [{ type: "warning", content: "当前演示快照未提供这场比赛的场馆信息。" }],
+          follow_up: "还可以问我这场比赛的关键回合。",
         };
       }
       return {
@@ -2111,6 +2154,22 @@
     });
   }
 
+  function highlightGamesFromPayload(payload) {
+    const origin = String(payload?.data_origin || "none").toLowerCase();
+    return normalizeHighlightGames(payload?.games || []).map((game) => ({
+      ...game,
+      data_origin: origin,
+    }));
+  }
+
+  function isDemoGame(game) {
+    return ["demo_snapshot", "mixed"].includes(
+      String(game?.data_origin || "none").toLowerCase(),
+    )
+      || String(game?.game_id || "").startsWith("2026-demo-")
+      || state.apiDataMode === "fixture";
+  }
+
   function pbpForGame(gameId) {
     const key = String(gameId || "");
     return Object.prototype.hasOwnProperty.call(PBP_BY_GAME, key) ? PBP_BY_GAME[key] : null;
@@ -2317,7 +2376,7 @@
       coverage.textContent = gameHasPbp(game) ? "文字回放" : "暂无 PBP";
       const hint = document.createElement("span");
       hint.className = "game-list-hint";
-      hint.textContent = String(gameId).startsWith("2026-demo-") ? "DEMO" : "查看 HUD";
+      hint.textContent = isDemoGame(game) ? "DEMO" : "查看 HUD";
       foot.append(coverage, hint);
       card.append(head, matchup, foot);
       el.gameList.append(card);
@@ -2336,7 +2395,7 @@
     if (el.featuredAwayName) el.featuredAwayName.textContent = game.away_name || "客队";
     if (el.featuredGameMeta) {
       const gameNumber = game.series_game_number ? `G${game.series_game_number}` : "GAME";
-      const demoLabel = String(game.game_id || "").startsWith("2026-demo-") ? " · DEMO" : "";
+      const demoLabel = isDemoGame(game) ? " · DEMO" : "";
       const replayLabel = gameHasPbp(game) ? "文字回放" : "比赛焦点";
       // Provider/game identifiers are internal implementation details. Keep
       // the card useful to a viewer without leaking opaque IDs.
@@ -2596,7 +2655,7 @@
         const payload = await window.CourtsideApi.highlightsRecent(5, "Asia/Shanghai");
         if (requestNumber !== state.highlightRequest) return;
         const toDate = payload?.to || beijingDateString();
-        renderHighlightProjection(payload?.games || [], "history", toDate, {
+        renderHighlightProjection(highlightGamesFromPayload(payload), "history", toDate, {
           historyView: "recent",
           historyTitle: "精彩回顾 · 最近 5 场",
           listLabel: "最近 5 场比赛",
@@ -2674,7 +2733,7 @@
       try {
         const payload = await window.CourtsideApi.highlightsRange(fromDate, toDate, "Asia/Shanghai");
         if (requestNumber !== state.highlightRequest) return;
-        renderHighlightProjection(payload?.games || [], "history", payload?.to || toDate, {
+        renderHighlightProjection(highlightGamesFromPayload(payload), "history", payload?.to || toDate, {
           historyView: "range",
           rangeFrom: payload?.from || fromDate,
           rangeTo: payload?.to || toDate,
@@ -2749,7 +2808,7 @@
         if (requestNumber !== state.highlightRequest) return;
         const dateValue = payload?.date || selectedDate || beijingDateString();
         recordHighlightAvailability(dateValue, Boolean(payload?.games?.length));
-        renderHighlightProjection(payload?.games || [], mode, dateValue);
+        renderHighlightProjection(highlightGamesFromPayload(payload), mode, dateValue);
         if (!payload?.games?.length && mode === "history") showToast("该日期暂无比赛记录");
         return;
       } catch (error) {

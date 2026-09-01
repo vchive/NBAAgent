@@ -15,6 +15,7 @@
   |---|---|
   | `QueryOutcome` | `completed`, `no_data`, `needs_clarification`, `blocked`, `failed` |
   | `EvidenceState` | `verified`, `partial`, `none` |
+  | `DataOrigin` | `public`, `demo_snapshot`, `mixed`, `none` |
   | `AnswerBlockType` | `text`, `analysis`, `warning`, `table`, `fact` |
   | `CorrectionStatus` | `corrected`, `unverified` |
 
@@ -35,6 +36,9 @@ codes use the uppercase names shown there.
 - `as_of_beijing` is nullable for blocked, clarification, empty or failed outcomes. When present
   it is formatted as `YYYY-MM-DD HH:mm` in `Asia/Shanghai`; it is a display timestamp, not a
   replacement for internal UTC instants.
+- `data_origin` is a generic per-response origin classification. `demo_snapshot` never exposes a
+  fixture/provider identifier and MUST use `as_of_beijing=null`; clients label it as a fixed demo
+  rather than “fresh public verification”.
 - Safety BLOCK and `OUT_OF_SCOPE` decisions are made before any Provider or Provider-cache lookup;
   their internal call/read/write counters are all zero.
 
@@ -100,6 +104,7 @@ or `no_data`). These are successful protocol responses, not transport failures:
   ],
   "as_of_beijing": "2026-08-26 21:30",
   "evidence_state": "verified|partial|none",
+  "data_origin": "public|demo_snapshot|mixed|none",
   "corrections": [
     {"status":"corrected|unverified","message":"仅含用户可见的本地化纠偏说明"}
   ],
@@ -245,11 +250,16 @@ facts:
       "away_name": "雷霆",
       "status": "final",
       "home_score": 108,
-      "away_score": 104
+      "away_score": 104,
+      "venue_name": "TD Garden",
+      "venue_city": "Boston",
+      "venue_state": "MA",
+      "venue_country": "USA"
     }
   ],
   "as_of_beijing": "2026-08-28 15:50",
-  "evidence_state": "verified|partial|none"
+  "evidence_state": "verified|partial|none",
+  "data_origin": "public|demo_snapshot|mixed|none"
 }
 ```
 

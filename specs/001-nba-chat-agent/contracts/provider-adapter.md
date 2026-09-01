@@ -65,7 +65,7 @@ base URL and path templates live in configuration/code, never in user responses.
 
 | Capability | Required source fields | Canonical output |
 |---|---|---|
-| Schedule/score | event ID, date, status, competitors, scores | `Game` |
+| Schedule/score | event ID, date, status, competitors, scores, optional venue name/address | `Game` |
 | Summary/box score | game header, teams, leaders, athlete stats | `GameBundle`, `StatLine` |
 | Play-by-play | period, display clock, sequence, participants, scoring, scores | `PlayByPlayBundle` |
 | Roster/profile | stable ID, display name, aliases, team | `Player`, `Team` |
@@ -76,6 +76,10 @@ base URL and path templates live in configuration/code, never in user responses.
 Adapters must send a descriptive User-Agent, enforce response-size and timeout limits, and honor
 terms, robots and rate limits. Date queries should be split into bounded daily requests; month-wide
 responses may be too large for a single request.
+
+场馆映射读取 competition 级 venue 的名称及 city/state/country；任一地址分量缺失时保持
+`null`，venue 名称本身缺失时整个 `Game.venue` 为 `null`。fixture evidence 必须保持
+`source_class=FIXTURE`，不得在 fallback 后伪装为实时公开来源。
 
 ### Controlled web-search augmentation
 

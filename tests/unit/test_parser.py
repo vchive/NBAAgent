@@ -208,6 +208,7 @@ def test_selected_game_tactical_question_preserves_tactical_intent() -> None:
     ("question", "metric"),
     [
         ("这场比赛在哪儿举办的？", "venue"),
+        ("这场比赛在哪儿进行的？", "venue"),
         ("这场比赛时长多久？", "game_duration"),
     ],
 )

@@ -861,6 +861,15 @@ class HistoryQuery(CanonicalModel):
     limit: int = Field(default=20, ge=1, le=50)
 
 
+class Venue(CanonicalModel):
+    """Optional public game location; missing components remain unknown."""
+
+    name: str = Field(min_length=1, max_length=240)
+    city: str | None = Field(default=None, max_length=160)
+    state: str | None = Field(default=None, max_length=120)
+    country: str | None = Field(default=None, max_length=120)
+
+
 class Game(CanonicalModel):
     game_id: str = Field(min_length=1, max_length=128)
     season: SeasonLabel
@@ -872,6 +881,7 @@ class Game(CanonicalModel):
     away_score: int | None = Field(default=None, ge=0)
     series_id: str | None = Field(default=None, max_length=128)
     series_game_number: int | None = Field(default=None, ge=1, le=20)
+    venue: Venue | None = None
 
     _validate_start = field_validator("start_utc")(_aware)
 
@@ -1394,5 +1404,6 @@ __all__ = [
     "TimeWindowScope",
     "TrustLevel",
     "TurnSummary",
+    "Venue",
     "VerificationState",
 ]

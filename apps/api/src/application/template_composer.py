@@ -152,12 +152,51 @@ class TemplateComposer:
             getattr(metric, "name", "")
             for metric in getattr(intent, "metrics", [])
         }
-        unavailable_game_metrics = requested_game_metrics & {"venue", "game_duration"}
-        # Venue and elapsed duration are not part of the normalized first
-        # release game payload. Answer those typed requests explicitly and
-        # stop before the generic score/leader renderer can append unrelated
-        # facts. This keeps a missing field honest and prevents a question
-        # such as “在哪儿举办” from becoming a points-leader answer.
+        metadata_metrics = requested_game_metrics & {"venue", "game_duration"}
+        metadata_only = bool(metadata_metrics) and requested_game_metrics <= {
+            "venue",
+            "game_duration",
+        }
+        unavailable_game_metrics: set[str] = set()
+        if "venue" in metadata_metrics and (game is None or game.venue is None):
+            unavailable_game_metrics.add("venue")
+        # Elapsed wall-clock duration is still not part of the canonical
+        # provider payload. Keep it explicitly unavailable rather than
+        # deriving it from scheduled/PBP timestamps.
+        if "game_duration" in metadata_metrics:
+            unavailable_game_metrics.add("game_duration")
+
+        if (
+            game is not None
+            and "venue" in metadata_metrics
+            and game.venue is not None
+            and not multi_game_schedule
+        ):
+            location = "、".join(
+                item
+                for item in (
+                    game.venue.city,
+                    game.venue.state,
+                    game.venue.country,
+                )
+                if item
+            )
+            venue_text = f"这场比赛在 **{game.venue.name}** 举行"
+            if location:
+                venue_text += f"（{location}）"
+            venue_text += "。"
+            blocks.append(
+                AnswerBlock(
+                    type=AnswerBlockType.FACT,
+                    label="比赛场馆",
+                    value=game.venue.name,
+                    unit=location or None,
+                )
+            )
+            lines.append(venue_text)
+
+        # Missing metadata is answered explicitly before any score/leader
+        # renderer. This keeps a venue/duration question focused and honest.
         if game is not None and unavailable_game_metrics and not multi_game_schedule:
             matchup = f"**{game.away.display_name}** vs **{game.home.display_name}**"
             labels = []
@@ -172,6 +211,17 @@ class TemplateComposer:
             )
             blocks.append(AnswerBlock(type=AnswerBlockType.WARNING, content=missing_text))
             lines.append(missing_text)
+
+        if game is not None and metadata_only and not multi_game_schedule:
+            metadata_evidence = (
+                EvidenceState.PARTIAL if unavailable_game_metrics else evidence
+            )
+            return DraftAnswer(
+                markdown="\n\n".join(lines),
+                blocks=blocks,
+                evidence_state=metadata_evidence,
+                corrections=public_corrections,
+            )
         if game is not None and intent.intent_name.value in {
             "DATA",
             "SCHEDULE_RESULT",
@@ -179,7 +229,7 @@ class TemplateComposer:
             "RECAP",
             "TACTICAL",
             "FOLLOW_UP",
-        } and not multi_game_schedule and not unavailable_game_metrics:
+        } and not multi_game_schedule and not metadata_only:
             if intent.intent_name.value in {"FOLLOW_UP", "RECAP", "TACTICAL"}:
                 matchup = (
                     f"对阵双方：**{game.away.display_name}** vs **{game.home.display_name}**。"

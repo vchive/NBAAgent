@@ -6,10 +6,43 @@ test("streams a question and keeps the input usable", async ({ page }) => {
   await input.fill("2025-26 总决赛 G4 谁得分最高？");
   await input.press("Enter");
   await expect(page.locator(".dynamic-message.assistant-message").last()).toContainText("32");
+  await expect(page.locator(".dynamic-message.assistant-message").last()).toContainText("演示快照");
   await expect(page.locator("#stream-status")).toBeHidden();
   await expect(input).toBeEnabled();
   await expect(page.locator("#recommendations")).toBeVisible();
   await expect(page.locator(".recommendation-button")).toHaveCount(3);
+});
+
+test("answers venue metadata from the selected replay without unrelated scores", async ({ page }) => {
+  await page.goto("/");
+  const input = page.locator("#message-input");
+  await input.fill("这场比赛在哪儿进行的？");
+  await input.press("Enter");
+  const answer = page.locator(".dynamic-message.assistant-message").last();
+  await expect(answer).toContainText("TD Garden");
+  await expect(answer).toContainText("Boston");
+  await expect(answer).not.toContainText("108–104");
+  await expect(answer).toContainText("固定演示快照");
+});
+
+test("recalls an indexed prior question from the same bounded session", async ({ page }) => {
+  await page.goto("/");
+  const input = page.locator("#message-input");
+  for (const question of [
+    "你好",
+    "你是谁",
+    "2025-26 总决赛 G4 最后 5 秒发生了什么？",
+  ]) {
+    await input.fill(question);
+    await input.press("Enter");
+    await expect(page.locator("#stream-status")).toBeHidden();
+  }
+  await input.fill("我第三个问题问的啥");
+  await input.press("Enter");
+  const answer = page.locator(".dynamic-message.assistant-message").last();
+  await expect(answer).toContainText("第 3 个问题");
+  await expect(answer).toContainText("最后 5 秒");
+  await expect(answer).toContainText("会话处理");
 });
 
 test("supports cancellation and a follow-up in the same session", async ({ page }) => {

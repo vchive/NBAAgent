@@ -47,18 +47,31 @@ def test_chat_response_has_contract_shape_and_lowercase_enums() -> None:
         status="completed",
         answer_markdown="已核验。",
         evidence_state="verified",
+        data_origin="public",
         as_of_beijing="2026-08-26 21:30",
         latency_ms=12,
     )
     payload = response.model_dump(mode="json")
     assert payload["status"] == "completed"
     assert payload["evidence_state"] == "verified"
+    assert payload["data_origin"] == "public"
     assert payload["as_of_beijing"] == "2026-08-26 21:30"
     assert payload["composition"] == {
         "mode": "deterministic",
         "status": "not_requested",
         "latency_ms": 0,
     }
+
+    with pytest.raises(ValidationError):
+        ChatResponse(
+            request_id=uuid4(),
+            session_id=uuid4(),
+            status="completed",
+            answer_markdown="已核验。",
+            evidence_state="verified",
+            data_origin="provider-name",
+            latency_ms=1,
+        )
 
 
 def test_highlights_response_validates_freshness_timestamp() -> None:

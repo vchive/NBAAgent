@@ -131,6 +131,13 @@ def _conference_label(value: Any) -> str | None:
     return text or None
 
 
+def _optional_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 class ESPNAdapter:
     """Typed, bounded adapter used only when the live profile is enabled."""
 
@@ -920,8 +927,29 @@ class ESPNAdapter:
                 "away_score": self._score(away),
                 "series_id": str(series.get("id")) if series.get("id") is not None else None,
                 "series_game_number": self._game_number(event, competition),
+                "venue": self._venue(competition),
             }
         )
+
+    @staticmethod
+    def _venue(competition: Mapping[str, Any]) -> dict[str, str] | None:
+        raw = _first_mapping(competition.get("venue"))
+        if raw is None:
+            return None
+        name = _optional_text(raw.get("fullName") or raw.get("name"))
+        if not name:
+            return None
+        address = _first_mapping(raw.get("address")) or {}
+        value: dict[str, str] = {"name": name}
+        for target, source in (
+            ("city", "city"),
+            ("state", "state"),
+            ("country", "country"),
+        ):
+            item = _optional_text(address.get(source))
+            if item:
+                value[target] = item
+        return value
 
     @staticmethod
     def _team_ref(item: Mapping[str, Any]) -> dict[str, Any]:

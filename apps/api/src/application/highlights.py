@@ -138,6 +138,16 @@ class HighlightsService:
                     home_score=item.home_score,
                     away_score=item.away_score,
                     series_game_number=item.series_game_number,
+                    venue=(
+                        {
+                            "name": item.venue_name,
+                            "city": item.venue_city,
+                            "state": item.venue_state,
+                            "country": item.venue_country,
+                        }
+                        if item.venue_name
+                        else None
+                    ),
                 )
             except (TypeError, ValueError):
                 continue
@@ -148,6 +158,27 @@ class HighlightsService:
             return datetime.now(UTC)
         value = self.clock.now_utc() if hasattr(self.clock, "now_utc") else self.clock()
         return value.astimezone(UTC)
+
+    @staticmethod
+    def _data_origin(evidence: Any) -> str:
+        classes = {
+            str(
+                getattr(
+                    getattr(item, "source_class", None),
+                    "value",
+                    getattr(item, "source_class", ""),
+                )
+            ).upper()
+            for item in list(evidence or [])
+        }
+        classes.discard("")
+        if not classes:
+            return "none"
+        if classes == {"FIXTURE"}:
+            return "demo_snapshot"
+        if "FIXTURE" in classes:
+            return "mixed"
+        return "public"
 
     async def _search_games(
         self,
@@ -255,7 +286,12 @@ class HighlightsService:
             if result.partial or getattr(result, "used_fallback", False)
             else EvidenceState.VERIFIED
         )
-        as_of = format_beijing(result.retrieved_at_utc) if public_games else None
+        data_origin = self._data_origin(result.evidence)
+        as_of = (
+            format_beijing(result.retrieved_at_utc)
+            if public_games and data_origin != "demo_snapshot"
+            else None
+        )
         # Pydantic wire schema accepts lowercase values; use its coercion to keep
         # the domain model uppercase internally.
         return HighlightsResponse(
@@ -264,6 +300,7 @@ class HighlightsService:
             games=public_games,
             as_of_beijing=as_of,
             evidence_state=evidence_state.value.lower(),
+            data_origin=data_origin,
         )
 
     async def for_range(
@@ -375,6 +412,11 @@ class HighlightsService:
             games=games,
             as_of_beijing=max(as_of_values) if as_of_values else None,
             evidence_state=EvidenceState.PARTIAL.value.lower(),
+            data_origin=(
+                "demo_snapshot"
+                if live_result.data_origin in {"none", "demo_snapshot"}
+                else "mixed"
+            ),
         )
 
     async def _range(
@@ -434,6 +476,7 @@ class HighlightsService:
         had_success = False
         had_unknown = False
         first_error: Any | None = None
+        origins: set[str] = set()
         for chunk in chunks:
             first = local_date_range(chunk[0], timezone_name)
             last = local_date_range(chunk[-1], timezone_name)
@@ -458,6 +501,9 @@ class HighlightsService:
                 had_unknown = True
                 continue
             had_success = True
+            origin = self._data_origin(result.evidence)
+            if origin != "none":
+                origins.add(origin)
             had_unknown = had_unknown or bool(result.partial) or bool(
                 getattr(result, "used_fallback", False)
             )
@@ -503,13 +549,25 @@ class HighlightsService:
             if public_games
             else EvidenceState.NONE
         )
+        data_origin = (
+            "none"
+            if not origins
+            else next(iter(origins))
+            if len(origins) == 1
+            else "mixed"
+        )
         return HighlightsRangeResponse(
             timezone=timezone_name,
             from_date=start_day.isoformat(),
             to_date=end_day.isoformat(),
             games=public_games,
-            as_of_beijing=format_beijing(max(retrieved)) if public_games and retrieved else None,
+            as_of_beijing=(
+                format_beijing(max(retrieved))
+                if public_games and retrieved and data_origin != "demo_snapshot"
+                else None
+            ),
             evidence_state=evidence_state.value.lower(),
+            data_origin=data_origin,
         )
 
     async def detail(
@@ -557,12 +615,18 @@ class HighlightsService:
         plays = self._public_plays(bundle)
         leaders = self._public_leaders(bundle.leaders or bundle.stat_lines)
         evidence_state = EvidenceState.PARTIAL if result.partial else EvidenceState.VERIFIED
+        data_origin = self._data_origin(result.evidence)
         return HighlightDetailResponse(
             game=self._public_game(bundle.game),
             leaders=leaders,
             plays=plays,
-            as_of_beijing=format_beijing(result.retrieved_at_utc),
+            as_of_beijing=(
+                None
+                if data_origin == "demo_snapshot"
+                else format_beijing(result.retrieved_at_utc)
+            ),
             evidence_state=evidence_state.value.lower(),
+            data_origin=data_origin,
         )
 
     async def availability(
@@ -762,6 +826,10 @@ class HighlightsService:
             home_score=game.home_score,
             away_score=game.away_score,
             series_game_number=game.series_game_number,
+            venue_name=game.venue.name if game.venue is not None else None,
+            venue_city=game.venue.city if game.venue is not None else None,
+            venue_state=game.venue.state if game.venue is not None else None,
+            venue_country=game.venue.country if game.venue is not None else None,
         )
 
     @staticmethod

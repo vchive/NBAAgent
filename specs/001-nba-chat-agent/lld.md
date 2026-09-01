@@ -4,7 +4,7 @@
 **HLD**: [hld.md](hld.md)
 **Status**: 官方 Agent、逻辑会话连续性、会话元问题与受控工具核验已实现
 **Date**: 2026-09-01
-**Revision**: v0.5 — Session Meta Resolver、准确轮次与有界历史
+**Revision**: v0.6 — 场馆/来源语义、索引会话元问题与范围外边界
 
 本文把 HLD 的组件落到可实现的模块、类型、状态、协议和测试。字段名是内部契约示例；
 除明确标注为用户字段的内容外，不得原样回传浏览器。
@@ -456,7 +456,7 @@ Normalizer 将不同来源映射到 canonical entities；不识别的字段丢�
 
 | 能力 | 输入 | 归一化输出 |
 |---|---|---|
-| scoreboard | 北京日期转换后的源日期、球队/赛季过滤 | `Game[]` |
+| scoreboard | 北京日期转换后的源日期、球队/赛季过滤 | `Game[]`，含可选 venue name/address |
 | summary | `game_id` | `GameBundle`、box score、leaders、series context |
 | play-by-play | `game_id` | `PlayByPlayBundle`，含 events、period/clock/participants/score |
 | roster/athlete | entity 查询 | `Player`/`Team` profile |
@@ -464,6 +464,8 @@ Normalizer 将不同来源映射到 canonical entities；不识别的字段丢�
 
 适配器必须带 `User-Agent`、超时和响应大小上限，保存 fixture 时去除凭据和不必要原始内容。
 Provider 健康检查只验证允许的端点，不把上游 URL 发送给用户。
+venue 从 competition 级 `fullName` 与 address 的 city/state/country 映射；名称缺失时不创建
+venue，地址分量缺失时保留 `null`。场馆问答由模板单独渲染，不附加默认比分/得分王。
 
 ### 4.3.1 DuckDuckGo search adapter
 
@@ -513,13 +515,15 @@ Provider 健康检查只验证允许的端点，不把上游 URL 发送给用户
 reconciliation → SessionMeta classifier → hybrid/full router`。分类器使用保守的整句模式识别：
 
 ```text
-TURN_COUNT | LAST_USER_MESSAGE | LAST_ASSISTANT_MESSAGE |
+TURN_COUNT | LAST_USER_MESSAGE | INDEXED_USER_MESSAGE | LAST_ASSISTANT_MESSAGE |
 CONVERSATION_SUMMARY | ACTIVE_SUBJECT | INTELLIGENCE_MODE
 ```
 
 命中后从 `ConversationContext` 渲染答案，并以 `composition=deterministic/not_requested` 完成；
 不进入 Agent 或 NBA Parser。输出仍经过通用泄漏/安全检查，但允许服务端计数数字。分类器不得
 匹配“刚才那个球是谁”“你刚才说谁拿了 32 分”“把比赛结论再说一遍”等 NBA 事实请求。
+`INDEXED_USER_MESSAGE` 解析阿拉伯/中文序数，并按 `TurnSummary.turn_index` 精确查找；目标轮次
+仍在最多 8 条的窗口内时复述原问题，已被裁剪时只说明窗口边界，不回退 Agent 猜测。
 
 `completed_user_turn_count` 对安全允许且得到 `completed/no_data/needs_clarification` 的 owner
 请求在 commit 时单调加一；`turn_count` 仅表示当前保留的摘要数量并封顶 8。`TurnSummary` 的
@@ -702,6 +706,8 @@ ParseResult {
 `POLITICS`, `GEO_SENSITIVE`, `SOCIAL_CONFLICT`, `OFF_COURT_PRIVACY`, `RUMOR`,
 `LEGAL_CRIME`, `FIXED_GAME_CONSPIRACY`, `GAMBLING`, `ABUSE_HATE`, `INSULT_NICKNAME`。
 非 NBA 的通用问题使用 `OUT_OF_SCOPE`，同样在检索前短路并返回 `no_data` 友好引导。
+明确的纯算术表达（例如 `1+1等于几`）属于该分支；比分、正负值或包含 NBA 实体的数字问题
+不得因算术范围模式而误拦截。
 
 正常篮球评价、非金钱的夺冠/走势预测为 `ALLOW`。侮辱性绰号不得映射到真实球员。
 
@@ -748,14 +754,15 @@ Provider。
 `GET /api/v1/highlights?date=YYYY-MM-DD&timezone=...` is a read-only scoreboard projection,
 separate from the chat `HISTORY` intent. The service converts the requested local calendar day
 to a half-open UTC range, rejects dates later than the injected clock's local day, and returns a
-provider-free `games` projection plus `evidence_state`/`as_of_beijing`. The `games` array is never
+provider-free `games` projection plus `evidence_state`/`as_of_beijing`/`data_origin`. The `games` array is never
 truncated: a normal NBA slate may contain multiple games. The browser renders a compact list,
 keeps one selected game as the featured card, and updates HUD/PBP atomically when a list item is
 clicked. An empty successful result is represented by `games: []`; the browser must clear the
 prior card before rendering it. Missing PBP is rendered as an explicit no-data state rather than
 reusing events from another game. The static demo uses `2026-06-12` as its explicit offline
 fixture date and labels the PBP panel as text-only; no third-party media URL is accepted by this
-contract.
+contract. Fixture/fallback responses use `data_origin=demo_snapshot|mixed`; a pure demo snapshot
+does not carry a freshly generated public-data timestamp, and the browser labels its cards as DEMO.
 
 ### 9.2 Date availability projection
 

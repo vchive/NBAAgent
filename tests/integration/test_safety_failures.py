@@ -37,6 +37,23 @@ async def test_safety_and_out_of_scope_never_call_provider() -> None:
 
 
 @pytest.mark.asyncio
+async def test_plain_arithmetic_is_redirected_before_nba_parser_or_provider() -> None:
+    provider = FixtureProvider()
+    usecase = ChatUseCase(provider)
+
+    result = await usecase.handle({"message": "1+1等于几"})
+
+    assert result.status == "no_data"
+    assert "专注于 NBA" in result.answer_markdown
+    assert "请补充查询对象" not in result.answer_markdown
+    assert provider.calls == 0
+    telemetry = usecase.telemetry.latest()
+    assert telemetry is not None
+    assert telemetry.provider_call_count == 0
+    assert telemetry.cache_read_count == 0
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "message",
     [
