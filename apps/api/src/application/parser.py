@@ -567,10 +567,10 @@ def _claims(text: str, entities: Iterable[EntityRef]) -> list[Claim]:
             for team in TEAMS
             if any(_contains_alias(text, alias) for alias in [team.display_name, *team.aliases])
         ]
-    if (
-        any(token in text for token in ("赢了", "获胜", "赢家", "胜者", "拿下比赛"))
-        and team_mentions
-    ):
+    winner_premise = any(
+        token in text for token in ("赢了", "获胜", "赢家", "胜者", "拿下比赛")
+    ) or bool(re.search(r"(?:为什么|为何)(?:能|会)?赢(?:下)?(?:这场|该场)?比赛", text))
+    if winner_premise and team_mentions:
         return [
             Claim(subject=game, predicate="winner", claimed_value=team_mentions[0].display_name)
         ]
@@ -1064,7 +1064,11 @@ class IntentParser:
             and not is_news
         ):
             missing.append(Slot(name="subject", reason="请指定球队、球员或比赛"))
-        claims = _claims(message, entities) if is_fact else []
+        # Causal winner questions also contain a factual premise (the named
+        # team won) that must be verified before any tactical explanation.
+        # Keep other open analysis questions claim-free; ``_claims`` only
+        # emits a tactical claim for explicit winner wording.
+        claims = _claims(message, entities) if is_fact or is_tactical else []
         confidence = 1.0 if entities else (0.82 if category in {Category.B, Category.C} else 0.65)
         if missing:
             confidence = min(confidence, 0.5)

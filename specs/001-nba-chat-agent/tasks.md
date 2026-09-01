@@ -411,3 +411,14 @@ zero Agent/tool calls, and timeout/repeated-tool cases fall back safely.
   out-of-scope before parser/provider/Agent execution, return the concise NBA redirection instead
   of a query-object clarification, and add zero-downstream-call unit/integration regressions per
   US5/AC1/FR-020/SC-004 (partial).
+
+## Phase 29: Recommendation and winner-premise convergence
+
+- [X] T106 [US4/US6] Generate selected-game recommendation prompts from the verified final winner
+  instead of the home team, omit winner-analysis prompts when the game is not final or scores are
+  missing/tied, and add browser regressions for both home and away winners per Constitution II,
+  US4/AC1, US6/AC2 and SC-003 (contradicts, CRITICAL).
+- [X] T107 [US2/US3] Treat causal winner wording such as “为什么能赢下这场比赛” as a typed
+  winner premise when a team and selected game are present, explicitly correct a losing-team
+  premise before analysis, and add parser/integration regressions per US2/AC3, FR-017 and FR-018
+  (partial).

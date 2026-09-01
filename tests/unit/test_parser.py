@@ -195,13 +195,16 @@ def test_selected_game_tactical_question_preserves_tactical_intent() -> None:
         },
         expires_at_utc=datetime(2026, 8, 28, tzinfo=UTC),
     )
-    parsed = IntentParser().parse("凯尔特人为什么能赢下这场比赛？", context)
+    parsed = IntentParser().parse("雷霆为什么能赢下这场比赛？", context)
 
     assert parsed.intent.intent_name is IntentName.TACTICAL
     assert any(
         item.kind is EntityKind.GAME and item.canonical_id == "2026-finals-g4"
         for item in parsed.intent.entities
     )
+    assert len(parsed.intent.premise_claims) == 1
+    assert parsed.intent.premise_claims[0].predicate == "winner"
+    assert parsed.intent.premise_claims[0].claimed_value == "雷霆"
 
 
 @pytest.mark.parametrize(

@@ -109,3 +109,31 @@ test("a game without PBP shows a truthful empty replay state", async ({ page }) 
   await page.locator("#game-list .game-list-card").nth(1).click();
   await expect(page.locator("#pbp-list .pbp-empty")).toContainText("暂无可用的逐回合记录");
 });
+
+test("recommends winner analysis from the final score for either home or away winner", async ({ page }) => {
+  await page.goto("/");
+  await page.locator("#message-input").fill("你好");
+  await page.locator("#message-input").press("Enter");
+  await expect(page.locator("#recommendations")).toBeVisible();
+  await page.locator('[data-highlight-mode="history"]').click();
+  const cards = page.locator("#game-list .game-list-card");
+  await expect(cards).toHaveCount(5);
+
+  // G3: away Celtics 112, home Thunder 101.
+  await cards.nth(3).click();
+  await expect(page.locator("#recommendation-list")).toContainText(
+    "凯尔特人 为什么能赢下这场比赛？",
+  );
+  await expect(page.locator("#recommendation-list")).not.toContainText(
+    "雷霆 为什么能赢下这场比赛？",
+  );
+
+  // G2: away Celtics 99, home Thunder 107.
+  await cards.nth(4).click();
+  await expect(page.locator("#recommendation-list")).toContainText(
+    "雷霆 为什么能赢下这场比赛？",
+  );
+  await expect(page.locator("#recommendation-list")).not.toContainText(
+    "凯尔特人 为什么能赢下这场比赛？",
+  );
+});

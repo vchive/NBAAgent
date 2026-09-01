@@ -185,6 +185,29 @@ async def test_selected_game_ranking_and_tactical_answers_use_verified_game_deta
 
 
 @pytest.mark.asyncio
+async def test_selected_game_losing_team_win_premise_is_corrected_before_analysis() -> None:
+    """A causal question must not silently accept the losing team as winner."""
+
+    result = await ChatUseCase(FixtureProvider()).handle(
+        {
+            "message": "雷霆为什么能赢下这场比赛？",
+            "selected_game_id": "2026-finals-g4",
+        }
+    )
+
+    assert result.status == "completed"
+    assert result.corrections
+    correction = result.corrections[0]
+    status = getattr(correction, "status", None)
+    if status is None and isinstance(correction, dict):
+        status = correction.get("status")
+    assert str(getattr(status, "value", status)).lower() == "corrected"
+    assert "核验结果显示，正确信息是：凯尔特人" in result.answer_markdown
+    assert "凯尔特人" in result.answer_markdown
+    assert "雷霆 能赢下比赛" not in result.answer_markdown
+
+
+@pytest.mark.asyncio
 async def test_selected_game_direct_last_shot_answer_is_concise_and_bounded() -> None:
     usecase = ChatUseCase(FixtureProvider())
     result = await usecase.handle(

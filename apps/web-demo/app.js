@@ -1375,6 +1375,19 @@
     });
   }
 
+  function verifiedFinalWinnerName(game) {
+    if (!game || String(game.status || "").trim().toLowerCase() !== "final") return null;
+    if (game.home_score == null || game.away_score == null) return null;
+    if (String(game.home_score).trim() === "" || String(game.away_score).trim() === "") return null;
+    const homeScore = Number(game.home_score);
+    const awayScore = Number(game.away_score);
+    if (!Number.isFinite(homeScore) || !Number.isFinite(awayScore) || homeScore === awayScore) {
+      return null;
+    }
+    const winner = homeScore > awayScore ? game.home_name : game.away_name;
+    return String(winner || "").trim() || null;
+  }
+
   function renderRecommendations(response) {
     if (!el.recommendations || !el.recommendationList) return;
     const game = state.activeGame;
@@ -1385,7 +1398,8 @@
     if (game) {
       suggestions.push(`${away} 对 ${home} 谁得分最高？`);
       suggestions.push("这场比赛最后 5 秒发生了什么？");
-      suggestions.push(`${home} 为什么能赢下这场比赛？`);
+      const winner = verifiedFinalWinnerName(game);
+      if (winner) suggestions.push(`${winner} 为什么能赢下这场比赛？`);
     } else {
       suggestions.push("今天有哪些 NBA 比赛？");
       suggestions.push("最近一场比赛的关键回合是什么？");
