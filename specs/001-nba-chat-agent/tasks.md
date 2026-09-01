@@ -389,5 +389,5 @@ zero Agent/tool calls, and timeout/repeated-tool cases fall back safely.
 - [X] T100 [US8] Add classifier, long-session, new-session, replay, active-game, full-mode zero-call
   and clarification regression tests; update spec, HLD, LLD, data model, runtime contract and
   reviewer quickstart per FR-002/FR-036/SC-003/SC-017.
-- [ ] T101 [US8] Run all quality/evaluation/browser gates, redeploy the public live profile, verify
+- [X] T101 [US8] Run all quality/evaluation/browser gates, redeploy the public live profile, verify
   the session-meta matrix through the authenticated API, record evidence and push the branch.
