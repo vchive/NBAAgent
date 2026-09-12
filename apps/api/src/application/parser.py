@@ -41,6 +41,167 @@ from apps.api.src.domain.time_policy import (
     season_label_for_date,
 )
 
+_GAME_RECAP_RE = re.compile(
+    r"(?:复盘|回顾(?:一下|下)?(?:这场|本场|比赛)?|"
+    r"(?:这场|本场|该场)?比赛.{0,6}(?:过程|经过|走势|怎么打)|"
+    r"(?:这场|本场|该场)(?:比赛)?(?:是)?(?:咋赢(?:的)?|"
+    r"发生了(?:啥|什么)|(?:有啥)?看点(?:在哪|是什么)?|"
+    r"看点在哪)|"
+    r"怎么(?:个)?过程|怎么打(?:的)?|"
+    r"(?:怎么|如何|为何|为什么).{0,6}(?:赢|取胜|获胜)|"
+    r"(?:胜因|赢球(?:靠什么|原因)?|取胜原因)|"
+    r"讲讲(?:这场|本场|该场|比赛))",
+    re.IGNORECASE,
+)
+
+_SUBJECTIVE_SELECTION_TERMS = (
+    "精华",
+    "精彩",
+    "经典",
+    "好看",
+    "观赏价值",
+    "有看点",
+    "刺激",
+    "激烈",
+    "焦灼",
+    "扣人心弦",
+    "含金量",
+    "悬念",
+    "最关键",
+    "最重要",
+    "最好",
+    "比分最接近",
+    "值得看",
+    "值得一看",
+    "值得回看",
+    "值得复盘",
+    "优先回看",
+    "过瘾",
+    "推荐",
+)
+_SUBJECTIVE_GAME_TERMS = (
+    "哪场",
+    "哪一场",
+    "哪一战",
+    "第几场",
+    "一场",
+    "一战",
+    "场比赛",
+)
+_SUBJECTIVE_COMPARISON_RE = re.compile(
+    r"(?:谁|哪个|哪位).{0,10}(?:更|最)(?:伟大|强|厉害|好|优秀|出色)|"
+    r"(?:怎么|如何|怎样)(?:比较|对比)|(?:比较|对比)(?:一下|下)?|"
+    r"(?:历史地位|孰强孰弱|谁更胜一筹|谁是更好的球员)",
+    re.IGNORECASE,
+)
+
+
+def is_game_recap_question(text: str) -> bool:
+    """Return whether natural Chinese wording asks for a game narrative."""
+
+    return _GAME_RECAP_RE.search(str(text or "")) is not None
+
+
+def is_inverse_series_selection_question(text: str) -> bool:
+    """Return whether the user asks for the *least* desirable series game.
+
+    Inverse selections still need the active matchup and all series candidates,
+    but they must never enter the deterministic "best game" recovery.  Keeping
+    this polarity explicit avoids losing context merely to prevent that
+    recovery from running.
+    """
+
+    value = " ".join(str(text or "").strip().split())
+    return bool(
+        re.search(
+            r"(?:最(?:不|没|无).{0,4}(?:精彩|经典|好看|有看点|刺激|激烈|焦灼|"
+            r"扣人心弦|值得(?:一)?看|值得回看|有观赏价值|有含金量)|"
+            r"(?:不|别|不要|无需)(?:推荐|选择|选|挑).{0,8}"
+            r"(?:哪场|哪一场|哪一战|一场|一战)|"
+            r"(?:哪场|哪一场|哪一战).{0,6}不值得(?:一)?(?:看|回看)|"
+            r"不值得(?:一)?(?:看|回看).{0,6}(?:哪场|哪一场|哪一战))",
+            value,
+            re.IGNORECASE,
+        )
+    )
+
+
+def is_positive_series_selection_question(text: str) -> bool:
+    """Return whether a series follow-up asks for/defends a positive choice."""
+
+    value = " ".join(str(text or "").strip().split())
+    if is_inverse_series_selection_question(value):
+        return False
+    if re.search(
+        r"(?:为什么|为何|为啥).{0,10}(?:不是|不选|没选|不推荐)\s*\**\s*G\s*[1-7]",
+        value,
+        re.IGNORECASE,
+    ):
+        return True
+    # Once a game has been recommended, users naturally ask why that choice
+    # was made or compare it with another numbered game.
+    if re.search(
+        r"(?:为什么|为何|为啥).{0,8}(?:选|挑|推荐)(?:了)?(?:它|这场|那场)|"
+        r"(?:它|这场|那场).{0,8}比\s*G\s*[1-7].{0,8}(?:好|精彩|值得|强|优秀)|"
+        r"G\s*[1-7].{0,8}和(?:它|这场|那场).{0,8}(?:哪个|哪场|谁).{0,4}更",
+        value,
+        re.IGNORECASE,
+    ):
+        return True
+    explicit_choice = bool(
+        re.search(
+            r"(?:如果|假如)?[^。！？\n]{0,10}只能[^。！？\n]{0,8}(?:选|挑)"
+            r"[^。！？\n]{0,8}(?:一场|一战)|"
+            r"(?:整轮|这轮|全轮)?[^。！？\n]{0,8}只(?:能)?看(?:一场|一战)"
+            r"[^。！？\n]{0,8}(?:看|选|推荐)?(?:哪场|哪一场|哪一战)|"
+            r"(?:选|挑)(?:出|一个)?\s*(?:一场|一战)[^。！？\n]{0,12}"
+            r"(?:你)?(?:会)?(?:选|推荐)?(?:哪场|哪一场|哪一战)|"
+            r"(?:你|您)?(?:会|想|要)?(?:选|挑|推荐)"
+            r"(?:哪场|哪一场|哪一战)",
+            value,
+            re.IGNORECASE,
+        )
+    )
+    return bool(
+        explicit_choice
+        or (
+            any(term in value for term in _SUBJECTIVE_SELECTION_TERMS)
+            and any(term in value for term in _SUBJECTIVE_GAME_TERMS)
+        )
+    )
+
+
+def is_contextual_series_selection_question(text: str) -> bool:
+    """Recognize any subjective choice of a game from an active series.
+
+    Both positive and inverse requests are semantically complete after a
+    matchup/series turn.  Callers that may synthesize a *best-game* fallback
+    must additionally check :func:`is_positive_series_selection_question`.
+    """
+
+    return is_positive_series_selection_question(
+        text
+    ) or is_inverse_series_selection_question(text)
+
+
+def _references_recommended_game(text: str) -> bool:
+    """Return whether a selection follow-up points back to the chosen game."""
+
+    return bool(
+        re.search(
+            r"(?:为什么|为何|为啥).{0,8}(?:选|挑|推荐)(?:了)?"
+            r"(?:它|这场|那场)|(?:它|这场|那场).{0,8}比\s*G\s*[1-7]",
+            str(text or ""),
+            re.IGNORECASE,
+        )
+    )
+
+
+def is_subjective_comparison_question(text: str) -> bool:
+    """Recognize an explicitly requested, non-deterministic player comparison."""
+
+    return _SUBJECTIVE_COMPARISON_RE.search(str(text or "")) is not None
+
 
 @dataclass(slots=True)
 class ParseResult:
@@ -77,13 +238,52 @@ def _player(canonical_id: str, name: str, *aliases: str) -> EntityRef:
 
 
 TEAMS: tuple[EntityRef, ...] = (
+    _team("atl", "老鹰", "Atlanta Hawks", "Hawks", "ATL", "亚特兰大老鹰"),
     _team("bos", "凯尔特人", "Boston Celtics", "Celtics", "BOS", "波士顿凯尔特人"),
-    _team("okc", "雷霆", "Oklahoma City Thunder", "Thunder", "OKC", "俄克拉荷马雷霆"),
+    _team("bkn", "篮网", "Brooklyn Nets", "Nets", "BKN", "布鲁克林篮网"),
+    _team("cha", "黄蜂", "Charlotte Hornets", "Hornets", "CHA", "夏洛特黄蜂"),
+    _team("chi", "公牛", "Chicago Bulls", "Bulls", "CHI", "芝加哥公牛"),
+    _team("cle", "骑士", "Cleveland Cavaliers", "Cavaliers", "Cavs", "CLE", "克利夫兰骑士"),
+    _team("dal", "独行侠", "Dallas Mavericks", "Mavericks", "Mavs", "DAL", "达拉斯独行侠", "小牛"),
     _team("den", "掘金", "Denver Nuggets", "Nuggets", "DEN"),
-    _team("lal", "湖人", "Los Angeles Lakers", "Lakers", "LAL"),
+    _team("det", "活塞", "Detroit Pistons", "Pistons", "DET", "底特律活塞"),
     _team("gsw", "勇士", "Golden State Warriors", "Warriors", "GSW"),
-    _team("sas", "马刺", "San Antonio Spurs", "Spurs", "SAS", "圣安东尼奥马刺"),
+    _team("hou", "火箭", "Houston Rockets", "Rockets", "HOU", "休斯顿火箭"),
+    _team("ind", "步行者", "Indiana Pacers", "Pacers", "IND", "印第安纳步行者"),
+    _team("lac", "快船", "Los Angeles Clippers", "Clippers", "LAC", "洛杉矶快船"),
+    _team("lal", "湖人", "Los Angeles Lakers", "Lakers", "LAL", "洛杉矶湖人"),
+    _team("mem", "灰熊", "Memphis Grizzlies", "Grizzlies", "MEM", "孟菲斯灰熊"),
+    _team("mia", "热火", "Miami Heat", "Heat", "MIA", "迈阿密热火"),
+    _team("mil", "雄鹿", "Milwaukee Bucks", "Bucks", "MIL", "密尔沃基雄鹿"),
+    _team(
+        "min",
+        "森林狼",
+        "Minnesota Timberwolves",
+        "Timberwolves",
+        "Wolves",
+        "MIN",
+        "明尼苏达森林狼",
+    ),
+    _team("nop", "鹈鹕", "New Orleans Pelicans", "Pelicans", "NOP", "新奥尔良鹈鹕"),
     _team("nyk", "尼克斯", "New York Knicks", "Knicks", "NYK", "纽约尼克斯"),
+    _team("okc", "雷霆", "Oklahoma City Thunder", "Thunder", "OKC", "俄克拉荷马雷霆"),
+    _team("orl", "魔术", "Orlando Magic", "Magic", "ORL", "奥兰多魔术"),
+    _team("phi", "76人", "Philadelphia 76ers", "76ers", "Sixers", "PHI", "费城76人"),
+    _team("phx", "太阳", "Phoenix Suns", "Suns", "PHX", "菲尼克斯太阳"),
+    _team(
+        "por",
+        "开拓者",
+        "Portland Trail Blazers",
+        "Trail Blazers",
+        "Blazers",
+        "POR",
+        "波特兰开拓者",
+    ),
+    _team("sac", "国王", "Sacramento Kings", "Kings", "SAC", "萨克拉门托国王"),
+    _team("sas", "马刺", "San Antonio Spurs", "Spurs", "SAS", "圣安东尼奥马刺"),
+    _team("tor", "猛龙", "Toronto Raptors", "Raptors", "TOR", "多伦多猛龙"),
+    _team("uta", "爵士", "Utah Jazz", "Jazz", "UTA", "犹他爵士"),
+    _team("was", "奇才", "Washington Wizards", "Wizards", "WAS", "华盛顿奇才"),
 )
 PLAYERS: tuple[EntityRef, ...] = (
     _player("jaylen-brown", "杰伦·布朗", "Jaylen Brown", "J. Brown", "布朗"),
@@ -99,6 +299,28 @@ PLAYERS: tuple[EntityRef, ...] = (
     _player("derrick-white", "德里克·怀特", "Derrick White", "D. White", "怀特"),
     _player("lu-dort", "吕冈茨·多尔特", "Luguentz Dort", "L. Dort", "Dort", "多尔特"),
     _player("kevin-durant", "凯文·杜兰特", "杜兰特", "Kevin Durant", "K. Durant", "KD"),
+    _player("jalen-brunson", "杰伦·布伦森", "杰伦-布伦森", "布伦森", "Jalen Brunson"),
+    _player(
+        "victor-wembanyama",
+        "维克托·文班亚马",
+        "文班亚马",
+        "文班",
+        "Victor Wembanyama",
+        "Wembanyama",
+    ),
+    _player("karl-anthony-towns", "卡尔-安东尼·唐斯", "唐斯", "Karl-Anthony Towns"),
+    _player("og-anunoby", "OG·阿奴诺比", "OG-阿奴诺比", "阿奴诺比", "OG Anunoby"),
+    _player("michael-jordan", "迈克尔·乔丹", "乔丹", "Michael Jordan", "MJ"),
+    _player(
+        "lebron-james",
+        "勒布朗·詹姆斯",
+        "詹姆斯",
+        "勒布朗",
+        "LeBron James",
+        "LeBron",
+    ),
+    _player("tim-duncan", "蒂姆·邓肯", "邓肯", "Tim Duncan"),
+    _player("stephen-curry", "斯蒂芬·库里", "库里", "Stephen Curry", "Curry"),
 )
 GAMES: dict[str, EntityRef] = {
     "2026-finals-g4": EntityRef(
@@ -281,13 +503,29 @@ def _explicit_season_start(text: str) -> int | None:
     return None
 
 
-def resolve_entities(text: str) -> list[EntityRef]:
+def resolve_entities(
+    text: str, *, include_fixture_games: bool = True
+) -> list[EntityRef]:
     found: list[EntityRef] = []
     for candidate in (*TEAMS, *PLAYERS):
         if any(
             _contains_alias(text, alias) for alias in [candidate.display_name, *candidate.aliases]
         ):
             found.append(candidate)
+    # Keep the user's mention order for head-to-head questions.  The catalog
+    # order is intentionally canonical (and historically put SAS before NYK),
+    # but rendering “2026尼克斯-马刺” as “马刺 对 尼克斯” is confusing and can
+    # also pick the wrong side when a premise names a winner first.
+    found.sort(
+        key=lambda candidate: min(
+            (
+                text.casefold().find(str(alias).casefold())
+                for alias in [candidate.display_name, *candidate.aliases]
+                if text.casefold().find(str(alias).casefold()) >= 0
+            ),
+            default=len(text),
+        )
+    )
     # Game references are checked separately to avoid matching a generic
     # ``第四节``.  Accept both ``G4``/``第4场`` and Chinese ordinals.  The
     # built-in fixture IDs represent 2025-26 only; an explicitly different (or
@@ -298,7 +536,21 @@ def resolve_entities(text: str) -> list[EntityRef]:
         upper,
     )
     explicit_season_start = _explicit_season_start(text)
-    if match and explicit_season_start in (None, 2025):
+    # A game number paired with two explicitly named teams is scoped by that
+    # matchup.  Do not attach the built-in demo game entity in this case: the
+    # generic ``G2`` alias would otherwise win over the typed team filter (for
+    # example ``尼克斯对马刺 G2`` could silently resolve to the Celtics–Thunder
+    # demo).  ``game_number`` is still extracted by ``IntentParser`` and the
+    # planner will resolve the canonical game from the matchup.
+    named_team_ids = {
+        item.canonical_id for item in found if item.kind is EntityKind.TEAM
+    }
+    if (
+        include_fixture_games
+        and match
+        and explicit_season_start in (None, 2025)
+        and len(named_team_ids) < 2
+    ):
         raw_number = match.group(1) or match.group(2)
         number = int(raw_number) if raw_number else _ORDINAL_DIGITS.get(match.group(3))
         if number is not None and 1 <= number <= 7:
@@ -308,7 +560,12 @@ def resolve_entities(text: str) -> list[EntityRef]:
     return found
 
 
-def _metric_refs(text: str, *, scope: StatScope = StatScope.GAME) -> list[MetricRef]:
+def _metric_refs(
+    text: str,
+    *,
+    scope: StatScope = StatScope.GAME,
+    default_points: bool = True,
+) -> list[MetricRef]:
     metrics: list[MetricRef] = []
     ranked_stat = _ranked_stat_rank(text)
     if any(token in text for token in ("什么时候", "几点开打", "几点开始", "开赛时间", "比赛时间")):
@@ -347,6 +604,22 @@ def _metric_refs(text: str, *, scope: StatScope = StatScope.GAME) -> list[Metric
         )
     ):
         metrics.append(MetricRef(name="game_duration", unit=None, scope=scope))
+    if any(
+        token in text
+        for token in (
+            "双方教练",
+            "双方的教练",
+            "两队教练",
+            "两队的教练",
+            "主教练",
+            "教练是谁",
+            "教练都是谁",
+            "教练分别是谁",
+            "教练名字",
+            "教练姓名",
+        )
+    ) or re.search(r"(?:谁|哪位|哪些人).{0,6}(?:是|当|担任)?教练", text):
+        metrics.append(MetricRef(name="coaches", unit=None, scope=scope))
     # Play-by-play feeds in the first release carry the actor/type/score but
     # do not guarantee shot coordinates or a court-zone label.  Preserve a
     # typed marker so the renderer can state that limitation explicitly when a
@@ -403,7 +676,7 @@ def _metric_refs(text: str, *, scope: StatScope = StatScope.GAME) -> list[Metric
                     ),
                 )
             )
-    if not metrics:
+    if not metrics and default_points:
         metrics.append(MetricRef(name="points", unit="分", scope=scope))
     return metrics
 
@@ -497,6 +770,12 @@ def _parse_clock_window(text: str) -> TimeWindow | None:
                 all_periods=True,
             )
         return game_end_window(5)
+    minute_match = re.search(
+        r"(?:最后|终场)\s*(?:1|一)\s*分钟",
+        text,
+    )
+    if minute_match:
+        return game_end_window(60)
     match = re.search(
         r"(?:最后|末节|终场)?\s*(\d{1,2}|[零一二三四五六七八九十]+)\s*秒",
         text,
@@ -658,14 +937,23 @@ def _claims(text: str, entities: Iterable[EntityRef]) -> list[Claim]:
 
 class IntentParser:
     def __init__(
-        self, *, clock: Clock | None = None, input_timezone: str = "Asia/Shanghai"
+        self,
+        *,
+        clock: Clock | None = None,
+        input_timezone: str = "Asia/Shanghai",
+        include_fixture_games: bool = True,
     ) -> None:
         self.clock = clock
         self.input_timezone = input_timezone
+        self.include_fixture_games = bool(include_fixture_games)
 
     def parse(self, text: str, context: ConversationContext | None = None) -> ParseResult:
         message = _normalize_common_typos(text.strip())
-        entities = resolve_entities(message)
+        entities = resolve_entities(
+            message,
+            include_fixture_games=self.include_fixture_games,
+        )
+        explicit_series_game_number = _parse_game_number(message)
         # Follow-up pronouns resolve only from the current session.  Keep the
         # shorthand marker around so a new session can explicitly ask for a
         # game instead of silently searching the whole scoreboard.
@@ -674,9 +962,57 @@ class IntentParser:
         # 大比分”), it denotes a valid series-wide query and must not be
         # forced through the single-game clarification branch.
         series_phrase = "系列赛" in message
-        shorthand = any(
-            token in message for token in ("那场", "这场", "这轮", "最后那个球", "刚才")
-        ) and not (series_phrase and any(token in message for token in ("这场", "这轮")))
+        contextual_matchup_followup = False
+        explicit_team_ids = {
+            item.canonical_id for item in entities if item.kind is EntityKind.TEAM
+        }
+        # A bare G# after a series turn narrows the same matchup.  It must not
+        # resolve through the global fixture alias catalog or retain a
+        # previously recommended active game.  An explicit season/year starts
+        # a new scope and therefore deliberately disables this inheritance.
+        numbered_series_followup = bool(
+            context
+            and explicit_series_game_number is not None
+            and len(explicit_team_ids) < 2
+            and _EXPLICIT_SEASON_RE.search(message) is None
+            and _EXPLICIT_YEAR_RE.search(message) is None
+            and _BARE_YEAR_RE.search(message) is None
+        )
+        if (
+            context
+            and len(explicit_team_ids) < 2
+            and (
+                re.search(r"(?:最近|最后)(?:的)?一场(?:比赛)?", message)
+                or is_contextual_series_selection_question(message)
+                or numbered_series_followup
+            )
+        ):
+            contextual_matchup_followup = any(
+                len(
+                    {
+                        item.canonical_id
+                        for item in summary.active_refs
+                        if item.kind is EntityKind.TEAM
+                    }
+                )
+                >= 2
+                for summary in reversed(context.recent_turn_summaries)
+            )
+        shorthand = (
+            any(
+                token in message
+                for token in ("那场", "这场", "这轮", "最后那个球", "刚才")
+            )
+            or contextual_matchup_followup
+        ) and not (
+            series_phrase
+            and any(token in message for token in ("这场", "这轮"))
+            # A counterfactual selection such as “这轮系列赛为什么不是 G2”
+            # still needs the active matchup scope.  The series-wide
+            # suppression is only for ordinary aggregate wording (例如“这轮
+            # 系列赛目前大比分”), not a game-choice follow-up.
+            and not is_contextual_series_selection_question(message)
+        )
         # “某场最后一攻” (and similar wording) leaves the game unresolved.
         # Mark it for clarification rather than falling through to the newest
         # scoreboard entry and returning an unrelated fact.
@@ -684,14 +1020,68 @@ class IntentParser:
             token in message for token in ("某场", "某一场", "某场比赛", "那一场比赛")
         )
         explicit_game = any(item.kind is EntityKind.GAME for item in entities)
+        inherited_matchup = False
         if context and shorthand:
-            if context.active_game and not any(item.kind is EntityKind.GAME for item in entities):
+            if (
+                context.active_game
+                and explicit_series_game_number is None
+                and (
+                    not is_contextual_series_selection_question(message)
+                    or _references_recommended_game(message)
+                )
+                and not any(item.kind is EntityKind.GAME for item in entities)
+            ):
                 entities.append(context.active_game)
             for active in (context.active_team, context.active_player):
                 if active and not any(
                     item.canonical_id == active.canonical_id for item in entities
                 ):
                     entities.append(active)
+            # A series/matchup lookup has no single active game, but a dated
+            # follow-up such as “2026-06-14 这场比赛怎么打的” supplies enough
+            # information to select one game.  Recover both teams from the
+            # latest relevant session summary instead of retaining only the
+            # first ``active_team``.  The explicit date remains authoritative
+            # and the planner still requires a unique structured match.
+            # A current game can coexist with a series-level context (for
+            # example after recommending G4, the user may ask “为什么不是
+            # G2？”).  In that case recover both teams from the latest
+            # matchup summary as well; retaining only ``active_team`` would
+            # leave the generic G2 alias unconstrained.
+            if context.active_game is None or contextual_matchup_followup:
+                for summary in reversed(context.recent_turn_summaries):
+                    recent_teams = [
+                        item
+                        for item in summary.active_refs
+                        if item.kind is EntityKind.TEAM
+                    ]
+                    if len({item.canonical_id for item in recent_teams}) < 2:
+                        continue
+                    for team in recent_teams:
+                        if not any(
+                            item.canonical_id == team.canonical_id for item in entities
+                        ):
+                            entities.append(team)
+                    inherited_matchup = True
+                    break
+
+        # ``resolve_entities`` can still produce a built-in game reference for
+        # a bare G# token.  Once two teams are known (explicitly or from the
+        # current session), that reference is only an alias, never an
+        # authoritative identity.  Remove it so the typed matchup + game
+        # number filter selects the correct season/series row.  This also
+        # prevents an unrelated demo fixture from leaking into a no-data
+        # response for a real matchup that is not in the local snapshot.
+        scoped_team_ids = {
+            item.canonical_id for item in entities if item.kind is EntityKind.TEAM
+        }
+        if len(scoped_team_ids) >= 2 and explicit_series_game_number is not None:
+            entities = [
+                item
+                for item in entities
+                if item.kind is not EntityKind.GAME
+            ]
+            explicit_game = any(item.kind is EntityKind.GAME for item in entities)
 
         lower = message.lower()
         ranked_stat = _ranked_stat_rank(message)
@@ -738,12 +1128,18 @@ class IntentParser:
         is_fact = any(
             token in message for token in ("核验", "核查", "我记得", "是不是", "对吗", "记得")
         )
+        contextual_series_selection = is_contextual_series_selection_question(message)
         is_tactical = any(
             token in message
             for token in ("战术", "挡拆", "防守策略", "为什么能", "怎么限制", "假设", "如果")
-        )
-        is_recap = any(
-            token in message for token in ("复盘", "表现如何", "评价", "主观", "关键转折")
+        ) and not contextual_series_selection
+        is_recap = (
+            is_game_recap_question(message)
+            or contextual_series_selection
+            or is_subjective_comparison_question(message)
+            or any(
+            token in message for token in ("表现如何", "评价", "主观", "关键转折")
+            )
         )
         # News/background is an objective retrieval mode.  Keep explicit
         # news wording ahead of generic history/schedule/data markers (for
@@ -831,6 +1227,58 @@ class IntentParser:
             )
             and ranked_stat is None
         )
+        # A bare head-to-head expression (``2026尼克斯-马刺`` / ``尼克斯
+        # vs 马刺``) is a bounded matchup/schedule lookup.  Previously the
+        # default ``points`` metric made it look like a single-team stats
+        # request, so the planner queried only the first team and returned a
+        # misleading “暂无马刺统计” message.  Keep questions that contain a
+        # concrete metric/metadata verb on their DATA/PBP paths; only the
+        # subject-only form is promoted to a schedule lookup.
+        team_entities = [item for item in entities if item.kind is EntityKind.TEAM]
+        team_ids = {item.canonical_id for item in team_entities}
+        matchup = len(team_ids) >= 2 and (
+            inherited_matchup
+            # A numbered playoff/finals game plus two named teams is already
+            # an unambiguous head-to-head scope even when the user phrases it
+            # as a premise (for example “G5 是马刺 94 比 90 赢了尼克斯”).
+            # Requiring an explicit “对/vs” token here made fact-correction
+            # questions lose their game after an Agent timeout and fall back
+            # to a generic clarification.
+            or explicit_series_game_number is not None
+            or bool(re.search(r"(?:\bvs?\.?\b|对阵|对|和|与|打|战|[-–—])", message, re.I))
+        )
+        matchup_detail_tokens = (
+            "得分",
+            "篮板",
+            "助攻",
+            "三分",
+            "命中率",
+            "出场",
+            "出赛",
+            "上场",
+            "场馆",
+            "球馆",
+            "地点",
+            "在哪",
+            "教练",
+            "时长",
+            "多久",
+            "战术",
+            "复盘",
+            "最后",
+            "关键",
+        )
+        if (
+            matchup
+            and not is_pbp
+            and not is_fact
+            and not is_tactical
+            and not is_recap
+            and not is_news
+            and not is_history
+            and not any(token in message for token in matchup_detail_tokens)
+        ):
+            is_schedule = True
         # A follow-up may omit an explicit pronoun and only narrow the clock
         # window (e.g. after selecting G4, “每节最后五秒”).  Inherit the
         # active game for that game-scoped PBP form, but never for a
@@ -927,6 +1375,7 @@ class IntentParser:
             and shorthand
             and context.active_game
             and not explicit_game
+            and explicit_series_game_number is None
             and not (is_pbp and event_focus)
             # “这场得分第三” and “为什么能赢下这场” are both fully
             # specified queries.  Preserve their DATA/TACTICAL semantics so
@@ -936,10 +1385,21 @@ class IntentParser:
             and not score_value_lookup
             and not is_tactical
             and not is_recap
+            # Explicit metadata questions are fully specified by their
+            # selected-game context; do not downgrade them to a generic
+            # FOLLOW_UP (which would render a score summary).
+            and not any(token in message for token in ("场馆", "举办", "进行", "比赛时长", "教练"))
         ):
             category, intent_name = Category.H, IntentName.FOLLOW_UP
 
         season_value = resolve_season_phrase(message, self.clock, timezone_name=self.input_timezone)
+        if (
+            season_value is None
+            and contextual_matchup_followup
+            and inherited_matchup
+            and context is not None
+        ):
+            season_value = context.active_season
         # A standalone calendar year in a historical/finals/championship
         # question conventionally denotes the season-ending year (for example
         # ``1999 年总决赛`` means NBA season ``1998-99``).  The generic season
@@ -956,6 +1416,7 @@ class IntentParser:
             historical_context = (
                 category is Category.C
                 or _parse_game_number(message) is not None
+                or matchup
                 or any(
                     token in message
                     for token in ("总决赛", "总冠军", "冠军", "夺冠", "历届", "队史")
@@ -1020,25 +1481,27 @@ class IntentParser:
         missing: list[Slot] = []
         has_game_entity = any(item.kind is EntityKind.GAME for item in entities)
         recent_game_request = bool(
-            is_pbp
-            and not has_game_entity
-            and re.search(r"(?:最近|上一场|上场|刚刚).{0,6}(?:场比赛|比赛)", message)
+            not has_game_entity
+            and re.search(
+                r"(?:最近|最后|上一场|上场|刚刚)(?:的)?.{0,6}(?:场比赛|比赛)",
+                message,
+            )
         )
         # Keep an explicit game number in the parsed intent for telemetry even
         # when this fixture has no corresponding entity.  Without a missing
         # slot, a request such as “1999 G4 赛果” would fall through to a broad
         # search and could return the newest unrelated fixture.
-        if game_number is not None and not has_game_entity:
+        if game_number is not None and not has_game_entity and not matchup:
             missing.append(
                 Slot(
                     name="game",
                     reason="该赛季的比赛暂未匹配，请补充可核验的具体比赛",
                 )
             )
-        if (shorthand or unspecified_game) and not has_game_entity:
+        if (shorthand or unspecified_game) and not has_game_entity and not matchup:
             if not any(slot.name == "game" for slot in missing):
                 missing.append(Slot(name="game", reason="请指定比赛或在同一会话中先选择一场比赛"))
-        elif is_pbp and not has_game_entity and not recent_game_request:
+        elif is_pbp and not has_game_entity and not recent_game_request and not matchup:
             reason = (
                 "请从精彩回顾选择最近一场比赛，或补充对阵双方"
                 if re.search(r"(?:最近|上一场|刚刚).{0,4}(?:场比赛|比赛)", message)
@@ -1072,10 +1535,28 @@ class IntentParser:
         confidence = 1.0 if entities else (0.82 if category in {Category.B, Category.C} else 0.65)
         if missing:
             confidence = min(confidence, 0.5)
+        series_wide_request = game_number is None and any(
+            token in message for token in ("系列赛", "大比分", "总决赛")
+        )
         metrics = _metric_refs(
             message,
-            scope=StatScope.SERIES if "系列赛" in message else StatScope.GAME,
+            scope=StatScope.SERIES if series_wide_request else StatScope.GAME,
+            # ``FOLLOW_UP`` covers both an explicit box-score request such as
+            # “这场比赛谁得分最高” and metric-free shorthand such as “这场
+            # 比赛谁打谁”.  Do not manufacture a points request for the
+            # latter: the renderer needs an empty metric list to avoid
+            # appending an unasked scoring leader merely because a selected
+            # game's box score happens to be available.
+            default_points=intent_name is not IntentName.FOLLOW_UP,
         )
+        if is_contextual_series_selection_question(message):
+            metrics = [
+                MetricRef(
+                    name="series_game_recommendation",
+                    unit=None,
+                    scope=StatScope.SERIES,
+                )
+            ]
         if is_prediction:
             is_game_prediction = _GAME_PREDICTION_RE.search(message) is not None and not (
                 _PREDICTION_RE.search(message)
@@ -1170,6 +1651,7 @@ class IntentParser:
             premise_claims=claims,
             missing_slots=missing,
             recent_game=recent_game_request,
+            matchup=matchup,
         )
         ambiguity: list[str] = []
         if len(
@@ -1201,6 +1683,11 @@ __all__ = [
     "TEAMS",
     "IntentParser",
     "ParseResult",
+    "is_contextual_series_selection_question",
+    "is_game_recap_question",
+    "is_inverse_series_selection_question",
+    "is_positive_series_selection_question",
+    "is_subjective_comparison_question",
     "parse_query",
     "resolve_entities",
 ]

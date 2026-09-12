@@ -174,8 +174,13 @@ class FixtureProvider:
             return False
         if filters.status and game.status != filters.status:
             return False
-        if filters.team_ids and not (
-            {game.home.canonical_id, game.away.canonical_id} & set(filters.team_ids)
+        if (
+            filters.series_game_number is not None
+            and game.series_game_number != filters.series_game_number
+        ):
+            return False
+        if filters.team_ids and not set(filters.team_ids).issubset(
+            {game.home.canonical_id, game.away.canonical_id}
         ):
             return False
         if filters.date_range:
@@ -530,6 +535,13 @@ class FixtureProvider:
             evidence_ids=evidence_ids or ["fixture:news:none"],
             partial=self._news_partial,
         )
+
+    async def search_web(
+        self, query: NewsQuery, budget: RequestBudget
+    ) -> ProviderResult[list[NewsItem]]:
+        # Fixture mode keeps the same typed surface for offline tests.  The
+        # production web-search path is supplied by a dedicated adapter.
+        return await self.search_news(query, budget)
 
 
 __all__ = ["FixtureProvider", "DEFAULT_FIXTURE_DIR"]

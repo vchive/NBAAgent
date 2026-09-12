@@ -131,6 +131,32 @@ def verify_game(game: Game, evidence_ids: Iterable[str] = ()) -> FactBundle:
                 ids,
             )
         )
+    if game.duration_seconds is not None:
+        hours, remainder = divmod(game.duration_seconds, 3600)
+        minutes = remainder // 60
+        duration_text = (
+            f"{hours}小时{minutes}分钟" if hours else f"{minutes}分钟"
+        )
+        facts.append(
+            _fact(
+                f"{game.game_id}:duration",
+                game_ref,
+                "game_duration",
+                duration_text,
+                ids,
+            )
+        )
+    if game.attendance is not None:
+        facts.append(
+            _fact(
+                f"{game.game_id}:attendance",
+                game_ref,
+                "attendance",
+                game.attendance,
+                ids,
+                unit="人",
+            )
+        )
     state = (
         EvidenceState.VERIFIED
         if all(item.verification is VerificationState.VERIFIED for item in facts)
@@ -176,7 +202,32 @@ def verify_stat_lines(lines: Iterable[StatLine], evidence_ids: Iterable[str] = (
 def verify_bundle(bundle: GameBundle, evidence_ids: Iterable[str] = ()) -> VerificationResult:
     ids = list(evidence_ids) or [f"summary:{bundle.game.game_id}"]
     game_facts = verify_game(bundle.game, ids)
-    stat_facts = verify_stat_lines([*bundle.stat_lines, *bundle.leaders], ids)
+    # Providers commonly expose ``leaders`` as a ranked subset of the full
+    # ``stat_lines`` collection. Expanding both lists verbatim duplicates
+    # every metric and can overflow the bounded FactBundle on a normal
+    # 30-player box score. Merge by canonical stat identity and retain the
+    # more complete metric projection for each player/game/scope tuple.
+    merged_lines: dict[tuple[str, str | None, str, str | None], StatLine] = {}
+    for line in [*bundle.stat_lines, *bundle.leaders]:
+        key = (
+            line.subject.canonical_id,
+            line.game_id,
+            line.scope.value,
+            line.season.label if line.season is not None else None,
+        )
+        previous = merged_lines.get(key)
+        if previous is None:
+            merged_lines[key] = line
+            continue
+        metrics = dict(previous.metrics)
+        metrics.update(
+            {name: value for name, value in line.metrics.items() if value is not None}
+        )
+        evidence = list(dict.fromkeys([*previous.evidence_ids, *line.evidence_ids]))
+        merged_lines[key] = previous.model_copy(
+            update={"metrics": metrics, "evidence_ids": evidence}
+        )
+    stat_facts = verify_stat_lines(merged_lines.values(), ids)
     merged = FactBundle(
         facts=[*game_facts.facts, *stat_facts.facts],
         missing=[*game_facts.missing, *stat_facts.missing],

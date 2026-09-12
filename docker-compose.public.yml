@@ -1,5 +1,6 @@
-# Public handoff profile: attempt current public data first and retain the
-# deterministic fixture only as a typed upstream-failure fallback.
+# Public handoff profile: use current/cached public data and surface a typed,
+# retryable error when those sources are unavailable. Fixed fixtures remain
+# available only through the explicit offline fixture profile.
 # Keep this override separate from the offline base so local development stays
 # reproducible and never contacts an external provider by accident.
 services:
@@ -7,9 +8,18 @@ services:
     environment:
       APP_ENV: public_demo
       PUBLIC_DATA_MODE: hybrid
+      # The web API host is reachable from common cloud/container egress
+      # ranges where site.api.espn.com may return a blanket 403. Both hosts
+      # are allow-listed by the typed adapter and expose the same scoreboard
+      # contract.
+      ESPN_BASE_URL: https://site.web.api.espn.com/apis/site/v2/sports/basketball/nba
       DDG_SEARCH_ENABLED: "true"
       FULL_INTELLIGENCE_ENABLED: "true"
-      DEFAULT_INTELLIGENCE_MODE: hybrid
+      # Public interview traffic is Agent-first.  The deterministic renderer
+      # remains the evidence boundary, but ordinary questions should enter
+      # the conversational planner by default when the live profile is
+      # layered on top.
+      DEFAULT_INTELLIGENCE_MODE: full
       # Empty means the service clock drives today's Beijing projection.  The
       # fixture-only base continues to use its fixed demo date.
       HIGHLIGHTS_DEMO_DATE: ""

@@ -21,48 +21,88 @@ from apps.api.src.application.chat_use_case import ChatUseCase
 from apps.api.src.config import Settings
 from apps.api.src.infrastructure.auth import AuthManager
 from apps.api.src.infrastructure.cache import InMemoryTTLCache
+from apps.api.src.infrastructure.game_index import GameIndex
 from apps.api.src.infrastructure.highlights_cache import SQLiteHighlightsCache
+from apps.api.src.providers.aliyun_iqs_adapter import AliyunIQSSearchAdapter
+from apps.api.src.providers.baidu_adapter import BaiduSearchAdapter
 from apps.api.src.providers.ddg_adapter import DuckDuckGoAdapter
 from apps.api.src.providers.espn_adapter import ESPNAdapter
 from apps.api.src.providers.fixture_provider import FixtureProvider
 from apps.api.src.providers.gateway import ProviderGateway
+from apps.api.src.providers.hupu_adapter import HupuAdapter
+from apps.api.src.providers.indexed_provider import IndexedProvider
+from apps.api.src.providers.qianfan_search_adapter import QianfanSearchAdapter
 from apps.api.src.providers.search_augmented_provider import SearchAugmentedProvider
 
 
-def _provider_stack(config: Settings) -> tuple[Any, Any | None]:
+def _provider_stack(
+    config: Settings, *, game_index: GameIndex | None = None
+) -> tuple[Any, Any | None]:
     """Build the configured provider and an optional hybrid fallback.
 
     Fixture mode is the deterministic default.  Live mode talks only to the
-    allow-listed public adapter; hybrid mode tries that adapter first and
-    falls back to the local snapshot after bounded gateway retries.  Keeping
-    this selection at the composition root means domain/application code does
-    not branch on environment variables.
+    allow-listed public adapter, and hybrid mode uses the same public provider
+    stack while allowing intelligent synthesis at the application layer.
+    Keeping this selection at the composition root means domain/application
+    code does not branch on environment variables.
     """
 
-    fixture = FixtureProvider()
     mode = str(config.public_data_mode).lower()
     if mode == "fixture":
-        return fixture, None
+        return FixtureProvider(), None
     live = ESPNAdapter(
         base_url=config.espn_base_url,
         timeout_seconds=config.provider_timeout_seconds,
         max_response_bytes=config.provider_max_response_bytes,
         allowed_hosts=config.espn_allowed_hosts,
     )
-    # DuckDuckGo is an optional, news/background-only candidate source. Never
-    # enable it for fixture mode: the default local profile must remain fully
-    # offline and deterministic.
+    # Build from the last fallback inward. IQS is the preferred pure-search
+    # source; authenticated Baidu, Baidu HTML and DuckDuckGo remain bounded
+    # fallbacks. No adapter exposes shell/curl or follows arbitrary user URLs.
+    search_provider = None
     if bool(getattr(config, "ddg_search_enabled", False)):
-        ddg = DuckDuckGoAdapter(
+        search_provider = DuckDuckGoAdapter(
             timeout_seconds=getattr(config, "ddg_timeout_seconds", 3.0),
             max_results=getattr(config, "ddg_max_results", 5),
             max_response_bytes=getattr(config, "ddg_max_response_bytes", 512_000),
         )
-        live = SearchAugmentedProvider(live, ddg)
-    if mode == "hybrid":
-        # Keep the fixture fallback as a separate ProviderPort. Search
-        # augmentation belongs only to the live primary path.
-        return live, fixture
+    if bool(getattr(config, "baidu_search_enabled", False)):
+        search_provider = BaiduSearchAdapter(
+            timeout_seconds=getattr(config, "baidu_timeout_seconds", 4.0),
+            max_results=getattr(config, "baidu_max_results", 5),
+            max_response_bytes=getattr(config, "baidu_max_response_bytes", 800_000),
+            fallback_provider=search_provider,
+        )
+    if bool(getattr(config, "qianfan_search_enabled", False)):
+        search_provider = QianfanSearchAdapter(
+            api_key=getattr(config, "qianfan_search_api_key", ""),
+            api_key_file=getattr(config, "qianfan_search_api_key_file", ""),
+            timeout_seconds=getattr(config, "qianfan_search_timeout_seconds", 8.0),
+            max_results=getattr(config, "qianfan_search_max_results", 5),
+            max_response_bytes=getattr(config, "qianfan_search_max_response_bytes", 800_000),
+            fallback_provider=search_provider,
+        )
+    if bool(getattr(config, "aliyun_iqs_search_enabled", False)):
+        search_provider = AliyunIQSSearchAdapter(
+            api_key=getattr(config, "aliyun_iqs_api_key", ""),
+            api_key_file=getattr(config, "aliyun_iqs_api_key_file", ""),
+            timeout_seconds=getattr(config, "aliyun_iqs_timeout_seconds", 5.5),
+            max_results=getattr(config, "aliyun_iqs_max_results", 5),
+            max_response_bytes=getattr(config, "aliyun_iqs_max_response_bytes", 800_000),
+            fallback_provider=search_provider,
+        )
+    if search_provider is not None:
+        live = SearchAugmentedProvider(live, search_provider)
+    if game_index is not None and game_index.available:
+        detail_provider = None
+        if bool(getattr(config, "hupu_enrichment_enabled", False)):
+            detail_provider = HupuAdapter(
+                timeout_seconds=float(getattr(config, "hupu_timeout_seconds", 8.0)),
+                max_response_bytes=int(
+                    getattr(config, "hupu_max_response_bytes", 2_000_000)
+                ),
+            )
+        live = IndexedProvider(live, game_index, detail_provider=detail_provider)
     return live, None
 
 
@@ -91,6 +131,7 @@ def create_app(*, settings: Settings | None = None, usecase: ChatUseCase | None 
     )
     app.state.settings = config
     app.state.highlights_cache = None
+    app.state.game_index = None
     if bool(getattr(config, "highlights_cache_enabled", False)):
         cache_path = Path(str(getattr(config, "highlights_cache_db", "")))
         try:
@@ -116,6 +157,25 @@ def create_app(*, settings: Settings | None = None, usecase: ChatUseCase | None 
         # cache-enabled production profiles start cleanly across supported
         # FastAPI versions.
         app.router.add_event_handler("shutdown", persistent_cache.close)
+    if (
+        bool(getattr(config, "game_index_enabled", False))
+        and str(getattr(config, "public_data_mode", "fixture")).lower() != "fixture"
+    ):
+        index_path = Path(str(getattr(config, "game_index_db", "")))
+        try:
+            index_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        game_index = GameIndex(
+            index_path,
+            max_documents=int(getattr(config, "game_index_max_documents", 10_000)),
+            max_document_bytes=int(
+                getattr(config, "game_index_max_document_bytes", 8_192)
+            ),
+            busy_timeout_ms=int(getattr(config, "game_index_busy_timeout_ms", 1_500)),
+        )
+        app.state.game_index = game_index
+        app.router.add_event_handler("shutdown", game_index.close)
     # Server-owned map of games exposed by the highlights projection. Chat
     # requests may refer to a selected card by ID; resolving that ID here
     # prevents the browser from supplying untrusted team/score metadata.
@@ -135,7 +195,7 @@ def create_app(*, settings: Settings | None = None, usecase: ChatUseCase | None 
     # exits (including disconnect and cancellation paths).
     app.state.sse_connection_limiter = SSEConnectionLimiter(config.max_sse_connections)
     if usecase is None:
-        provider, fallback = _provider_stack(config)
+        provider, fallback = _provider_stack(config, game_index=app.state.game_index)
         gateway = ProviderGateway(
             provider,
             fallback=fallback,

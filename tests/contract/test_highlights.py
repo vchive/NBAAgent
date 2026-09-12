@@ -31,6 +31,8 @@ async def test_highlights_contract_valid_empty_and_future_dates() -> None:
     assert good.json()["data_origin"] == "demo_snapshot"
     assert good.json()["as_of_beijing"] is None
     assert good.json()["games"][0]["venue_name"] == "TD Garden"
+    assert good.json()["games"][0]["home_coach"] == "乔·马祖拉"
+    assert good.json()["games"][0]["away_coach"] == "马克·戴格诺特"
     assert good.json()["games"][0]["venue_city"] == "Boston"
     # A normal NBA slate can contain multiple games on one local calendar
     # date.  The highlights projection must preserve every normalized game;
@@ -86,13 +88,14 @@ async def test_hybrid_fallback_is_not_presented_as_today() -> None:
             params={"timezone": "Asia/Shanghai"},
         )
 
-    assert response.status_code == 503
-    assert response.json()["error"]["code"] == "SERVICE_BUSY"
+    assert response.status_code == 504
+    assert response.json()["error"]["code"] == "UPSTREAM_TIMEOUT"
+    assert fallback.calls == 0
 
 
 @pytest.mark.asyncio
-async def test_hybrid_historical_empty_fills_review_from_snapshot() -> None:
-    """An empty live archive must not make a known review date look blank."""
+async def test_hybrid_historical_empty_does_not_fill_review_from_snapshot() -> None:
+    """A public historical miss must never be replaced by the demo snapshot."""
 
     primary = FixtureProvider(scenario="empty")
     fallback = FixtureProvider()
@@ -119,14 +122,15 @@ async def test_hybrid_historical_empty_fills_review_from_snapshot() -> None:
         )
 
     assert dated.status_code == ranged.status_code == 200
-    assert len(dated.json()["games"]) == 3
-    assert len(ranged.json()["games"]) == 3
-    assert dated.json()["evidence_state"] == "partial"
-    assert ranged.json()["evidence_state"] == "partial"
-    assert dated.json()["data_origin"] == "demo_snapshot"
-    assert ranged.json()["data_origin"] == "demo_snapshot"
+    assert dated.json()["games"] == []
+    assert ranged.json()["games"] == []
+    assert dated.json()["evidence_state"] == "none"
+    assert ranged.json()["evidence_state"] == "none"
+    assert dated.json()["data_origin"] == "none"
+    assert ranged.json()["data_origin"] == "none"
     assert dated.json()["as_of_beijing"] is None
     assert ranged.json()["as_of_beijing"] is None
+    assert fallback.calls == 0
 
 
 @pytest.mark.asyncio
@@ -154,8 +158,8 @@ async def test_highlights_recent_returns_latest_five_games() -> None:
 
 
 @pytest.mark.asyncio
-async def test_hybrid_recent_fills_offseason_from_snapshot_without_long_live_scan() -> None:
-    """A public off-season review still returns the bounded recent-five view."""
+async def test_hybrid_recent_does_not_fill_offseason_from_snapshot() -> None:
+    """A short/empty public recent list must not be padded with demo games."""
 
     primary = FixtureProvider(scenario="empty")
     # Mirror the live ESPN adapter's per-request calendar-slice capability.
@@ -167,24 +171,15 @@ async def test_hybrid_recent_fills_offseason_from_snapshot_without_long_live_sca
 
     result = await service.recent(limit=5, timezone_name="Asia/Shanghai")
 
-    assert [game.game_id for game in result.games] == [
-        "2026-finals-g4",
-        "2026-demo-den-gsw",
-        "2026-demo-lal-nyk",
-        "2026-finals-g3",
-        "2026-finals-g2",
-    ]
-    assert result.evidence_state == "partial"
-    assert result.data_origin == "demo_snapshot"
-    assert {game.data_origin for game in result.games} == {"demo_snapshot"}
-    # The live path only scans the short window; it must not fan out across
-    # the entire 120-day lookback before consulting the bounded snapshot.
-    assert primary.operation_calls.get("search_games", 0) <= 4
+    assert result.games == []
+    assert result.evidence_state == "none"
+    assert result.data_origin == "none"
+    assert fallback.calls == 0
 
 
 @pytest.mark.asyncio
-async def test_mixed_recent_list_preserves_origin_on_each_game_card() -> None:
-    """Aggregate ``mixed`` must not erase which rows came from the public source."""
+async def test_hybrid_short_recent_list_keeps_only_public_game_cards() -> None:
+    """A short public list must remain public instead of becoming mixed/demo."""
 
     class OnePublicGame(FixtureProvider):
         async def search_games(self, filters, budget):
@@ -215,11 +210,11 @@ async def test_mixed_recent_list_preserves_origin_on_each_game_card() -> None:
 
     result = await service.recent(limit=5, timezone_name="Asia/Shanghai")
 
-    assert result.data_origin == "mixed"
+    assert result.data_origin == "public"
     origins = {game.game_id: game.data_origin for game in result.games}
     assert origins["public-live-game"] == "public"
-    assert origins["2026-finals-g4"] == "demo_snapshot"
-    assert set(origins.values()) == {"public", "demo_snapshot"}
+    assert set(origins.values()) == {"public"}
+    assert fallback.calls == 0
 
 
 @pytest.mark.asyncio

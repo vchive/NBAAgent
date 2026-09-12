@@ -431,6 +431,17 @@ p {
   box-shadow: 0 0 0 3px rgba(255, 108, 126, 0.12), 0 0 14px rgba(255, 108, 126, 0.45);
 }
 
+.live-badge.roam-badge {
+  color: var(--cyan-bright);
+  border-color: rgba(85, 213, 230, 0.24);
+  background: rgba(85, 213, 230, 0.07);
+}
+
+.live-badge.roam-badge .status-dot {
+  background: var(--cyan);
+  box-shadow: 0 0 0 3px rgba(85, 213, 230, 0.12), 0 0 14px rgba(85, 213, 230, 0.35);
+}
+
 .highlight-switcher {
   display: flex;
   align-items: center;
@@ -738,7 +749,6 @@ p {
   background: var(--orange);
 }
 
-.calendar-day-empty,
 .calendar-day-future {
   color: var(--ink-700);
   border-color: transparent;
@@ -747,6 +757,22 @@ p {
   cursor: not-allowed;
   text-decoration: line-through;
   text-decoration-color: rgba(117, 144, 170, 0.5);
+}
+
+.calendar-day-empty {
+  color: var(--ink-600);
+  border-color: transparent;
+  background: rgba(255, 255, 255, 0.012);
+  opacity: 0.72;
+  cursor: pointer;
+}
+
+.calendar-day-empty:hover,
+.calendar-day-empty.selected {
+  color: var(--ink-200);
+  border-color: rgba(132, 164, 198, 0.38);
+  background: rgba(132, 164, 198, 0.12);
+  text-decoration: none;
 }
 
 .calendar-day-unknown,
@@ -1336,6 +1362,42 @@ p {
   gap: 7px;
 }
 
+.scope-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 5px 9px;
+  color: var(--cyan-bright);
+  border: 1px solid rgba(85, 213, 230, 0.24);
+  border-radius: 999px;
+  background: rgba(85, 213, 230, 0.07);
+  font: 650 9px/1 var(--font-mono);
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+  appearance: none;
+  cursor: pointer;
+  transition: color 160ms ease, border-color 160ms ease, background 160ms ease;
+}
+
+.scope-pill:hover,
+.scope-pill:focus-visible {
+  color: var(--ink-100);
+  border-color: rgba(85, 213, 230, 0.52);
+  background: rgba(85, 213, 230, 0.14);
+}
+
+.scope-pill[data-scope="drilldown"] {
+  color: var(--green);
+  border-color: rgba(95, 224, 172, 0.36);
+  background: rgba(95, 224, 172, 0.09);
+}
+
+.scope-pill[data-scope="drilldown"]:hover,
+.scope-pill[data-scope="drilldown"]:focus-visible {
+  border-color: rgba(95, 224, 172, 0.66);
+  background: rgba(95, 224, 172, 0.16);
+}
+
 .connection-state {
   display: inline-flex;
   align-items: center;
@@ -1734,6 +1796,21 @@ p {
   background: rgba(255, 197, 106, 0.06);
 }
 
+.capability-notice {
+  border: 1px solid rgba(255, 197, 106, 0.22);
+  border-left: 3px solid var(--amber);
+  background: rgba(255, 197, 106, 0.1);
+}
+
+.capability-notice .block-label {
+  color: var(--amber);
+}
+
+.capability-notice .block-label::before {
+  background: var(--amber);
+  box-shadow: 0 0 0 3px rgba(255, 197, 106, 0.1);
+}
+
 .no-data-block {
   border-left-color: var(--ink-400);
   background: rgba(159, 185, 208, 0.05);
@@ -1743,8 +1820,36 @@ p {
   color: var(--ink-200);
   font-size: 12px;
   line-height: 1.7;
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.block-text-line,
+.assistant-plain-line {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.block-text-line + .block-text-line,
+.assistant-plain-line + .assistant-plain-line {
+  margin-top: 7px;
+}
+
+.markdown-list {
+  margin: 0;
+  padding-left: 20px;
+  white-space: normal;
+}
+
+.markdown-list + .markdown-list,
+.markdown-list + .block-text-line,
+.block-text-line + .markdown-list {
+  margin-top: 7px;
+}
+
+.markdown-list li {
+  padding-left: 3px;
+  margin: 3px 0;
+  white-space: pre-wrap;
 }
 
 .answer-table-wrap {

@@ -128,6 +128,7 @@ terminal、file、browser、MCP、memory、skills、delegation 和通用 web 工
 - `nba_query`：把自然语言子问题送入现有确定性查询/核验用例；
 - `nba_schedule`：查询带日期表达和可选球队条件的已核验赛程；
 - `nba_news`：通过现有受控新闻/背景 Provider 查询，不接受 URL。
+- `nba_search`：通过百度优先的受控网页索引检索长尾问题和战术背景，不接受 URL，结果仅作部分核验候选。
 
 工具 handler 通过 Hermes 提供的 `task_id` 查找一次性 request bridge；bridge 只在请求 deadline
 内可用，调用完成即删除。这样 Hermes 负责规划，NBA API 仍拥有 Provider、缓存、安全、证据

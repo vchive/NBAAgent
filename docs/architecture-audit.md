@@ -17,7 +17,7 @@ flowchart TD
     META -->|普通或 NBA 事实问题| MODE{hybrid / full}
     MODE -->|hybrid| PARSER[意图/实体/时间解析]
     MODE -->|full| AGENT[受控 Agent\n理解与有界规划]
-    AGENT --> TOOLS[nba_query / nba_schedule / nba_news]
+    AGENT --> TOOLS[nba_query / nba_schedule / nba_news / nba_search]
     TOOLS --> PARSER
     PARSER --> PLAN[Query Planner]
     PLAN --> GATEWAY[Provider Gateway + Freshness Cache]
@@ -142,7 +142,21 @@ Resolver 补齐会话能力，通过 PBP/统计解析补齐“刚才那个球”
    现在使用专用检索策略：跳过 TTL、禁止 fallback、按北京时间日期+主客别名匹配唯一公开
    event ID，再读取公开详情；无唯一匹配只说明不能升级核验。
 3. 原 mixed recent 只在 envelope 保存来源，浏览器会把 `mixed` 套到每张卡。现在 API 每场
-   保存 `public/demo_snapshot/none`，服务器 origin registry、SQLite v4 和 Web 均按单场恢复。
+   保存 `public/demo_snapshot/none`，服务器 origin registry、SQLite v5 和 Web 均按单场恢复。
 
 新增对抗回归覆盖错误胜者、罚球改写、终场标记、观察外专名、内部工具措辞、公开匹配/不匹配、
 强制刷新零 fallback、混合列表和缓存重启来源恢复。该修复不扩大 Agent、网络或数据权限。
+
+## 8. 本轮预算与索引复核（2026-09-05）
+
+本轮代码复核补齐了两个容易被忽略的运行时边界：
+
+1. 索引中的赛程行可能只有比分和时间。`IndexedProvider` 现在会对不完整的已索引比赛继续
+   请求主公开详情源，并把成功返回的场馆、教练、球员统计或其他字段合并回 SQLite；远程
+   PBP 也会在已有比赛行时写回索引，后续追问和重启不再重复请求同一逐回合数据。
+2. 全智能 Agent 的工具、嵌套核验和必要的确定性回退共用同一 `RequestBudget`。因此最多 4
+   次 Agent 工具调用不会将 `MAX_PROVIDER_OPERATIONS` 乘以 4；预算仍受单轮截止时间、重试
+   次数和工具调用上限约束。
+
+新增回归覆盖非 Hupu 比赛详情补齐、PBP 持久化复用和四次工具调用共享单轮预算。完整 pytest、
+Ruff、评测与 Playwright 门禁均通过。

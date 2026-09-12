@@ -51,6 +51,74 @@ async def test_gateway_uses_fallback_only_after_primary_error() -> None:
 
 
 @pytest.mark.asyncio
+async def test_gateway_preserves_primary_quota_issue_when_fallback_succeeds() -> None:
+    class QuotaProvider:
+        async def search_games(self, _filters, *, budget):
+            return ProviderResult(
+                data=None,
+                evidence=[],
+                error=ProviderError(
+                    kind=ProviderErrorKind.QUOTA_EXHAUSTED,
+                    retryable=False,
+                    safe_message="quota exhausted",
+                ),
+                retrieved_at_utc=datetime.now(UTC),
+            )
+
+    gateway = ProviderGateway(
+        QuotaProvider(),
+        fallback_provider=_Provider(value="fixture"),
+        max_retries=0,
+    )
+    result = await gateway.search_games(
+        GameFilters(),
+        budget=RequestBudget(datetime.now(UTC) + timedelta(seconds=2)),
+    )
+
+    assert result.error is None
+    assert result.data == ["fixture"]
+    assert result.capability_issues[0].kind is ProviderErrorKind.QUOTA_EXHAUSTED
+
+
+@pytest.mark.asyncio
+async def test_gateway_does_not_cache_request_scoped_capability_issue() -> None:
+    class RecoveredProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def search_games(self, _filters, *, budget):
+            self.calls += 1
+            return ProviderResult(
+                data=["public"],
+                evidence=[],
+                capability_issues=[
+                    ProviderError(
+                        kind=ProviderErrorKind.QUOTA_EXHAUSTED,
+                        retryable=False,
+                        safe_message="quota exhausted",
+                    )
+                ],
+                retrieved_at_utc=datetime.now(UTC),
+            )
+
+    provider = RecoveredProvider()
+    gateway = ProviderGateway(provider, cache=InMemoryTTLCache(), max_retries=0)
+    first = await gateway.search_games(
+        GameFilters(),
+        budget=RequestBudget(datetime.now(UTC) + timedelta(seconds=2)),
+    )
+    cached = await gateway.search_games(
+        GameFilters(),
+        budget=RequestBudget(datetime.now(UTC) + timedelta(seconds=2)),
+    )
+
+    assert first.capability_issues
+    assert cached.data == ["public"]
+    assert cached.capability_issues == []
+    assert provider.calls == 1
+
+
+@pytest.mark.asyncio
 async def test_gateway_does_not_replace_authoritative_empty_result() -> None:
     primary = _Provider(value="")
     fallback = _Provider(value="fixture")

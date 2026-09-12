@@ -2,9 +2,9 @@
 
 **Feature**: [spec.md](spec.md)
 **HLD**: [hld.md](hld.md)
-**Status**: 官方 Agent、语义 grounding、公开复核、逐场来源与会话能力已实现
+**Status**: Agent-first 路由、Qianfan-first 长尾检索、语义 grounding、公开复核、逐场来源与会话能力已实现
 **Date**: 2026-09-01
-**Revision**: v0.7 — 关系级事实守卫、主源强制复核与缓存来源 v4
+**Revision**: v0.8 — Agent-first 搜索工具与公共能力脱敏
 
 本文把 HLD 的组件落到可实现的模块、类型、状态、协议和测试。字段名是内部契约示例；
 除明确标注为用户字段的内容外，不得原样回传浏览器。
@@ -23,11 +23,12 @@
 - 本地运行：`uvicorn` + Python 静态文件服务器；无凭据时使用 fixture/mock provider 和
   mock composer。Docker/Compose 是后续部署任务，不是当前 fixture MVP 的前置条件。
 
-运行时默认采用 `hybrid` 策略：客观问题使用模板/确定性 renderer，F/G 可在事实核验后调用
-受限单轮 composer。`intelligence_mode=full` 则在 SafetyGuard 和 Context 之后、规则解析之前
-进入官方 `hermes-agent==0.19.0` 的 Agent loop。Agent 只可调用 `nba_query`、`nba_schedule`、
-`nba_news`，这些 handler 通过任务级 bridge 重入确定性用例并强制禁止递归 Agent；生产仍应
-迁移到隔离 sidecar。
+运行时保留可关闭的 `hybrid` 策略；公开 SiliconFlow 配置默认使用 `intelligence_mode=full`。
+全智能请求在 SafetyGuard 和 Context 之后、规则解析之前进入 Agent loop。Agent 可调用
+`nba_query`、`nba_schedule`、`nba_news` 和 `nba_search`：前三者复用结构化事实用例，后者
+通过独立 `search_web` 的 Qianfan-first 固定 HTTPS 搜索适配器提供长尾背景线索，不先调用结构化新闻。
+所有 handler 通过任务级 bridge
+重入确定性用例并强制禁止递归 Agent；生产仍应迁移到隔离 sidecar。
 
 这些选择服务于快速交付和可测试性，不是 PDF 的强制技术栈。所有外部依赖均通过端口
 （Protocol）隔离。
@@ -54,7 +55,9 @@ apps/api/src/
 │   └── derivation.py               # deterministic aggregations
 ├── providers/
 │   ├── espn_adapter.py             # public web adapter
-│   ├── ddg_adapter.py              # fixed-endpoint news/background search
+│   ├── qianfan_search_adapter.py   # Qianfan AI Search fixed endpoint
+│   ├── baidu_adapter.py            # Baidu HTML fallback search
+│   ├── ddg_adapter.py              # optional secondary search
 │   ├── search_augmented_provider.py# typed NBA + search composition
 │   ├── fallback_adapter.py         # optional secondary source
 │   ├── normalizer.py
@@ -139,7 +142,7 @@ AgentTurnInput {
   deadline_at_utc: Instant
   max_iterations: int = 4
   max_tool_calls: int = 4
-  allowed_tools: ["nba_query", "nba_schedule", "nba_news"]
+  allowed_tools: ["nba_query", "nba_schedule", "nba_news", "nba_search"]
 }
 
 AgentToolObservation {
@@ -156,10 +159,13 @@ AgentToolObservation {
 AgentTurnResult {
   status: OK | TIMEOUT | UNAVAILABLE | UNSAFE
   answer_markdown: string?
-  tool_calls: [{name: string, arguments_hash: string, status: string, latency_ms: int}]
+  tool_calls: [{name: string, arguments_hash: string, status: string, latency_ms: int,
+                error_code: string?, retryable: bool}]
   evidence_state: EvidenceState
   used_observation_ids: string[]
   finish_reason: string?
+  error_code: ErrorCode?
+  retryable: bool
   usage: {input_tokens: int, output_tokens: int}?
   latency_ms: int
 }
@@ -190,7 +196,7 @@ CapabilityManifest {
   policy_version: string
   policy_hash: string
   tools_hash: string
-  tools_enabled: [] | ["nba_query", "nba_schedule", "nba_news"]
+  tools_enabled: [] | ["nba_query", "nba_schedule", "nba_news", "nba_search"]
   network_mode: "deny" | "model_egress_only"
   filesystem_mode: "none"
   sandbox_uid: int
@@ -398,6 +404,7 @@ ProviderPort.get_team_stats(query: StatsQuery, budget: RequestBudget) -> Provide
 ProviderPort.get_standings(season: SeasonLabel, budget: RequestBudget) -> ProviderResult[list[Standing]]
 ProviderPort.get_history(query: HistoryQuery, budget: RequestBudget) -> ProviderResult[list[HistoryRecord]]
 ProviderPort.search_news(query: NewsQuery, budget: RequestBudget) -> ProviderResult[list[NewsItem]]
+ProviderPort.search_web(query: NewsQuery, budget: RequestBudget) -> ProviderResult[list[NewsItem]]
 AgentRuntimePort.compose(input: ComposerInput, cancel: CancelToken) -> RuntimeResult
 ```
 
@@ -435,13 +442,19 @@ ProviderResult[T]
   evidence: list[Evidence]
   partial: bool
   error: ProviderError | None
+  capability_issues: list[CapabilityIssue]  # request-scoped; never cached as data
   retrieved_at_utc: Instant
 
 ProviderError
-  kind: TIMEOUT | RATE_LIMITED | AUTH | HTTP | INVALID_JSON | SCHEMA_MISMATCH | NOT_FOUND
+  kind: TIMEOUT | RATE_LIMITED | QUOTA_EXHAUSTED | AUTH | HTTP | INVALID_JSON | SCHEMA_MISMATCH | NOT_FOUND
   retryable: bool
   safe_message: string
   retry_after_seconds: int | None
+
+CapabilityIssue
+  capability: INTELLIGENCE | SEARCH
+  kind: QUOTA_EXHAUSTED | AUTH_UNAVAILABLE | TEMPORARILY_UNAVAILABLE
+  retryable: bool
 ```
 
 `StatsQuery`、`HistoryQuery` 和 `HistoryRecord` 的 canonical 字段见 [data-model.md](data-model.md)。
@@ -465,16 +478,28 @@ Normalizer 将不同来源映射到 canonical entities；不识别的字段丢�
 适配器必须带 `User-Agent`、超时和响应大小上限，保存 fixture 时去除凭据和不必要原始内容。
 Provider 健康检查只验证允许的端点，不把上游 URL 发送给用户。
 venue 从 competition 级 `fullName` 与 address 的 city/state/country 映射；名称缺失时不创建
-venue，地址分量缺失时保留 `null`。场馆问答由模板单独渲染，不附加默认比分/得分王。
+venue，地址分量缺失时保留 `null`；同一原则适用于可选的 `home_coach`/`away_coach`。
+场馆和教练问答由模板按字段单独渲染，不附加默认比分/得分王；字段缺失时只返回明确的
+暂不可核验提示。
 
-### 4.3.1 DuckDuckGo search adapter
+### 4.3.1 Qianfan AI Search adapter
 
-`DuckDuckGoAdapter` 只实现 `search_news(NewsQuery, RequestBudget)`，固定访问
+`QianfanSearchAdapter` 实现 `search_news` 与专用的 `search_web(NewsQuery, RequestBudget)`，固定访问
+`https://qianfan.baidubce.com/v2/ai_search/web_search`，使用 Docker secret 中的 Bearer
+密钥，限制 query、结果数、响应大小和请求时延。仅投影清洗后的 `references` 标题/摘要，
+搜索结果保持 `partial=true`，不得单独证明比分、排名、统计或 PBP。
+
+### 4.3.2 DuckDuckGo search adapter
+
+`DuckDuckGoAdapter` 实现 `search_news` 与专用的 `search_web(NewsQuery, RequestBudget)`，固定访问
 `https://api.duckduckgo.com/`，不接受用户提供的 URL。查询由 typed subject/keywords 生成，
 最多 5 条结果、3 秒超时和有界响应体；摘要会移除 HTML、脚本、链接、控制字符及提示注入。
 每条候选使用 `SourceClass.SEARCH`、中等信任和 `Freshness.UNKNOWN` 证据，并将结果标记为
-`partial=true`。`SearchAugmentedProvider` 先调用 NBA 结构化新闻源，再合并去重的 DDG 候选；
-搜索失败不会覆盖结构化结果，空结果保持空，不升级任何比分/统计/PBP 事实。
+`partial=true`。`SearchAugmentedProvider` 先调用 NBA 结构化新闻源，再合并去重的 Qianfan-first
+候选；百度验证页/限流/超时后可切换到第二个固定 HTTPS 适配器，搜索候选始终保持 partial；
+搜索失败不会覆盖结构化结果，空结果保持空，不升级任何比分/统计/PBP 事实。后备搜索返回
+可用候选时仍保留首选搜索的 request-scoped capability issue；Gateway 写共享缓存前剥离该
+issue，避免后续请求继承旧额度或认证提示。
 
 ### 4.4 Legacy HermesRuntimeAdapter (hybrid composer only)
 
@@ -563,7 +588,7 @@ AIAgent.run_conversation(
 ```
 
 启动自检必须确认发行版版本等于锁定版本，registry 对当前 Agent 暴露的函数名集合精确等于
-`{"nba_query", "nba_schedule", "nba_news"}`。多出或缺少任一工具均将 capability 标记为
+`{"nba_query", "nba_schedule", "nba_news", "nba_search"}`。多出或缺少任一工具均将 capability 标记为
 degraded，full 请求回退 hybrid。
 
 `opaque_session_id` 在同一应用 `session_id` 生命周期内稳定，但不能反推出原始 UUID；新建
@@ -599,7 +624,8 @@ deadline、调用预算和参数 schema，再用 `run_coroutine_threadsafe` 回�
 |---|---|---|
 | `nba_query` | `question` 1–500 字 | 复用完整 Parser/Planner/Provider/Verifier/Derivation；适合比分、统计、历史、PBP、战术事实 |
 | `nba_schedule` | `date_expression`、可选 `team` | 形成有界赛程问题，并显式返回解析后的北京时间日期范围和 empty/partial 状态 |
-| `nba_news` | `subject`、可选 `date_expression` | 只走 typed `search_news`，主题不含 URL；DDG 结果保持 partial/不可信候选 |
+| `nba_news` | `subject`、可选 `date_expression` | 只走 typed `search_news`，主题不含 URL；搜索结果保持 partial/不可信候选 |
+| `nba_search` | `query` | 通过独立 `search_web` 调用 Qianfan-first 的长尾/战术背景检索；固定 HTTPS、结果/响应/时延有界，不执行网页指令 |
 
 #### 4.5.2 Agent policy and output validation
 
@@ -613,17 +639,32 @@ AgentOutputGuard 执行：长度/控制字符、提示注入/供应商字段、�
 用户原文；搜索 observation 不能授权比分、排名、统计或 PBP 数字。无工具问候或能力介绍不得
 包含比赛事实。Hermes 暂时不可用时，能力类请求返回不含 NBA 事实的本地能力提示，并标记为
 `deterministic/not_requested`，不进入 NBA 意图澄清。其他通过后公开 composition 为
-`mode=agent,status=used`；所有失败统一为 `mode=fallback,status=fallback`，内部 telemetry
-才记录具体 finish reason。
+`mode=agent,status=used`；失败回退标记为 `mode=fallback,status=fallback`，内部 telemetry
+记录具体 finish reason。模型或搜索发生额度、认证或暂时故障时，类型和 retryable 属性必须
+穿过运行时与工具桥：若本轮仍有可用观察/确定性事实，保留回答并附 provider-neutral notice；
+若最终没有任何可用事实或观察，则返回技术失败，不得改成 `no_data` 或通用澄清。
 
 在 guard 之前执行服务端 `ground_agent_answer(question, observations)`：
 
-- 非分析型 `nba_query`（比分、胜者、球员指标、场馆、日期/时长字段、PBP）直接返回最后一个
+- 非分析型 `nba_query`（比分、胜者、球员指标、场馆、日期/时长/主教练字段、PBP）直接返回最后一个
   成功确定性 observation 的 `answer_markdown`，不接受模型对事实关系的自由改写；
 - 空赛程直接投影 observation 中完整的北京时间范围；
 - `public_reverification` observation 对模型始终权威；
 - 战术/原因/评价类允许 Agent 组织推断，但内部工具/能力描述、无观察数字或观察外事实触发
   guard/fallback。
+
+搜索观察的恢复路径必须调用同一套 `compact_search_observation` 投影：按标题去重，最多保留
+3 条候选；标题最多 120 字符、摘要最多 240 字符且优先在句号/问号/感叹号边界结束。该投影
+只进入 Hermes 的内部 grounding；结构化查询为空而搜索有候选时，Hermes 需综合回答
+问题，不得把候选标题/摘要或“补充线索/待交叉核验”等流程话术原样返回给用户。证据等级通过
+response metadata/UI 表示，不能用正文拼接。观察清洗保留 Markdown 换行（仅移除其他 C0 控制
+字符），Web 端不得把内部 grounding 列表直接渲染成公共答案。
+
+对于已明确给出年份和双方球队的 subject-only matchup 查询，`_agent_web_search_observation` 会
+在通用搜索之外追加一次有界的“总决赛/总冠军/G5/夺冠”检索，并在双方实体过滤后按
+“总冠军/夺冠/G5/4-1/总决赛/系列赛”相关度排序，帮助 Agent 优先看到系列赛结论；
+`_agent_tool_runner` 不再追加“请补充日期或场次”，而是明确说明网页摘要与结构化比赛记录尚未
+交叉核验。该排序不改变 `partial` 证据等级，也不会授权搜索结果证明比分、统计或 PBP。
 
 显式“联网实时查验”由工具 bridge 截获并使用选中比赛的服务器记录执行：将开赛时刻转为请求
 时区本地日期，不携带内部 fixture ID 查询 summary；先对 primary scoreboard 使用
@@ -710,7 +751,9 @@ ParseResult {
   `(period ASC, clock_seconds_remaining DESC, provider_index ASC)` 排序。`sequence_valid=true`
   要求相关事件的 sequence 非空且可用，`provider_index` 始终作为稳定 tie-breaker。常规节和
   加时保留原始 `period` 编号，0 和 5.0 秒均包含；缺少出手者、参与者、得分值或比分的事件
-  可以列出，但不能单独形成已核实的关键球断言。
+  可以列出，但不能单独形成已核实的关键球断言。`home_score_after/away_score_after` 只在内部
+  保留源字段顺序；表格、事件叙述、最后一投和战术事实投影必须输出
+  `主队名称 home_score–away_score 客队名称`，缺少比赛实体时至少输出“主队/客队”标签。
 - **分析理由**：Composer 只能引用 `VERIFIED` 或明确标为 `PARTIAL` 的事实；LLM 不执行
   加法、比较阈值或 PBP 选择。
 
@@ -767,22 +810,23 @@ Provider。
 ### 9.1 Date-scoped highlights projection
 
 `GET /api/v1/highlights?date=YYYY-MM-DD&timezone=...` is a read-only scoreboard projection,
-separate from the chat `HISTORY` intent. The service converts the requested local calendar day
+separate from the chat `HISTORY` intent. It is used only after the user enters 赛事下钻; the
+default 漫游模式 does not request today's projection. The service converts the requested local calendar day
 to a half-open UTC range, rejects dates later than the injected clock's local day, and returns a
 provider-free `games` projection plus `evidence_state`/`as_of_beijing`/`data_origin`. Every game
 also carries `data_origin=public|demo_snapshot|none`; envelope `mixed` is aggregate-only and must
 never be copied over rows that already have their own origin. The `games` array is never
 truncated: a normal NBA slate may contain multiple games. The browser renders a compact list,
-keeps one selected game as the featured card, and updates HUD/PBP atomically when a list item is
-clicked. An empty successful result is represented by `games: []`; the browser must clear the
+keeps cards browse-only until an explicit list-item click, and updates HUD/PBP atomically when a
+list item is clicked. An empty successful result is represented by `games: []`; the browser must clear the
 prior card before rendering it. Missing PBP is rendered as an explicit no-data state rather than
 reusing events from another game. The static demo uses `2026-06-12` as its explicit offline
 fixture date and labels the PBP panel as text-only; no third-party media URL is accepted by this
 contract. Fixture/fallback responses use envelope `data_origin=demo_snapshot|mixed`; a pure demo
 snapshot does not carry a freshly generated public-data timestamp, and the browser labels its cards
 as DEMO. The server-owned selected-game registry keeps a parallel per-ID origin registry. SQLite
-serialized projection schema v4 persists the row-level field/aggregate semantics and treats v3 keys as misses, so
-restart/cache rehydration cannot erase provenance.
+serialized projection schema v5 persists the row-level field/aggregate semantics and treats v4 keys
+as misses, so restart/cache rehydration cannot erase provenance.
 
 ### 9.2 Date availability projection
 
@@ -807,10 +851,13 @@ belong to the resolved game's home/away pair; unrelated matchups retain their no
 semantics. Explicit G4/G3 entities always win. The context is committed with the turn so switching
 cards replaces the active game on the next request without sharing state across sessions.
 
-The left rail labels the historical projection as “精彩回顾”. The default view calls
+The left rail labels the historical projection as “赛事下钻”（内容标题仍可显示“精彩回顾”）. The default
+left-rail mode is “漫游模式” and performs no highlights request. After entering 赛事下钻, the recent view calls
 `GET /api/v1/highlights/recent?limit=5&timezone=...`; the service scans bounded provider date
 slices from newest to oldest and stops after five normalized games. The browser sorts the returned
 projection by `start_utc` descending and renders every returned game card.
+Rendering a featured card does not set `activeGame` or send `selected_game_id`; those fields are
+set only by the explicit card-click reducer, which changes the visible scope badge to “赛事下钻”.
 
 The “自定义时间” view calls
 `GET /api/v1/highlights/range?from=YYYY-MM-DD&to=YYYY-MM-DD&timezone=...`. Both endpoints return
@@ -834,6 +881,7 @@ retryable/error message and never leave stale scoreboard cards visible.
 | `SERVICE_BUSY` | Yes | 本地过载，提示稍后重试并可带 Retry-After |
 | `UPSTREAM_TIMEOUT` | Yes | 提示稍后重试，不显示旧数字 |
 | `UPSTREAM_RATE_LIMITED` | Yes | 提示稍后重试并记录退避 |
+| `QUOTA_EXHAUSTED` (internal provider kind) | No | 有可用 fallback 时回答并提示；否则映射为技术失败 |
 | `UPSTREAM_AUTH` | No (operator) | 用户看到服务暂不可用，内部告警 |
 | `INVALID_UPSTREAM_DATA` | No | 尝试已配置 fallback；仍失败则暂无数据，记录 schema 错误 |
 | `COMPOSER_UNAVAILABLE` | Yes | 回退模板或稍后重试 |
@@ -843,12 +891,20 @@ retryable/error message and never leave stale scoreboard cards visible.
 对应 HTTP 契约中的 `blocked`、`needs_clarification` 或 `no_data`（HTTP 200），不是技术
 失败的 error envelope；`SERVICE_BUSY` 以及其余表项进入 `status=failed`。
 
+公共 `notices` 使用 `INTELLIGENCE_*` 与 `SEARCH_*` 两个能力域及
+`QUOTA_EXHAUSTED|AUTH_UNAVAILABLE|TEMPORARILY_UNAVAILABLE` 三类稳定后缀，不暴露模型、
+搜索供应商、工具或账号。可用事实与 notice 可以同时存在；只有没有可用事实/观察时才进入
+技术 error envelope。普通 429/QPS 是 `RATE_LIMITED,retryable=true`；明确余额、账单、试用
+结束或额度耗尽才是不可立即重试的 quota failure。
+
 ### 10.2 Cache and sessions
 
 - SafetyGuard 必须在任何 Provider/cache lookup 之前完成；BLOCKED 或 OUT_OF_SCOPE 分支不读写
   Provider 缓存（`cache_read_count=cache_write_count=0`）。
 - cache key = `provider + canonical request filters + data scope + season`，不把原始敏感文本
   作为可复用 key。
+- `ProviderResult.capability_issues` 在 cache set 前必须清空，cache hit 也要防御性清空；
+  它只描述发起该请求时的能力状态，不能随事实数据跨请求复用。
 - 默认 TTL（可配置的工程起点）：实时赛程/比分 30–60 秒、box score 5 分钟、历史资料
   24 小时。响应携带 freshness；过期数据只能作背景，不能回答“当前”。
 - session store 只保存最近有限轮次的摘要和活动实体，默认 TTL 24 小时；同一 session 的
@@ -858,6 +914,10 @@ retryable/error message and never leave stale scoreboard cards visible.
 - full 模式从 session store 投影最近 4 个完整 user/assistant 回合；网页刷新沿用同一
   `session_id`，点击“新对话”生成新 ID。Agent 原生 memory/session database 不保存任何
   对话；旧回答不能替代当前轮 NBA 工具核验。
+- 赛事下钻卡片是当前会话的显式比赛范围：即使用户省略“这场”而直接询问“比赛双方教练”
+  或“比赛持续多久”，服务端也会把游戏级查询绑定到该卡片；“最近一场”及带明确日期范围的
+  全局赛程请求保持原有范围，不被卡片覆盖。全智能 Agent 首轮明确提到的 G4/G3 等实体同样
+  会写回会话上下文，后续代词追问可继续沿用该比赛并重新调用工具核验。
 - 同一 session 的并发请求按 `(session_id, client_message_id)` 在编排开始前原子 reserve；
   重复请求若仍 in-flight 则等待或返回可重连状态，完成后复用 envelope；不同 session 永不
   共享上下文。
@@ -886,7 +946,7 @@ P90 时延、队列深度、SSE 连接数、Provider 熔断、Hermes fallback �
 
 | 层级 | 场景 | 必须断言 |
 |---|---|---|
-| Contract | composer 与 Agent capability/session | composer 工具关闭；Agent 工具集合精确为三个 NBA 工具，包版本锁定；逻辑 session 稳定且 task ID 独立；非法/超限历史拒绝 |
+| Contract | composer 与 Agent capability/session | composer 工具关闭；Agent 工具集合精确为受控 NBA 工具，包版本锁定；逻辑 session 稳定且 task ID 独立；非法/超限历史拒绝 |
 | Integration | Agent 正常/空结果/超时/不可用/不安全/三轮追问 | full 使用 `agent/used`；失败回退；三轮不串比赛且每个事实轮重新调用 NBA 工具；新 session 无旧历史 |
 | Security | 注入文本、恶意工具配置、网络/文件系统探测 | Safety 在 Agent 前零调用；无通用工具/memory/出站旁路；OutputGuard 阻断未观察数字 |
 | Operations | admission 满载、SSE 断开、滚动重启、SessionStore 故障 | 队列有界、取消无 orphan、会话不静默串线、幂等结果可恢复 |
@@ -969,5 +1029,5 @@ traceability” 小节；该矩阵是实现和代码审查的唯一任务 ID 来
 | Provider / Normalizer | null/字段映射、重试策略 | provider fixtures、错误码 | live/fixture gateway | A/B/C/E 客观题 |
 | Verifier / Derivation | 前提纠偏、系列赛、PBP | FactBundle/Evidence schema | partial/conflict upstream | D/E 准确性题 |
 | Composer / API | 风格、结构、状态 | HTTP/SSE envelope | Web loading/stream/error | F/G 表达题 |
-| Highlights projection | 日期范围、未来校验、空集合、可用性三态 | `/api/v1/highlights` 与 `/api/v1/highlights/availability` schemas | 左栏今日/历史切换、无赛日置灰、旧卡片清除 | SC-011 日期验收 |
+| Highlights projection | 漫游/下钻边界、日期范围、未来校验、空集合、可用性三态 | `/api/v1/highlights` 与 `/api/v1/highlights/availability` schemas | 默认不请求今日、下钻最近五场/日期切换、空/未来日期和旧卡片清除 | SC-011 日期验收 |
 | Telemetry / Evaluation Runner | 脱敏、权重计算 | report schema | repeated replay | 七维评分/时延 |

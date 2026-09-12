@@ -17,7 +17,9 @@ services:
       HERMES_LITE_MODE: off
       ALLOWED_ORIGINS: http://localhost:4173,http://127.0.0.1:4173,http://localhost:54572,http://127.0.0.1:54572
     ports:
-      - "8000:8000"
+      # Keep the API private to this host. Put an authenticated reverse proxy
+      # in front of it if external access is needed again.
+      - "127.0.0.1:8000:8000"
     read_only: true
     tmpfs:
       - /tmp:size=16m,noexec,nosuid

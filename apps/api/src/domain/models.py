@@ -651,7 +651,10 @@ class DraftAnswer(CanonicalModel):
 
 
 class FactBundle(CanonicalModel):
-    facts: list[FactAssertion] = Field(default_factory=list, max_length=500)
+    # A complete NBA box score can contain 30 players × 17 numeric fields,
+    # before the game-level score/status assertions are added. Keep the
+    # bundle bounded while allowing one full game to pass verification.
+    facts: list[FactAssertion] = Field(default_factory=list, max_length=2_000)
     missing: list[str] = Field(default_factory=list, max_length=100)
     corrections: list[Correction] = Field(default_factory=list, max_length=32)
     evidence_state: EvidenceState = EvidenceState.NONE
@@ -758,6 +761,11 @@ class QueryIntent(CanonicalModel):
     # no explicit game ID. The planner uses this hint for a bounded latest
     # completed-game lookup before loading play-by-play data.
     recent_game: bool = False
+    # The parser found two (or more) teams in a head-to-head expression.  This
+    # is deliberately separate from ``entities`` so the planner can require
+    # both teams in the provider filter instead of accidentally running a
+    # single-team statistics lookup for the first mention.
+    matchup: bool = False
 
     _CATEGORY_INTENT: ClassVar[dict[Category, IntentName]] = {
         Category.A: IntentName.DATA,
@@ -828,6 +836,7 @@ class GameFilters(CanonicalModel):
     season: SeasonLabel | None = None
     team_ids: list[str] = Field(default_factory=list, max_length=32)
     status: GameStatus | None = None
+    series_game_number: int | None = Field(default=None, ge=1, le=20)
 
     @field_validator("team_ids")
     @classmethod
@@ -876,14 +885,34 @@ class Game(CanonicalModel):
     start_utc: datetime
     home: EntityRef
     away: EntityRef
+    # Head-coach metadata is optional across public scoreboard providers.  Keep
+    # the two sides explicit so a missing provider field remains null instead
+    # of being inferred from a team or a stale roster record.
+    home_coach: str | None = Field(default=None, max_length=200)
+    away_coach: str | None = Field(default=None, max_length=200)
     status: GameStatus
     home_score: int | None = Field(default=None, ge=0)
     away_score: int | None = Field(default=None, ge=0)
     series_id: str | None = Field(default=None, max_length=128)
     series_game_number: int | None = Field(default=None, ge=1, le=20)
     venue: Venue | None = None
+    # Optional wall-clock duration and announced attendance from a structured
+    # box-score source.  They are never inferred from regulation/PBP clocks.
+    duration_seconds: int | None = Field(default=None, ge=0, le=86_400)
+    attendance: int | None = Field(default=None, ge=0, le=1_000_000)
 
     _validate_start = field_validator("start_utc")(_aware)
+
+    @field_validator("home_coach", "away_coach")
+    @classmethod
+    def _coach_text_safe(cls, value: str | None) -> str | None:
+        if value is not None:
+            value = value.strip()
+            if not value:
+                return None
+            if _has_control_chars(value, allow_linebreaks=False):
+                raise ValueError("coach name contains control characters")
+        return value
 
     @model_validator(mode="after")
     def _teams(self) -> Game:
@@ -981,9 +1010,29 @@ class PlayEvent(CanonicalModel):
     home_score_after: int | None = Field(default=None, ge=0)
     away_score_after: int | None = Field(default=None, ge=0)
     wallclock_utc: datetime | None = None
+    # A bounded, plain-text projection of the provider's event description.
+    # This preserves explicit details such as "上篮" or "底角三分" which
+    # cannot be represented by the coarse shot_type enum.  It remains null
+    # when the source does not provide that detail; callers must not infer it.
+    action_text: str | None = Field(default=None, max_length=500)
     raw_text_hash: str | None = Field(default=None, max_length=128)
 
     _validate_wallclock = field_validator("wallclock_utc")(_aware)
+
+    @field_validator("action_text")
+    @classmethod
+    def _action_text_safe(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if _has_control_chars(value, allow_linebreaks=False):
+            raise ValueError("play action text contains control characters")
+        # Provider HTML must be reduced to text before entering the canonical
+        # model.  Reject tag-shaped input here as a second boundary so cached
+        # events can be rendered or supplied to the Agent safely.
+        if re.search(r"<[^>]{0,500}>", value):
+            raise ValueError("play action text must not contain HTML")
+        text = " ".join(value.split())
+        return text or None
 
 
 class PlayByPlayBundle(CanonicalModel):
@@ -1148,7 +1197,7 @@ class QueryRecord(CanonicalModel):
     @field_validator("agent_tool_names")
     @classmethod
     def _agent_tool_allowlist(cls, value: list[str]) -> list[str]:
-        allowed = {"nba_query", "nba_schedule", "nba_news"}
+        allowed = {"nba_query", "nba_schedule", "nba_news", "nba_search"}
         if any(item not in allowed for item in value):
             raise ValueError("agent tool names must use the NBA allow-list")
         return value
@@ -1307,8 +1356,8 @@ class EvaluationCase(CanonicalModel):
         indices = [turn.turn_index for turn in self.turns]
         if indices != list(range(1, len(indices) + 1)):
             raise ValueError("evaluation turn_index values must be contiguous from 1")
-        if self.category is Category.H and len(self.turns) != 3:
-            raise ValueError("category H evaluation cases require exactly three turns")
+        if self.category is Category.H and len(self.turns) < 3:
+            raise ValueError("category H evaluation cases require at least three turns")
         return self
 
 

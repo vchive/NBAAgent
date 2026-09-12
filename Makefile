@@ -1,4 +1,4 @@
-.PHONY: install test lint api demo eval solution-pdf docker-build docker-up configure-siliconflow-key configure-app-password docker-up-auth docker-up-silicon docker-down deploy deploy-live deploy-status
+.PHONY: install test lint api demo eval solution-pdf docker-build docker-up configure-siliconflow-key configure-aliyun-iqs-key configure-qianfan-search-key configure-app-password docker-up-auth docker-up-silicon docker-up-qianfan docker-down deploy deploy-live deploy-live-qianfan warm-2026-cache warm-game-index deploy-status
 
 install:
 	python3 -m pip install -e '.[dev]'
@@ -30,6 +30,12 @@ docker-up:
 configure-siliconflow-key:
 	./scripts/configure-siliconflow-key.sh
 
+configure-aliyun-iqs-key:
+	./scripts/configure-aliyun-iqs-key.sh
+
+configure-qianfan-search-key:
+	./scripts/configure-qianfan-search-key.sh
+
 configure-app-password:
 	./scripts/configure-app-password.sh
 
@@ -40,6 +46,8 @@ docker-up-auth:
 docker-up-silicon:
 	@test -s secrets/app_password || { echo "缺少 secrets/app_password；先运行 make configure-app-password" >&2; exit 1; }
 	@test -s secrets/siliconflow_api_key || { echo "缺少 secrets/siliconflow_api_key；先运行 make configure-siliconflow-key" >&2; exit 1; }
+	@test -s secrets/aliyun_iqs_api_key || { echo "缺少 secrets/aliyun_iqs_api_key；先运行 make configure-aliyun-iqs-key" >&2; exit 1; }
+	@test -s secrets/qianfan_search_api_key || { echo "缺少 secrets/qianfan_search_api_key；先运行 make configure-qianfan-search-key" >&2; exit 1; }
 	docker compose -f docker-compose.yml -f docker-compose.auth.yml -f docker-compose.siliconflow.yml up --build
 
 docker-down:
@@ -52,7 +60,34 @@ deploy:
 deploy-live:
 	@test -s secrets/app_password || { echo "缺少 secrets/app_password；先运行 make configure-app-password" >&2; exit 1; }
 	@test -s secrets/siliconflow_api_key || { echo "缺少 secrets/siliconflow_api_key；先运行 make configure-siliconflow-key" >&2; exit 1; }
+	@test -s secrets/aliyun_iqs_api_key || { echo "缺少 secrets/aliyun_iqs_api_key；先运行 make configure-aliyun-iqs-key" >&2; exit 1; }
+	@test -s secrets/qianfan_search_api_key || { echo "缺少 secrets/qianfan_search_api_key；先运行 make configure-qianfan-search-key" >&2; exit 1; }
 	docker compose -f docker-compose.yml -f docker-compose.public.yml -f docker-compose.auth.yml -f docker-compose.siliconflow.yml up -d --build --force-recreate
+
+docker-up-qianfan:
+	@test -s secrets/app_password || { echo "缺少 secrets/app_password；先运行 make configure-app-password" >&2; exit 1; }
+	@test -s secrets/siliconflow_api_key || { echo "缺少 secrets/siliconflow_api_key；先运行 make configure-siliconflow-key" >&2; exit 1; }
+	@test -s secrets/aliyun_iqs_api_key || { echo "缺少 secrets/aliyun_iqs_api_key；先运行 make configure-aliyun-iqs-key" >&2; exit 1; }
+	@test -s secrets/qianfan_search_api_key || { echo "缺少 secrets/qianfan_search_api_key；先运行 make configure-qianfan-search-key" >&2; exit 1; }
+	docker compose -f docker-compose.yml -f docker-compose.auth.yml -f docker-compose.siliconflow.yml -f docker-compose.qianfan.yml up --build
+
+deploy-live-qianfan:
+	@test -s secrets/app_password || { echo "缺少 secrets/app_password；先运行 make configure-app-password" >&2; exit 1; }
+	@test -s secrets/siliconflow_api_key || { echo "缺少 secrets/siliconflow_api_key；先运行 make configure-siliconflow-key" >&2; exit 1; }
+	@test -s secrets/aliyun_iqs_api_key || { echo "缺少 secrets/aliyun_iqs_api_key；先运行 make configure-aliyun-iqs-key" >&2; exit 1; }
+	@test -s secrets/qianfan_search_api_key || { echo "缺少 secrets/qianfan_search_api_key；先运行 make configure-qianfan-search-key" >&2; exit 1; }
+	docker compose -f docker-compose.yml -f docker-compose.public.yml -f docker-compose.auth.yml -f docker-compose.siliconflow.yml -f docker-compose.qianfan.yml up -d --build --force-recreate
+
+warm-2026-cache:
+	@test -s secrets/app_password || { echo "缺少 secrets/app_password；先运行 make configure-app-password" >&2; exit 1; }
+	@test -s secrets/siliconflow_api_key || { echo "缺少 secrets/siliconflow_api_key；先运行 make configure-siliconflow-key" >&2; exit 1; }
+	@test -s secrets/aliyun_iqs_api_key || { echo "缺少 secrets/aliyun_iqs_api_key；先运行 make configure-aliyun-iqs-key" >&2; exit 1; }
+	@test -s secrets/qianfan_search_api_key || { echo "缺少 secrets/qianfan_search_api_key；先运行 make configure-qianfan-search-key" >&2; exit 1; }
+	docker compose -f docker-compose.yml -f docker-compose.public.yml -f docker-compose.auth.yml -f docker-compose.siliconflow.yml exec -T nba-agent python /app/scripts/warm-2026-cache.py --details
+
+warm-game-index:
+	@test -s secrets/app_password || { echo "缺少 secrets/app_password；先运行 make configure-app-password" >&2; exit 1; }
+	docker compose -f docker-compose.yml -f docker-compose.public.yml -f docker-compose.auth.yml -f docker-compose.siliconflow.yml exec -T nba-agent python /app/scripts/warm-game-index.py --season 2025-26 --teams all --from 2025-09-01 --to 2026-07-01 --details
 
 deploy-status:
 	docker compose -f docker-compose.yml -f docker-compose.public.yml -f docker-compose.auth.yml ps

@@ -54,12 +54,6 @@ MAX_AVAILABILITY_DAYS = 31
 # daily provider requests from the public demo.
 MAX_HIGHLIGHTS_RANGE_DAYS = 93
 RECENT_HIGHLIGHTS_LOOKBACK_DAYS = 120
-# A live scoreboard adapter usually needs one bounded request per provider
-# date.  Scanning the full 120-day off-season window can consume the endpoint
-# deadline before it reaches the last completed games.  In hybrid deployments
-# scan a short, current window first, then use the explicitly configured local
-# historical snapshot to fill the remaining recent-five slots.
-RECENT_LIVE_LOOKBACK_DAYS = 21
 
 
 class HighlightsProviderError(RuntimeError):
@@ -203,45 +197,24 @@ class HighlightsService:
         filters: GameFilters,
         *,
         budget: RequestBudget,
-        allow_empty_fallback: bool = False,
     ) -> Any:
-        """Query the configured gateway and optionally fill historical gaps.
+        """Query only the configured primary highlights source.
 
-        In a hybrid deployment the live provider can legitimately return an
-        empty list when its historical scoreboard endpoint has no archive for
-        a date that is present in our deterministic snapshot.  The gateway
-        intentionally does not replace authoritative empty responses, which
-        is correct for current-day facts.  Date-scoped review is different:
-        it is explicitly allowed to use the bounded historical snapshot when
-        the live archive is unavailable.  Keep that decision local to the
-        highlights projection and mark the result partial so the UI/API never
-        presents it as fully live evidence.
+        ``ProviderGateway`` may expose a deterministic fallback for explicit
+        fixture/chat flows.  Highlights are public navigation data, however,
+        so an upstream error or empty archive must remain an error/empty result
+        instead of silently projecting the demo snapshot into a public mode.
+        A direct provider (used by a few contract seams) has no gateway policy
+        keyword and is invoked through its normal typed port.
         """
 
-        result = await self.gateway.search_games(filters, budget=budget)
-        if (
-            not allow_empty_fallback
-            or getattr(result, "error", None) is not None
-            or getattr(result, "data", None)
-        ):
-            return result
-        fallback = getattr(self.gateway, "fallback", None)
-        fallback_method = getattr(fallback, "search_games", None)
-        if fallback_method is None or budget.remaining_ms() <= 0:
-            return result
-        try:
-            fallback_result = await fallback_method(filters, budget=budget)
-        except Exception:
-            return result
-        if (
-            getattr(fallback_result, "error", None) is None
-            and isinstance(getattr(fallback_result, "data", None), list)
-            and fallback_result.data
-        ):
-            return fallback_result.model_copy(
-                update={"used_fallback": True, "partial": True}
+        if hasattr(self.gateway, "fallback"):
+            return await self.gateway.search_games(
+                filters,
+                budget=budget,
+                allow_fallback=False,
             )
-        return result
+        return await self.gateway.search_games(filters, budget=budget)
 
     async def for_date(
         self, day: date, *, timezone_name: str = "Asia/Shanghai"
@@ -260,18 +233,7 @@ class HighlightsService:
         result = await self._search_games(
             GameFilters(date_range=date_range),
             budget=budget,
-            allow_empty_fallback=day < local_today,
         )
-        # Hybrid mode may return a deterministic snapshot after the live
-        # provider is unavailable. That fallback is useful for historical
-        # review, but must not be presented as today's real schedule.
-        if getattr(result, "used_fallback", False) and day == local_today:
-            raise HighlightsProviderError(
-                "SERVICE_BUSY",
-                "今日赛事暂时无法核验，请稍后重试。",
-                True,
-                503,
-            )
         if result.error is not None:
             kind = getattr(result.error.kind, "value", str(result.error.kind))
             mapping = {
@@ -295,7 +257,7 @@ class HighlightsService:
             )
             raise HighlightsProviderError(code, message, retryable, status_code)
         games = result.data or []
-        data_origin = self._data_origin(result.evidence)
+        data_origin = self._data_origin(result.evidence) if games else "none"
         item_origin = self._single_game_origin(data_origin)
         self._remember_games(games, data_origin=item_origin)
         public_games = [
@@ -363,87 +325,14 @@ class HighlightsService:
         zone = validate_timezone(timezone_name)
         end_day = reference_day or self._now().astimezone(zone).date()
         start_day = end_day - timedelta(days=RECENT_HIGHLIGHTS_LOOKBACK_DAYS - 1)
-        fallback = getattr(self.gateway, "fallback", None)
-        live_start = (
-            max(start_day, end_day - timedelta(days=RECENT_LIVE_LOOKBACK_DAYS - 1))
-            if fallback is not None
-            else start_day
-        )
-        live_result = await self._range(
-            live_start,
+        return await self._range(
+            start_day,
             end_day,
             timezone_name=zone.key,
             limit=limit,
             newest_first=True,
-            max_days=(
-                RECENT_LIVE_LOOKBACK_DAYS
-                if fallback is not None
-                else RECENT_HIGHLIGHTS_LOOKBACK_DAYS
-            ),
+            max_days=RECENT_HIGHLIGHTS_LOOKBACK_DAYS,
             final_only=True,
-        )
-        if fallback is None or len(live_result.games) >= limit:
-            return live_result
-
-        fallback_method = getattr(fallback, "search_games", None)
-        if fallback_method is None:
-            return live_result
-        first = local_date_range(start_day, zone.key)
-        last = local_date_range(end_day, zone.key)
-        date_range = DateRange(
-            start_inclusive=first.start_inclusive,
-            end_exclusive=last.end_exclusive,
-        )
-        budget = RequestBudget(
-            self._now().replace(microsecond=0) + timedelta(seconds=3),
-            max_provider_operations=2,
-            max_retries_per_operation=0,
-            clock=self.clock,
-        )
-        try:
-            snapshot = await fallback_method(
-                GameFilters(date_range=date_range, status=GameStatus.FINAL),
-                budget=budget,
-            )
-        except Exception:
-            return live_result
-        if snapshot.error is not None or not isinstance(snapshot.data, list):
-            return live_result
-
-        combined = {game.game_id: game for game in live_result.games}
-        for game in snapshot.data:
-            if not isinstance(game, Game) or game.status is not GameStatus.FINAL:
-                continue
-            game_day = game.start_utc.astimezone(zone).date()
-            if start_day <= game_day <= end_day:
-                self._remember_games([game], data_origin="demo_snapshot")
-                public = self._public_game(game, data_origin="demo_snapshot")
-                combined.setdefault(public.game_id, public)
-        games = sorted(combined.values(), key=lambda item: item.start_utc, reverse=True)[:limit]
-        if len(games) == len(live_result.games):
-            return live_result
-        row_origins = {
-            game.data_origin
-            for game in games
-            if game.data_origin in {"public", "demo_snapshot"}
-        }
-        data_origin = (
-            "none"
-            if not row_origins
-            else next(iter(row_origins))
-            if len(row_origins) == 1
-            else "mixed"
-        )
-        return HighlightsRangeResponse(
-            timezone=zone.key,
-            from_date=start_day.isoformat(),
-            to_date=end_day.isoformat(),
-            games=games,
-            as_of_beijing=(
-                live_result.as_of_beijing if "public" in row_origins else None
-            ),
-            evidence_state=EvidenceState.PARTIAL.value.lower(),
-            data_origin=data_origin,
         )
 
     async def _range(
@@ -504,7 +393,52 @@ class HighlightsService:
         had_success = False
         had_unknown = False
         first_error: Any | None = None
-        origins: set[str] = set()
+
+        # Query the persistent structured index once for the whole window
+        # before touching date-sliced network providers.  During the
+        # off-season, scanning backward from today can otherwise exhaust the
+        # request deadline on empty live slices before reaching cached playoff
+        # games.  The capability is intentionally local-only: if it is absent
+        # or incomplete, the normal bounded provider scan still runs.
+        cached_search = getattr(provider, "search_cached_games", None)
+        if callable(cached_search):
+            first_window = local_date_range(start_day, timezone_name)
+            last_window = local_date_range(end_day, timezone_name)
+            try:
+                cached_result = cached_search(
+                    GameFilters(
+                        date_range=DateRange(
+                            start_inclusive=first_window.start_inclusive,
+                            end_exclusive=last_window.end_exclusive,
+                        ),
+                        status=GameStatus.FINAL if final_only else None,
+                    )
+                )
+            except Exception:
+                cached_result = None
+            if (
+                cached_result is not None
+                and getattr(cached_result, "error", None) is None
+                and isinstance(getattr(cached_result, "data", None), list)
+                and cached_result.data
+            ):
+                had_success = True
+                cached_origin = self._data_origin(cached_result.evidence)
+                cached_item_origin = self._single_game_origin(cached_origin)
+                had_unknown = bool(cached_result.partial)
+                if isinstance(cached_result.retrieved_at_utc, datetime):
+                    retrieved.append(cached_result.retrieved_at_utc)
+                for game in cached_result.data:
+                    if not isinstance(game, Game):
+                        had_unknown = True
+                        continue
+                    game_day = game.start_utc.astimezone(zone).date()
+                    if start_day <= game_day <= end_day:
+                        games_by_id[game.game_id] = game
+                        origins_by_id[game.game_id] = cached_item_origin
+                if limit is not None and len(games_by_id) >= limit:
+                    chunks = []
+
         for chunk in chunks:
             first = local_date_range(chunk[0], timezone_name)
             last = local_date_range(chunk[-1], timezone_name)
@@ -519,7 +453,6 @@ class HighlightsService:
                         status=GameStatus.FINAL if final_only else None,
                     ),
                     budget=budget,
-                    allow_empty_fallback=True,
                 )
             except Exception:
                 had_unknown = True
@@ -531,8 +464,6 @@ class HighlightsService:
             had_success = True
             origin = self._data_origin(result.evidence)
             item_origin = self._single_game_origin(origin)
-            if origin != "none":
-                origins.add(origin)
             had_unknown = had_unknown or bool(result.partial) or bool(
                 getattr(result, "used_fallback", False)
             )
@@ -570,6 +501,11 @@ class HighlightsService:
         games = sorted(games_by_id.values(), key=lambda item: item.start_utc, reverse=True)
         if limit is not None:
             games = games[:limit]
+        origins = {
+            origins_by_id.get(game.game_id, "none")
+            for game in games
+            if origins_by_id.get(game.game_id, "none") != "none"
+        }
         public_games = [
             self._public_game(
                 game,
@@ -627,7 +563,14 @@ class HighlightsService:
             max_provider_operations=2,
             clock=self.clock,
         )
-        result = await self.gateway.get_game_summary(game_id, budget=budget)
+        if hasattr(self.gateway, "fallback"):
+            result = await self.gateway.get_game_summary(
+                game_id,
+                budget=budget,
+                allow_fallback=False,
+            )
+        else:
+            result = await self.gateway.get_game_summary(game_id, budget=budget)
         if result.error is not None:
             kind = getattr(result.error.kind, "value", str(result.error.kind))
             mapping = {
@@ -767,10 +710,17 @@ class HighlightsService:
                     end_exclusive=last.end_exclusive,
                 )
                 try:
-                    result = await self.gateway.search_games(
-                        GameFilters(date_range=date_range),
-                        budget=budget,
-                    )
+                    if hasattr(self.gateway, "fallback"):
+                        result = await self.gateway.search_games(
+                            GameFilters(date_range=date_range),
+                            budget=budget,
+                            allow_fallback=False,
+                        )
+                    else:
+                        result = await self.gateway.search_games(
+                            GameFilters(date_range=date_range),
+                            budget=budget,
+                        )
                 except Exception:
                     # ProviderGateway normally converts adapter exceptions to a
                     # typed ProviderResult.  Keep the projection defensive for
@@ -866,6 +816,8 @@ class HighlightsService:
             status=game.status.value.lower(),
             home_score=game.home_score,
             away_score=game.away_score,
+            home_coach=game.home_coach,
+            away_coach=game.away_coach,
             series_game_number=game.series_game_number,
             venue_name=game.venue.name if game.venue is not None else None,
             venue_city=game.venue.city if game.venue is not None else None,
@@ -962,6 +914,11 @@ class HighlightsService:
 
     @staticmethod
     def _play_action(event: PlayEvent) -> str:
+        if event.action_text:
+            # ``PlayEvent`` has already enforced bounded, control-free plain
+            # text.  Keep the public HUD concise while preserving explicit
+            # source details such as an up-and-under layup or corner three.
+            return event.action_text[:120].rstrip()
         if event.event_type is PlayEventType.SHOT:
             label = {
                 ShotType.THREE_POINT: "三分",

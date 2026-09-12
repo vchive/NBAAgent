@@ -1,10 +1,11 @@
 /*
  * COURTSIDE API transport.
  *
- * The visual demo remains useful without a running API, but when the FastAPI
- * service is reachable this tiny client switches the same reducer to the
- * real POST-SSE and highlights contracts.  It deliberately exposes no raw
- * provider response or arbitrary URL fetching surface to the page.
+ * The visual demo can be enabled explicitly for fixture development.  In a
+ * public deployment this tiny client keeps transport failures on the real
+ * POST-SSE/error path so a fixed snapshot can never masquerade as an answer.
+ * It deliberately exposes no raw provider response or arbitrary URL fetching
+ * surface to the page.
  */
 (function () {
   "use strict";
@@ -31,9 +32,8 @@
   // delivering a terminal SSE event.  Without a client-side deadline the
   // composer remains locked in its loading state forever.  The API itself has
   // bounded provider timeouts, so this is deliberately generous while still
-  // guaranteeing that the UI eventually recovers to the offline demo/error
-  // branch.
-  // Live SiliconFlow generation can take 10–20 seconds on a cold request.
+  // guaranteeing that the UI eventually recovers to a retryable error state.
+  // Live model generation can take 10–20 seconds on a cold request.
   // Keep the client deadline above the server's 20s model budget so a valid
   // model answer is not discarded just as it completes.
   // A bounded Agent turn can include two model iterations plus one NBA tool
@@ -275,11 +275,21 @@
       parser.flush();
     } catch (error) {
       if (timedOut && !signal?.aborted) {
-        const timeoutError = new Error("流式响应超时，已切换到离线演示。", { cause: error });
+        const timeoutError = new Error("流式响应超时，请稍后重试。", { cause: error });
         timeoutError.network = true;
         throw timeoutError;
       }
-      throw error;
+      if (signal?.aborted) throw error;
+      // HTTP/SSE contract errors already carry a safe public envelope. They
+      // are not transport failures and must remain visible even when fixture
+      // mode is explicitly enabled.
+      if (error?.network === false) throw error;
+      // Fetch transport errors do not have a stable browser-facing message.
+      // Normalize them here and let the UI decide whether an explicitly
+      // configured fixture profile may recover locally.
+      const networkError = new Error("数据连接暂时中断，请检查网络后重试。", { cause: error });
+      networkError.network = true;
+      throw networkError;
     } finally {
       window.clearTimeout(timeout);
       signal?.removeEventListener("abort", forwardAbort);

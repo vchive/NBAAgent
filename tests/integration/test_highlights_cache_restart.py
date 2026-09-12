@@ -77,6 +77,7 @@ async def test_unavailable_persistent_store_falls_back_to_provider() -> None:
     assert response.json()["games"]
     assert provider.calls > 0
     assert app.state.highlights_cache.available is False
-    assert health.json()["dependencies"]["highlights_cache"]["status"] == "degraded"
+    assert "highlights_cache" not in health.text
+    assert "cache" not in health.text.lower()
     assert ready.status_code == 200
     assert "/proc/nba-agent" not in health.text

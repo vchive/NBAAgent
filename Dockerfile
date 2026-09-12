@@ -18,7 +18,7 @@ ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 
 # Install third-party dependencies before copying application source. This
 # preserves the expensive dependency layer when only Python/HTML code changes.
-COPY pyproject.toml README.md ./
+COPY pyproject.toml ./
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     python -m pip install --prefer-binary --default-timeout=120 --retries=5 \
@@ -32,8 +32,10 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     && addgroup --system --gid 10001 nbaagent \
     && adduser --system --uid 10001 --gid 10001 --home /nonexistent --no-create-home nbaagent
 
+COPY README.md ./
 COPY apps ./apps
 COPY docs ./docs
+COPY scripts ./scripts
 
 # Install this project itself without dependency resolution; dependencies are
 # already present in the cached layer above.

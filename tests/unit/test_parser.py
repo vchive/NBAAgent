@@ -6,7 +6,14 @@ from uuid import uuid4
 
 import pytest
 
-from apps.api.src.application.parser import GAMES, IntentParser
+from apps.api.src.application.parser import (
+    GAMES,
+    IntentParser,
+    is_contextual_series_selection_question,
+    is_inverse_series_selection_question,
+    is_positive_series_selection_question,
+    is_subjective_comparison_question,
+)
 from apps.api.src.application.query_planner import QueryPlanner
 from apps.api.src.domain.models import (
     Category,
@@ -14,7 +21,9 @@ from apps.api.src.domain.models import (
     EntityKind,
     HistoryRecordType,
     IntentName,
+    StatScope,
     TimeWindowScope,
+    TurnSummary,
 )
 from apps.api.src.domain.time_policy import FixedClock, local_date_range, resolve_season_phrase
 
@@ -38,6 +47,422 @@ def test_schedule_week_phrases_produce_a_bounded_date_range() -> None:
     assert parsed.intent.date_range.end_exclusive == datetime(2026, 9, 6, 16, tzinfo=UTC)
     plan = QueryPlanner().build(parsed.intent)
     assert plan is not None and plan.operation == "search_games"
+
+
+@pytest.mark.parametrize(
+    "question",
+    ["2026尼克斯-马刺", "尼克斯 vs 马刺", "尼克斯对马刺"],
+)
+def test_head_to_head_subject_is_not_single_team_stats_lookup(question: str) -> None:
+    parsed = IntentParser().parse(question)
+    assert parsed.intent.intent_name is IntentName.SCHEDULE_RESULT
+    assert parsed.intent.matchup is True
+    assert {
+        item.canonical_id
+        for item in parsed.intent.entities
+        if item.kind is EntityKind.TEAM
+    } == {
+        "nyk",
+        "sas",
+    }
+    plan = QueryPlanner().build(parsed.intent)
+    assert plan is not None and plan.operation == "search_matchup"
+    assert set(plan.args[0].team_ids) == {"nyk", "sas"}
+
+
+def test_finals_series_result_uses_series_scope_without_narrowing_to_one_game() -> None:
+    parsed = IntentParser(include_fixture_games=False).parse(
+        "2026年尼克斯对马刺总决赛的大比分和每场赛果是什么？"
+    )
+
+    assert parsed.intent.intent_name is IntentName.SCHEDULE_RESULT
+    assert parsed.intent.game_number is None
+    assert parsed.intent.matchup is True
+    assert all(metric.scope is StatScope.SERIES for metric in parsed.intent.metrics)
+
+
+def test_numbered_matchup_premise_without_vs_is_still_a_complete_game_scope() -> None:
+    parsed = IntentParser(include_fixture_games=False).parse(
+        "朋友说2026总决赛G5是马刺94比90赢了尼克斯，实际谁赢？"
+    )
+
+    assert parsed.intent.game_number == 5
+    assert parsed.intent.matchup is True
+    assert not parsed.missing_slots
+    plan = QueryPlanner().build(parsed.intent)
+    assert plan is not None and plan.operation == "search_matchup"
+    assert set(plan.args[0].team_ids) == {"nyk", "sas"}
+    assert plan.args[0].series_game_number == 5
+
+
+def test_head_to_head_stat_lookup_resolves_game_before_team_stats() -> None:
+    parsed = IntentParser().parse("尼克斯对马刺谁得分最高？")
+    plan = QueryPlanner().build(parsed.intent)
+    assert parsed.intent.intent_name is IntentName.DATA
+    assert plan is not None and plan.operation == "search_matchup"
+    assert plan.kwargs["summary_if_match"] is True
+
+
+def test_game_number_with_matchup_does_not_bind_unrelated_fixture_alias() -> None:
+    """A generic G# alias must stay scoped to the two named teams."""
+
+    parsed = IntentParser().parse("尼克斯对马刺 G2 谁赢了？")
+
+    assert parsed.intent.game_number == 2
+    assert parsed.intent.matchup is True
+    assert not any(item.kind is EntityKind.GAME for item in parsed.intent.entities)
+    plan = QueryPlanner().build(parsed.intent)
+    assert plan is not None and plan.operation == "search_matchup"
+    filters = plan.args[0]
+    assert set(filters.team_ids) == {"nyk", "sas"}
+    assert filters.series_game_number == 2
+
+
+def test_contextual_game_number_stays_on_prior_matchup_when_fixture_lacks_series() -> None:
+    """A failed series lookup must not make a later “为什么不是 G2” pick G2 of
+    an unrelated built-in snapshot.
+    """
+
+    parser = IntentParser()
+    matchup = parser.parse("2026尼克斯-马刺").intent
+    context = ConversationContext(
+        session_id=uuid4(),
+        active_team=next(
+            item for item in matchup.entities if item.canonical_id == "nyk"
+        ),
+        active_season=matchup.season,
+        recent_turn_summaries=[
+            TurnSummary(
+                turn_index=1,
+                user_intent=matchup.intent_name.value,
+                user_message="2026尼克斯-马刺",
+                active_refs=matchup.entities,
+                text_summary="暂未找到公开比赛记录。",
+            )
+        ],
+        expires_at_utc=datetime.now(UTC) + timedelta(hours=1),
+    )
+
+    parsed = parser.parse("为什么不是G2？", context)
+
+    assert parsed.intent.game_number == 2
+    assert parsed.intent.matchup is True
+    assert {
+        item.canonical_id
+        for item in parsed.intent.entities
+        if item.kind is EntityKind.TEAM
+    } == {"nyk", "sas"}
+    assert not any(item.kind is EntityKind.GAME for item in parsed.intent.entities)
+    plan = QueryPlanner().build(parsed.intent)
+    assert plan is not None and plan.operation == "search_matchup"
+    assert set(plan.args[0].team_ids) == {"nyk", "sas"}
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "你觉得最精华的是哪一场？",
+        "哪场最精彩？",
+        "推荐一场最好看的",
+        "最值得回看的是哪场比赛？",
+        "这轮最经典的是第几场？",
+        "哪场最有观赏价值？",
+        "挑一场最值得一看的",
+        "哪一战最精彩？",
+        "如果只能选一场你选哪场？",
+        "哪场比分最接近？",
+        "最焦灼的是哪一场？",
+        "哪场最扣人心弦？",
+        "含金量最高的是哪一战？",
+        "整轮只看一场的话看哪场？",
+        "哪场最过瘾？",
+        "优先回看哪场？",
+        "哪场最有悬念？",
+        "哪一场最关键？",
+        "最重要的是哪一战？",
+        "你会选哪场？",
+        "最好的是哪场比赛？",
+        "最值得复盘的是哪一场？",
+    ],
+)
+def test_subjective_series_selection_inherits_matchup_context(question: str) -> None:
+    parser = IntentParser()
+    matchup = parser.parse("2026尼克斯-马刺").intent
+    context = ConversationContext(
+        session_id=uuid4(),
+        active_team=next(
+            item for item in matchup.entities if item.canonical_id == "nyk"
+        ),
+        active_season=matchup.season,
+        recent_turn_summaries=[
+            TurnSummary(
+                turn_index=1,
+                user_intent=matchup.intent_name.value,
+                user_message="2026尼克斯-马刺",
+                active_refs=matchup.entities,
+                text_summary="尼克斯以 4–1 赢下系列赛。",
+            )
+        ],
+        expires_at_utc=datetime.now(UTC) + timedelta(hours=1),
+    )
+
+    assert is_contextual_series_selection_question(question)
+    parsed = parser.parse(question, context)
+
+    assert parsed.intent.intent_name is IntentName.RECAP
+    assert parsed.intent.matchup is True
+    assert parsed.intent.season == matchup.season
+    assert not parsed.missing_slots
+    assert {
+        item.canonical_id
+        for item in parsed.intent.entities
+        if item.kind is EntityKind.TEAM
+    } == {"nyk", "sas"}
+    plan = QueryPlanner().build(parsed.intent)
+    assert plan is not None and plan.operation == "search_matchup"
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "哪场最不精彩？",
+        "不推荐哪场？",
+        "哪一场最不值得看？",
+    ],
+)
+def test_inverse_series_selection_does_not_use_best_game_recovery(
+    question: str,
+) -> None:
+    parser = IntentParser()
+    matchup = parser.parse("2026尼克斯-马刺").intent
+    context = ConversationContext(
+        session_id=uuid4(),
+        active_game={
+            "kind": "GAME",
+            "canonical_id": "hupu:168858",
+            "display_name": "2025-26 总决赛 G4",
+        },
+        active_team=next(
+            item for item in matchup.entities if item.canonical_id == "nyk"
+        ),
+        active_season=matchup.season,
+        recent_turn_summaries=[
+            TurnSummary(
+                turn_index=1,
+                user_intent=matchup.intent_name.value,
+                user_message="2026尼克斯-马刺",
+                active_refs=matchup.entities,
+                text_summary="尼克斯以 4–1 赢下系列赛。",
+            )
+        ],
+        expires_at_utc=datetime.now(UTC) + timedelta(hours=1),
+    )
+
+    assert is_contextual_series_selection_question(question)
+    assert is_inverse_series_selection_question(question)
+    assert not is_positive_series_selection_question(question)
+
+    parsed = parser.parse(question, context)
+    assert parsed.intent.intent_name is IntentName.RECAP
+    assert parsed.intent.matchup is True
+    assert parsed.intent.season == matchup.season
+    assert {
+        item.canonical_id
+        for item in parsed.intent.entities
+        if item.kind is EntityKind.TEAM
+    } == {"nyk", "sas"}
+    # The prior G4 is a recommended item, not the scope of an inverse choice.
+    assert not any(item.kind is EntityKind.GAME for item in parsed.intent.entities)
+    plan = QueryPlanner().build(parsed.intent)
+    assert plan is not None and plan.operation == "search_matchup"
+    assert plan.args[0].series_game_number is None
+
+
+def _recommended_finals_context() -> tuple[ConversationContext, object]:
+    parser = IntentParser()
+    matchup = parser.parse("2026尼克斯-马刺").intent
+    recommended_game = {
+        "kind": "GAME",
+        "canonical_id": "hupu:168858",
+        "display_name": "2025-26 总决赛 G4",
+        "aliases": ["G4", "第四场"],
+    }
+    context = ConversationContext(
+        session_id=uuid4(),
+        active_game=recommended_game,
+        active_team=next(
+            item for item in matchup.entities if item.canonical_id == "nyk"
+        ),
+        active_season=matchup.season,
+        recent_turn_summaries=[
+            TurnSummary(
+                turn_index=1,
+                user_intent=matchup.intent_name.value,
+                user_message="2026尼克斯-马刺",
+                active_refs=matchup.entities,
+                text_summary="尼克斯以 4–1 赢下系列赛。",
+            ),
+            TurnSummary(
+                turn_index=2,
+                user_intent=IntentName.RECAP.value,
+                user_message="你觉得最精华的是哪一场？",
+                active_refs=[*matchup.entities, recommended_game],
+                text_summary="推荐 G4。",
+            ),
+        ],
+        expires_at_utc=datetime.now(UTC) + timedelta(hours=1),
+    )
+    return context, matchup
+
+
+@pytest.mark.parametrize(
+    "question",
+    ["G2那场怎么打的？", "那G2呢？", "第二场怎么样？"],
+)
+def test_explicit_series_game_followup_overrides_recommended_active_game(
+    question: str,
+) -> None:
+    context, matchup = _recommended_finals_context()
+
+    parsed = IntentParser().parse(question, context)
+
+    assert parsed.intent.game_number == 2
+    assert parsed.intent.matchup is True
+    assert parsed.intent.season == matchup.season
+    assert {
+        item.canonical_id
+        for item in parsed.intent.entities
+        if item.kind is EntityKind.TEAM
+    } == {"nyk", "sas"}
+    assert not any(item.kind is EntityKind.GAME for item in parsed.intent.entities)
+    assert not parsed.missing_slots
+    plan = QueryPlanner().build(parsed.intent)
+    assert plan is not None and plan.operation == "search_matchup"
+    assert set(plan.args[0].team_ids) == {"nyk", "sas"}
+    assert plan.args[0].series_game_number == 2
+
+
+def test_recommendation_reason_inherits_chosen_game_and_series() -> None:
+    context, matchup = _recommended_finals_context()
+
+    parsed = IntentParser().parse("为什么选它？", context)
+
+    assert is_positive_series_selection_question("为什么选它？")
+    assert parsed.intent.intent_name is IntentName.RECAP
+    assert parsed.intent.matchup is True
+    assert parsed.intent.season == matchup.season
+    assert any(
+        item.kind is EntityKind.GAME and item.canonical_id == "hupu:168858"
+        for item in parsed.intent.entities
+    )
+    assert {
+        item.canonical_id
+        for item in parsed.intent.entities
+        if item.kind is EntityKind.TEAM
+    } == {"nyk", "sas"}
+    assert not parsed.missing_slots
+
+
+def test_recommendation_comparison_keeps_series_and_explicit_g_number() -> None:
+    context, matchup = _recommended_finals_context()
+
+    parsed = IntentParser().parse("它比G2好在哪？", context)
+
+    assert is_positive_series_selection_question("它比G2好在哪？")
+    assert parsed.intent.intent_name is IntentName.RECAP
+    assert parsed.intent.game_number == 2
+    assert parsed.intent.matchup is True
+    assert parsed.intent.season == matchup.season
+    assert not any(item.kind is EntityKind.GAME for item in parsed.intent.entities)
+    assert {
+        item.canonical_id
+        for item in parsed.intent.entities
+        if item.kind is EntityKind.TEAM
+    } == {"nyk", "sas"}
+    plan = QueryPlanner().build(parsed.intent)
+    assert plan is not None and plan.operation == "search_matchup"
+    assert plan.args[0].series_game_number == 2
+
+
+@pytest.mark.parametrize(
+    "question",
+    ["这场咋赢的？", "这场发生了啥？", "这场看点在哪？"],
+)
+def test_colloquial_recap_inherits_active_game(question: str) -> None:
+    context, _matchup = _recommended_finals_context()
+
+    parsed = IntentParser().parse(question, context)
+
+    assert parsed.intent.intent_name is IntentName.RECAP
+    assert any(
+        item.kind is EntityKind.GAME and item.canonical_id == "hupu:168858"
+        for item in parsed.intent.entities
+    )
+    assert not parsed.missing_slots
+
+
+@pytest.mark.parametrize(
+    "question,players",
+    [
+        ("乔丹和詹姆斯谁更伟大？请说出判断依据", {"michael-jordan", "lebron-james"}),
+        ("文班亚马和邓肯谁更伟大？", {"victor-wembanyama", "tim-duncan"}),
+        ("库里和杜兰特谁更强？", {"stephen-curry", "kevin-durant"}),
+    ],
+)
+def test_subjective_player_comparison_is_open_analysis(
+    question: str, players: set[str]
+) -> None:
+    assert is_subjective_comparison_question(question)
+
+    parsed = IntentParser().parse(question)
+
+    assert parsed.intent.intent_name is IntentName.RECAP
+    assert not parsed.missing_slots
+    assert {
+        item.canonical_id
+        for item in parsed.intent.entities
+        if item.kind is EntityKind.PLAYER
+    } == players
+
+
+def test_dated_recap_inherits_both_teams_from_previous_matchup() -> None:
+    parser = IntentParser()
+    matchup = parser.parse("2026尼克斯-马刺").intent
+    context = ConversationContext(
+        session_id=uuid4(),
+        active_team=next(
+            item for item in matchup.entities if item.canonical_id == "nyk"
+        ),
+        active_season=matchup.season,
+        recent_turn_summaries=[
+            TurnSummary(
+                turn_index=1,
+                user_intent=matchup.intent_name.value,
+                user_message="2026尼克斯-马刺",
+                active_refs=matchup.entities,
+                text_summary="两队总决赛交手记录。",
+            )
+        ],
+        expires_at_utc=datetime.now(UTC) + timedelta(hours=1),
+    )
+
+    parsed = parser.parse(
+        "2026-06-14 08:30 这场比赛是怎么个过程，能给我讲讲吗",
+        context,
+    )
+
+    assert parsed.intent.intent_name is IntentName.RECAP
+    assert parsed.intent.matchup is True
+    assert not parsed.missing_slots
+    assert {
+        item.canonical_id
+        for item in parsed.intent.entities
+        if item.kind is EntityKind.TEAM
+    } == {"nyk", "sas"}
+    assert parsed.intent.date_range == local_date_range(date(2026, 6, 14))
+    plan = QueryPlanner().build(parsed.intent)
+    assert plan is not None and plan.operation == "search_matchup"
+    assert plan.kwargs["summary_if_match"] is True
 
 
 def test_common_appearance_typo_and_durant_alias_are_understood() -> None:
@@ -81,6 +506,43 @@ def test_game_number_forms_do_not_confuse_game_with_period() -> None:
         assert [
             item.canonical_id for item in parsed.intent.entities if item.kind.value == "GAME"
         ] == ["2026-finals-g4"]
+
+
+def test_unknown_fixture_matchup_game_number_becomes_structured_filter() -> None:
+    parsed = IntentParser().parse("2026尼克斯-马刺 G5 谁赢了？")
+
+    assert parsed.intent.game_number == 5
+    assert parsed.intent.matchup is True
+    assert not any(slot.name == "game" for slot in parsed.missing_slots)
+    plan = QueryPlanner().build(parsed.intent)
+    assert plan is not None
+    assert plan.operation == "search_matchup"
+    assert plan.args[0].series_game_number == 5
+
+
+def test_public_parser_never_binds_matchup_game_number_to_demo_fixture() -> None:
+    parsed = IntentParser(include_fixture_games=False).parse(
+        "2026尼克斯-马刺 G4 谁赢了？"
+    )
+
+    assert parsed.intent.game_number == 4
+    assert parsed.intent.matchup is True
+    assert not any(
+        item.kind is EntityKind.GAME for item in parsed.intent.entities
+    )
+    assert not parsed.missing_slots
+    plan = QueryPlanner().build(parsed.intent)
+    assert plan is not None and plan.operation == "search_matchup"
+    assert plan.args[0].series_game_number == 4
+
+
+def test_public_parser_requires_series_scope_for_bare_game_number() -> None:
+    parsed = IntentParser(include_fixture_games=False).parse("2026 G4 比赛结果")
+
+    assert parsed.intent.game_number == 4
+    assert not any(item.kind is EntityKind.GAME for item in parsed.intent.entities)
+    assert any(slot.name == "game" for slot in parsed.missing_slots)
+    assert QueryPlanner().build(parsed.intent) is None
 
 
 def test_explicit_fourth_quarter_keeps_period_scope() -> None:
@@ -130,7 +592,9 @@ def test_shorthand_without_active_game_requires_clarification() -> None:
 
 
 def test_recent_game_play_by_play_is_resolved_without_manual_card_selection() -> None:
-    parsed = IntentParser().parse("最近一场比赛的关键回合是什么？")
+    question = "最近一场比赛的关键回合是什么？"
+    assert not is_contextual_series_selection_question(question)
+    parsed = IntentParser().parse(question)
     assert parsed.intent.intent_name is IntentName.PLAY_BY_PLAY
     assert parsed.intent.recent_game is True
     assert not parsed.intent.missing_slots
@@ -229,6 +693,25 @@ def test_game_metadata_questions_are_typed_instead_of_falling_through_to_stats(
     )
     parsed = IntentParser().parse(question, context)
     assert any(item.name == metric for item in parsed.intent.metrics)
+
+
+def test_game_coach_question_is_typed_as_coach_metadata() -> None:
+    context = ConversationContext(
+        session_id=uuid4(),
+        active_game={
+            "kind": "GAME",
+            "canonical_id": "2026-finals-g4",
+            "display_name": "2025-26 总决赛 G4",
+        },
+        expires_at_utc=datetime(2026, 8, 28, tzinfo=UTC),
+    )
+    parsed = IntentParser().parse("这场比赛双方教练都是谁？", context)
+
+    assert parsed.intent.metrics[0].name == "coaches"
+    assert parsed.intent.intent_name is IntentName.DATA
+    assert not parsed.missing_slots
+    plan = QueryPlanner().build(parsed.intent)
+    assert plan is not None and plan.operation == "get_game_summary"
 
 
 def test_each_period_clock_window_is_explicit_and_does_not_require_a_period_slot() -> None:

@@ -10,6 +10,7 @@ from apps.api.src.api.schemas import (
     ChatRequest,
     ChatResponse,
     ErrorResponse,
+    HealthResponse,
     HighlightAvailabilityDay,
     HighlightsAvailabilityResponse,
     HighlightsRangeResponse,
@@ -74,6 +75,20 @@ def test_chat_response_has_contract_shape_and_lowercase_enums() -> None:
         )
 
 
+def test_health_schema_has_no_dependency_diagnostic_fields() -> None:
+    response = HealthResponse(
+        status="ok",
+        experience="public",
+        capabilities={
+            "intelligent_analysis": True,
+            "default_intelligent_analysis": True,
+        },
+    )
+    payload = response.model_dump(mode="json")
+    assert set(payload) == {"status", "version", "experience", "capabilities"}
+    assert "dependencies" not in payload
+
+
 def test_highlights_response_validates_freshness_timestamp() -> None:
     response = HighlightsResponse(
         date="2026-08-26",
@@ -130,6 +145,54 @@ def test_technical_error_envelope_is_explicit() -> None:
             evidence_state="none",
             as_of_beijing="not-a-timestamp",
             latency_ms=1,
+        )
+
+
+def test_success_and_error_envelopes_accept_typed_capability_notices() -> None:
+    notice = {
+        "code": "INTELLIGENCE_QUOTA_EXHAUSTED",
+        "message": "智能回答额度已用完，当前无法完成智能分析。",
+        "retryable": False,
+    }
+    completed = ChatResponse(
+        request_id=uuid4(),
+        session_id=uuid4(),
+        status="completed",
+        answer_markdown="已核验事实仍可回答。",
+        evidence_state="verified",
+        data_origin="public",
+        latency_ms=1,
+        notices=[notice],
+    )
+    failed = ErrorResponse(
+        request_id=uuid4(),
+        session_id=uuid4(),
+        error={
+            "code": "COMPOSER_UNAVAILABLE",
+            "retryable": False,
+            "message": "智能回答服务当前不可用，暂时无法完成本次回答。",
+        },
+        notices=[notice],
+    )
+
+    assert completed.model_dump(mode="json")["notices"] == [notice]
+    assert failed.model_dump(mode="json")["notices"] == [notice]
+    with pytest.raises(ValidationError):
+        ChatResponse(
+            request_id=uuid4(),
+            session_id=uuid4(),
+            status="completed",
+            answer_markdown="已核验事实仍可回答。",
+            evidence_state="verified",
+            data_origin="public",
+            latency_ms=1,
+            notices=[
+                {
+                    "code": "SEARCH_QUOTA_EXHAUSTED",
+                    "message": "https://private-provider.invalid/billing quota exhausted",
+                    "retryable": False,
+                }
+            ],
         )
 
 
@@ -216,6 +279,33 @@ def test_run_status_rejects_unverified_numbers_but_allows_safe_copy() -> None:
     assert RunStatusPayload(stage="custom", text="正在处理请求")
     with pytest.raises(ValidationError):
         RunStatusPayload(stage="custom", text="已找到 32 分")
+
+
+def test_run_status_projects_private_stages_before_sse_serialization() -> None:
+    planning = RunStatusPayload(stage="agent_planning", text="正在理解问题")
+    lookup = RunStatusPayload(stage="agent_tool", text="正在核对比赛数据")
+    unknown = RunStatusPayload(stage="private_branch", text="正在处理请求")
+    assert planning.model_dump(mode="json")["stage"] == "understanding"
+    assert lookup.model_dump(mode="json")["stage"] == "checking"
+    assert unknown.model_dump(mode="json")["stage"] == "processing"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "由 H\u200bermes 生成",
+        "由 Ｈｅｒｍｅｓ 生成",
+        "由 H e r m e s 生成",
+        "使用 A g e n t 回答",
+        "来自阿\u200b里 云",
+        "使用百 炼检索",
+        "写入 S Q L i t e",
+        "命中 B M 2 5",
+    ],
+)
+def test_wire_text_rejects_obfuscated_private_implementation_terms(text: str) -> None:
+    with pytest.raises(ValidationError):
+        MessageDeltaPayload(text=text)
 
 
 @pytest.mark.parametrize(

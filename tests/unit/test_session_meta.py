@@ -15,10 +15,14 @@ from apps.api.src.application.session_meta import (
         ("这是我第几个问题？", SessionMetaKind.TURN_COUNT),
         ("算上这句一共问了多少次", SessionMetaKind.TURN_COUNT),
         ("我问了多少次", SessionMetaKind.TURN_COUNT),
+        ("到现在我一共问了几个问题？", SessionMetaKind.TURN_COUNT),
+        ("前面一共问了几个问题", SessionMetaKind.TURN_COUNT),
         ("我刚才问了什么？", SessionMetaKind.LAST_USER_MESSAGE),
         ("上一问是什么", SessionMetaKind.LAST_USER_MESSAGE),
         ("我第三个问题问的啥", SessionMetaKind.INDEXED_USER_MESSAGE),
         ("我第3个问题是什么？", SessionMetaKind.INDEXED_USER_MESSAGE),
+        ("我刚才第二个问题问的什么？", SessionMetaKind.INDEXED_USER_MESSAGE),
+        ("第二个问题呢？", SessionMetaKind.INDEXED_USER_MESSAGE),
         ("你刚才回答了什么", SessionMetaKind.LAST_ASSISTANT_MESSAGE),
         ("上一次你怎么回答的", SessionMetaKind.LAST_ASSISTANT_MESSAGE),
         ("总结一下我们刚才聊了什么", SessionMetaKind.CONVERSATION_SUMMARY),
@@ -44,6 +48,8 @@ def test_classifies_narrow_session_meta_questions(
         ("我第3个问题是什么？", 3),
         ("第十个问题问了什么", 10),
         ("我第12个问题是啥", 12),
+        ("我刚才第二个问题问的什么？", 2),
+        ("第二个问题呢？", 2),
     ],
 )
 def test_indexed_question_preserves_requested_turn(message: str, index: int) -> None:

@@ -1,4 +1,4 @@
-# SiliconFlow BYOK 配置指南
+# SiliconFlow 与阿里云 IQS BYOK 配置指南
 
 > 对外演示同时需要访问密码。先运行 `make configure-app-password`，再配置模型 key；认证
 > 配置与 Hermes 自检互相独立，但没有密码不应将 live profile 暴露到公网。
@@ -16,7 +16,7 @@ FULL_INTELLIGENCE_ENABLED=true
 默认模型是 `deepseek-ai/DeepSeek-V4-Flash`，端点固定为
 `https://api.siliconflow.cn/v1/chat/completions`。`embedded_agent` 会加载锁定的
 `hermes-agent==0.19.0`，并通过官方 `run_agent.AIAgent` 执行有界 tool-calling loop。全智能
-请求只能调用 `nba_query`、`nba_schedule`、`nba_news` 三个服务端工具；通用网络、shell、
+请求只能调用 `nba_query`、`nba_schedule`、`nba_news`、`nba_search` 四个服务端工具；通用网络、shell、
 文件系统、浏览器、MCP、memory、skills 和子代理全部关闭。当前形态运行在 API 进程内，
 不是正式隔离的 Hermes sidecar；`HERMES_LITE_MODE=sidecar` 仍会保持未就绪并安全回退。
 
@@ -29,17 +29,41 @@ FULL_INTELLIGENCE_ENABLED=true
 ```bash
 ./scripts/configure-app-password.sh
 ./scripts/configure-siliconflow-key.sh
+./scripts/configure-aliyun-iqs-key.sh
+./scripts/configure-qianfan-search-key.sh
 # 已存在的 key 需要替换时：
 # ./scripts/configure-siliconflow-key.sh --force
+# ./scripts/configure-aliyun-iqs-key.sh --force
 ```
 
 公网演示推荐直接启动完整 live profile：
 
 ```bash
 make deploy-live
-# 仅在本机验证 SiliconFlow 配置时可运行（仍启用 bounded hybrid 数据）：
+# 仅在本机验证 SiliconFlow + 千帆搜索配置时可运行：
 # make docker-up-silicon
 ```
+
+阿里云 IQS UnifiedSearch 是全智能 Agent 的首选在线背景检索。请求只发送清洗、限长且
+限定 NBA 语境的单轮 query；最多接收 5 条候选，关闭正文、富文本和增强摘要，仅把清洗后的
+限长标题与摘要送入回答链路。IQS 失败或没有相关结果时，才依次尝试千帆 AI Search、百度
+网页搜索和 DuckDuckGo。所有搜索候选始终是部分核验，不能替代结构化比赛比分、统计或
+逐回合事实。
+
+IQS 官方文档当前说明：试用有效期为 **15 天**，每天最多 **1000 次**；`LiteAdvanced`
+正式计费参考为 **12 元/千次**。额度和价格可能调整，上线前请以控制台与
+[官方计费说明](https://help.aliyun.com/zh/document_detail/2837302.html)为准。应用不会在
+`/readyz` 中主动发起搜索，因此健康检查不会消耗搜索额度；只有真实问题触发检索。
+
+如需显式使用模块化覆盖文件，可运行：
+
+```bash
+make deploy-live-qianfan
+```
+
+该目标会叠加 `docker-compose.qianfan.yml`；普通 `make deploy-live` 已包含 IQS 和千帆后备
+配置，因此首次部署前必须先写入 `secrets/aliyun_iqs_api_key`。当前 Compose 仍启用了千帆
+后备，所以也会检查 `secrets/qianfan_search_api_key`。
 
 验证本地配置（不会进行付费模型探活）：
 
@@ -47,9 +71,11 @@ make deploy-live
 curl -fsS http://127.0.0.1:8000/readyz
 ```
 
-配置正确时返回 HTTP 200，且 `dependencies.hermes` 为 `ok`。该检查只验证 secret 文件可读、
-端点/模型配置合法、官方包版本和精确工具清单；首次实际的 Agent 请求才会验证 token 是否有效。没有 key、key
-为空或格式不合法时，`/readyz` 返回 HTTP 503，模型调用数为 0，聊天会安全回退到本地模板。
+配置正确时返回 HTTP 200，且模型依赖为 `ok`。搜索依赖在首次真实检索前显示
+`enabled_unverified`，真实检索成功后显示 `ok`，最近一次检索失败后显示 `degraded`。搜索是
+补充能力，其降级不会让整个 API 变为未就绪。健康检查只被动读取状态；首次实际请求才验证
+搜索 key 是否有效。模型 key 缺失、为空或格式不合法时，live profile 会返回 HTTP 503，
+模型调用数为 0，聊天会安全回退到本地路径。
 
 单独运行 `make docker-up-silicon` 时事实数据仍是 fixture；`make deploy-live` 会叠加 public
 override，使用 `PUBLIC_DATA_MODE=hybrid` 并按北京时间查询真实“今日赛事”。两种模式都应先
@@ -61,6 +87,7 @@ override，使用 `PUBLIC_DATA_MODE=hybrid` 并按北京时间查询真实“今
 
 ```bash
 ./scripts/configure-siliconflow-key.sh
+./scripts/configure-aliyun-iqs-key.sh
 export LLM_MODE=live
 export RUNTIME_PROFILE=hybrid
 export HERMES_LITE_MODE=embedded_agent
@@ -70,6 +97,8 @@ export LLM_TIMEOUT_SECONDS=20
 export AGENT_REASONING_EFFORT=none
 export REQUEST_DEADLINE_MS=45000
 export SILICONFLOW_API_KEY_FILE="$PWD/secrets/siliconflow_api_key"
+export ALIYUN_IQS_SEARCH_ENABLED=true
+export ALIYUN_IQS_API_KEY_FILE="$PWD/secrets/aliyun_iqs_api_key"
 uvicorn apps.api.src.main:app --host 0.0.0.0 --port 8000
 ```
 
@@ -100,23 +129,28 @@ uvicorn apps.api.src.main:app --host 0.0.0.0 --port 8000
 
 | 现象 | 含义与处理 |
 | --- | --- |
-| `/readyz` 为 503，`hermes=degraded` | 检查三个开关、secret 路径和文件权限；不会发出模型请求。 |
+| `/readyz` 为 503，模型依赖 degraded | 检查全智能开关、模型 secret 路径和文件权限；健康检查不会发出模型或搜索请求。 |
+| 搜索依赖为 `enabled_unverified` | 配置已启用但进程启动后尚未发生真实搜索，这是正常状态。 |
+| 搜索依赖为 `degraded` | 检查 IQS 服务是否开通、key、试用期限、每日额度、账户余额与 `cloud-iqs.aliyuncs.com` 出网；结构化 NBA 数据仍可正常回答。 |
 | 容器内读取 secret 报 `Permission denied` | Compose file secret 是 bind mount；执行 `chown root:10001 secrets/siliconflow_api_key && chmod 640 secrets/siliconflow_api_key`，再重新创建容器。不要改成 644。 |
 | 容器内 `cat /run/secrets/siliconflow_api_key` 报 `Permission denied` | Compose file secret 是 bind mount；执行 `chown root:10001 secrets/siliconflow_api_key && chmod 640 secrets/siliconflow_api_key`，再重新创建容器。不要把权限改成 644。 |
 | 全智能回答仍是模板/回退 | 确认页面开关已启用、请求携带 `intelligence_mode=full`，再检查 key、`embedded_agent`、超时和输出守卫；完成响应的 `composition` 应为 `agent/used`。 |
 | 全智能请求长时间停在理解/整理阶段 | 保持 `AGENT_REASONING_EFFORT=none`；系统会同时向固定 SiliconFlow 模型发送关闭隐藏思考的请求参数，并用 `LLM_TIMEOUT_SECONDS` 限制单次模型调用。修改推理档位后需重新做 live 时延回归。 |
 | 首次请求返回认证错误 | SiliconFlow token 无效/过期，重新生成并运行配置脚本；不要把 token 粘贴进聊天。 |
 | 返回限流/额度错误 | 检查 SiliconFlow 账户余额、模型权限和预算限额；不要通过重试绕过限流。 |
+| 在线背景搜索无结果 | 先检查 IQS API Key、账户搜索额度和固定 IQS 域名出网，再检查已启用的后备搜索；核心 NBA 数据仍可正常回答。 |
 
 撤销当前 Compose 实例的 key：
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.siliconflow.yml down
 rm -f -- secrets/siliconflow_api_key
+rm -f -- secrets/aliyun_iqs_api_key
+rm -f -- secrets/qianfan_search_api_key
 ```
 
-如果 key 曾出现在 shell 历史、CI 日志或公开截图中，应立即在 SiliconFlow 控制台吊销并重发，
-不能只删除本地文件。
+如果 key 曾出现在 shell 历史、CI 日志或公开截图中，应立即在对应控制台吊销并重发，不能只
+删除本地文件。
 
 ## 安全边界（面试说明）
 

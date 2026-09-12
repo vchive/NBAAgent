@@ -12,7 +12,12 @@ from apps.api.src.domain.models import (
     FactBundle,
     VerificationState,
 )
-from apps.api.src.domain.safety import OutputGuard, OutputGuardError, SafetyGuard
+from apps.api.src.domain.safety import (
+    OutputGuard,
+    OutputGuardError,
+    SafetyGuard,
+    neutralize_external_internal_names,
+)
 
 
 def test_red_line_is_classified_before_any_retrieval() -> None:
@@ -99,6 +104,26 @@ def test_pdf_red_line_phrases_are_blocked(message: str, category: str) -> None:
     assert decision.category.value == category
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        "那个软蛋是谁？",
+        "这个废物指的是哪位球员？",
+        "所谓的毒瘤是哪名球员？",
+    ],
+)
+def test_insulting_reference_is_not_mapped_to_a_real_player(message: str) -> None:
+    decision = SafetyGuard().classify(message)
+
+    assert decision.outcome.value == "BLOCK"
+    assert decision.category.value == "INSULT_NICKNAME"
+    refusal = SafetyGuard.refusal_text(decision)
+    assert "无法" in refusal
+    assert "识别" in refusal
+    assert "姓名" in refusal or "中性" in refusal
+    assert all(name not in refusal for name in ("詹姆斯", "库里", "杜兰特"))
+
+
 def test_refusal_draft_has_no_evidence_or_sensitive_echo() -> None:
     decision = SafetyGuard().classify("这场是假球吗")
     draft = SafetyGuard.as_draft(decision)
@@ -169,6 +194,9 @@ def test_output_guard_rejects_provider_leakage() -> None:
         "工具返回里没有这个字段。",
         "我无法实时联网，只能使用当前快照。",
         "我调用 nba_query 后得到这个结论。",
+        "这是 Hermes 生成的回答。",
+        "工具预算已用尽，无法继续生成。",
+        "根据 NBA 工具核验，凯尔特人以 108–104 获胜。",
     ],
 )
 def test_agent_output_guard_rejects_internal_capability_wording(answer: str) -> None:
@@ -180,6 +208,38 @@ def test_agent_output_guard_rejects_internal_capability_wording(answer: str) -> 
     }
     with pytest.raises(OutputGuardError):
         OutputGuard.validate_agent(answer, [observation])
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "这是 H\u200bermes 生成的回答。",
+        "这是 Ｈｅｒｍｅｓ 生成的回答。",
+        "这是 H e r m e s 生成的回答。",
+        "由 A g e n t 继续处理。",
+        "通过阿\u200b里 云查询。",
+        "命中了百 炼搜索。",
+        "结果写入 S Q L i t e。",
+        "使用 B M 2 5 排序。",
+    ],
+)
+def test_output_guard_rejects_obfuscated_implementation_disclosure(answer: str) -> None:
+    with pytest.raises(OutputGuardError):
+        OutputGuard.validate(answer, allow_unverified_numbers=True)
+
+
+def test_external_text_neutralizer_handles_fullwidth_zero_width_and_spaced_names() -> None:
+    value = "Ｈｅｒｍｅｓ、阿\u200b里 云、百 炼与 S Q L i t e"
+    cleaned = neutralize_external_internal_names(value)
+    assert "公开资料" in cleaned
+    for leaked in ("Hermes", "阿里云", "百炼", "SQLite"):
+        assert leaked.casefold() not in cleaned.replace(" ", "").casefold()
+
+
+def test_external_text_neutralizer_preserves_visible_chinese_punctuation() -> None:
+    value = "简要概括：尼克斯赢了最近一场，末节执行更好；（值得回看）！"
+
+    assert neutralize_external_internal_names(value) == value
 
 
 def test_agent_output_guard_rejects_unsupported_factual_proper_name() -> None:
@@ -194,3 +254,67 @@ def test_agent_output_guard_rejects_unsupported_factual_proper_name() -> None:
             "Kevin Durant 帮助凯尔特人以 108–104 获胜。",
             [observation],
         )
+
+
+def test_agent_output_guard_does_not_ground_numbers_from_search_titles() -> None:
+    observation = {
+        "status": "completed",
+        "intent": "web_search",
+        "answer_markdown": "- **单场狂砍 999 分**：该报道仅介绍赛前训练。",
+        "evidence_state": "partial",
+    }
+
+    with pytest.raises(OutputGuardError) as exc_info:
+        OutputGuard.validate_agent("该球员单场得到 999 分。", [observation])
+
+    assert exc_info.value.reasons[0] == "unobserved_number"
+
+
+def test_agent_output_guard_does_not_ground_proper_names_from_search_titles() -> None:
+    observation = {
+        "status": "completed",
+        "intent": "web_search",
+        "answer_markdown": "- **Kevin Durant 近期动态**：该报道仅介绍球队训练。",
+        "evidence_state": "partial",
+    }
+
+    with pytest.raises(OutputGuardError) as exc_info:
+        OutputGuard.validate_agent("Kevin Durant 参加了球队训练。", [observation])
+
+    assert exc_info.value.reasons[0] == "unsupported_proper_name"
+
+
+def test_agent_output_guard_grounds_search_summary_facts() -> None:
+    observation = {
+        "status": "completed",
+        "intent": "web_search",
+        "answer_markdown": "- **近期比赛报道**：Kevin Durant 单场得到 999 分。",
+        "evidence_state": "partial",
+    }
+
+    guarded = OutputGuard.validate_agent(
+        "Kevin Durant 单场得到 999 分。",
+        [observation],
+    )
+
+    assert guarded.markdown == "Kevin Durant 单场得到 999 分。"
+
+
+def test_agent_output_guard_uses_summary_but_not_title_blocks_for_grounding() -> None:
+    observation = {
+        "status": "completed",
+        "intent": "nba_news",
+        "answer_markdown": "",
+        "blocks": [
+            {"type": "fact", "label": "新闻标题", "value": "Kevin Durant 得到 999 分"},
+            {"type": "text", "label": "新闻摘要", "content": "Stephen Curry 得到 42 分。"},
+        ],
+        "evidence_state": "partial",
+    }
+
+    with pytest.raises(OutputGuardError) as exc_info:
+        OutputGuard.validate_agent("Kevin Durant 得到 999 分。", [observation])
+    assert exc_info.value.reasons[0] == "unobserved_number"
+
+    guarded = OutputGuard.validate_agent("Stephen Curry 得到 42 分。", [observation])
+    assert guarded.markdown == "Stephen Curry 得到 42 分。"

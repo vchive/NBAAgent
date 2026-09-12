@@ -23,8 +23,10 @@ from apps.api.src.api.schemas import (
 
 # Version the serialized projection contract, not only the SQLite table shape.
 # v4 preserves origin on every game row and derives the envelope from actual
-# returned rows; accepting v3 could retain an early aggregate-only projection.
-CACHE_SCHEMA_VERSION = 4
+# returned rows. v5 invalidates partial-empty recent projections created before
+# whole-window local-index lookup was added; keeping those rows would hide
+# already cached playoff games for up to the normal recent-view TTL.
+CACHE_SCHEMA_VERSION = 5
 _MODEL_BY_KIND: dict[str, type[BaseModel]] = {
     "date": HighlightsResponse,
     "range": HighlightsRangeResponse,
@@ -90,6 +92,8 @@ def _game_score(game: HighlightGame) -> int:
     score += int(game.series_game_number is not None)
     score += int(game.venue_name is not None) * 2
     score += int(game.venue_city is not None)
+    score += int(getattr(game, "duration_seconds", None) is not None) * 2
+    score += int(getattr(game, "attendance", None) is not None)
     return score
 
 

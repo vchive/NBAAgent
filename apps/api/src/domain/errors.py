@@ -13,6 +13,7 @@ from .models import ErrorCode
 class ProviderErrorKind(str, Enum):
     TIMEOUT = "TIMEOUT"
     RATE_LIMITED = "RATE_LIMITED"
+    QUOTA_EXHAUSTED = "QUOTA_EXHAUSTED"
     AUTH = "AUTH"
     HTTP = "HTTP"
     INVALID_JSON = "INVALID_JSON"

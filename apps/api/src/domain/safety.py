@@ -34,6 +34,172 @@ from .models import (
 _CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
+def _normalise_public_boundary_text(text: str) -> str:
+    """Canonical form used only for public implementation-leak checks.
+
+    NFKC folds full-width Latin text and Unicode format characters are
+    removed so zero-width joiners cannot split a private identifier.  The
+    original value is still returned to the user after it passes validation.
+    """
+
+    normalized = unicodedata.normalize("NFKC", str(text))
+    return "".join(char for char in normalized if unicodedata.category(char) != "Cf")
+
+
+def _normalise_public_boundary_projection(
+    text: str,
+) -> tuple[str, tuple[tuple[int, int], ...]]:
+    """Return a leak-detection projection plus offsets into the original text.
+
+    Public leak checks need NFKC so full-width or compatibility characters cannot
+    disguise an implementation name.  Source prose must *not* be returned in that
+    canonical form, though: NFKC also changes ordinary Chinese punctuation such as
+    ``，：；（）``.  Keeping an offset for every projected character lets the source
+    neutraliser redact only a matched private term while preserving the author's
+    original punctuation and Markdown exactly.
+    """
+
+    projected: list[str] = []
+    offsets: list[tuple[int, int]] = []
+    for index, char in enumerate(str(text)):
+        for normalized_char in unicodedata.normalize("NFKC", char):
+            if unicodedata.category(normalized_char) == "Cf":
+                continue
+            projected.append(normalized_char)
+            offsets.append((index, index + 1))
+    return "".join(projected), tuple(offsets)
+
+
+def _obfuscated_literal_pattern(value: str) -> str:
+    """Build a token pattern tolerant of whitespace/formatting separators."""
+
+    compact = "".join(char for char in value.casefold() if char.isalnum())
+    body = r"[\W_]*".join(re.escape(char) for char in compact)
+    if compact.isascii():
+        return rf"(?<![A-Za-z0-9]){body}(?![A-Za-z0-9])"
+    return body
+
+
+# These terms describe private orchestration, storage, retrieval vendors or
+# wire-only component names.  They are not useful evidence in an NBA answer.
+# The generated patterns also catch forms such as ``H e r m e s``, full-width
+# Latin characters and Chinese names split with zero-width characters.
+_PUBLIC_IMPLEMENTATION_TERMS = (
+    "hermes",
+    "agent",
+    "provider",
+    "fixture",
+    "cache",
+    "sqlite",
+    "bm25",
+    "assistant_runtime",
+    "game_index",
+    "highlights_cache",
+    "web_search",
+    "siliconflow",
+    "deepseek",
+    "dashscope",
+    "qianfan",
+    "aliyun",
+    "duckduckgo",
+    "espn",
+    "sportsradar",
+    "nba_api",
+    "basketball_reference",
+    "百度搜索",
+    "百度智能云",
+    "百度",
+    "千帆",
+    "阿里云",
+    "百炼",
+    "通义",
+    "硅基流动",
+    "供应商",
+    "缓存",
+    "数据库",
+)
+_PUBLIC_IMPLEMENTATION_RE = re.compile(
+    "|".join(_obfuscated_literal_pattern(value) for value in _PUBLIC_IMPLEMENTATION_TERMS),
+    re.IGNORECASE,
+)
+
+
+def contains_public_implementation_leak(text: str) -> bool:
+    """Return whether public text names or obfuscates a private component."""
+
+    if not isinstance(text, str) or not text:
+        return False
+    return bool(_PUBLIC_IMPLEMENTATION_RE.search(_normalise_public_boundary_text(text)))
+
+# Search/news text is untrusted external content.  Provider and framework
+# names must never leak into public answers, but rejecting the entire answer
+# because an article headline happens to mention a source is too brittle.  A
+# small neutralisation helper lets adapters keep useful context while the
+# OutputGuard remains strict for model-authored text and internal metadata.
+_EXTERNAL_INTERNAL_NAME_RE = re.compile(
+    r"(?<![A-Za-z0-9_])(?:prompt|traceback)(?![A-Za-z0-9_])",
+    re.IGNORECASE,
+)
+
+
+def neutralize_external_internal_names(text: str) -> str:
+    """Replace implementation/provider vocabulary in untrusted source text.
+
+    This function is intentionally limited to source projections (news/search
+    snippets and tool observations).  It is not applied to arbitrary model
+    prose: model output containing these terms is rejected by ``OutputGuard``
+    so a runtime disclosure still causes a safe fallback.
+    """
+
+    if not isinstance(text, str) or not text:
+        return text
+    projected, offsets = _normalise_public_boundary_projection(text)
+    matched_spans: list[tuple[int, int]] = []
+    for pattern in (_PUBLIC_IMPLEMENTATION_RE, _EXTERNAL_INTERNAL_NAME_RE):
+        for match in pattern.finditer(projected):
+            if match.start() == match.end() or not offsets:
+                continue
+            matched_spans.append(
+                (offsets[match.start()][0], offsets[match.end() - 1][1])
+            )
+
+    if not matched_spans:
+        # External snippets can contain invisible formatting characters even when
+        # they do not name a private component.  Drop only those characters; keep
+        # all visible punctuation and whitespace in its original form.
+        return "".join(
+            char for char in text if unicodedata.category(char) != "Cf"
+        )
+
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(matched_spans):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+
+    parts: list[str] = []
+    cursor = 0
+    for start, end in merged:
+        parts.append(
+            "".join(
+                char
+                for char in text[cursor:start]
+                if unicodedata.category(char) != "Cf"
+            )
+        )
+        parts.append("公开资料")
+        cursor = end
+    parts.append(
+        "".join(
+            char
+            for char in text[cursor:]
+            if unicodedata.category(char) != "Cf"
+        )
+    )
+    return "".join(parts)
+
+
 def _normalise_text(text: str) -> str:
     """Normalise text for matching without changing the user-visible message.
 
@@ -188,6 +354,8 @@ _DEFAULT_RULES: tuple[_Rule, ...] = (
             r"\b(?:insult(?:ing)?\s*nickname|offensive\s*nickname|derogatory\s*name)\b",
             # Targeted insults, while avoiding the normal phrase "垃圾时间".
             r"(?:垃圾|废物|蠢货|软蛋|毒瘤)(?:球员|教练|队员|詹姆斯|库里|杜兰特|他|她)",
+            r"(?:那个|这个|所谓的)?(?:垃圾|废物|蠢货|软蛋|毒瘤)"
+            r"(?:指的?是|说的?是|是|指)?(?:哪位|哪名|哪个|谁)(?:球员|教练|队员)?",
         ),
     ),
     _Rule(
@@ -289,6 +457,11 @@ class SafetyGuard:
         """Return a fixed, localised 1–2 sentence response for a decision."""
 
         if decision.outcome is SafetyOutcome.BLOCK:
+            if decision.category is SafetyCategory.INSULT_NICKNAME:
+                return (
+                    "我无法根据侮辱性称呼识别所指球员。"
+                    "您可以使用球员姓名或中性描述询问比赛表现。"
+                )
             return "这个话题不属于我能讨论的范围。您可以问我比赛、球员或球队数据。"
         if decision.outcome is SafetyOutcome.OUT_OF_SCOPE:
             return "我专注于 NBA 赛事信息，暂时无法处理这个问题。您可以问我比赛、球员或球队数据。"
@@ -349,9 +522,19 @@ class OutputGuard:
         r"request_id|session_id|verified_facts|contract_version|used_fact_ids|"
         r"finish_reason|error_code|siliconflow|deepseek)",
         r"(?:\bespn\b|nba[_ -]?api|sportsradar|basketball[- ]reference)",
+        # Keep the concrete orchestration framework private.  This guard is
+        # intentionally case-insensitive and catches both prose and code-like
+        # spellings before a model draft crosses the public boundary.
+        r"(?<![A-Za-z0-9_])hermes(?:[-_ ]?(?:agent|lite(?:[-_ ]?mode)?))?(?![A-Za-z0-9_])",
         r"(?:api[_ -]?key|authorization|bearer\s+[a-z0-9._-]+|sk-[a-z0-9]{8,})",
         r"(?:system\s+prompt|developer\s+message|ignore\s+(?:all\s+)?previous\s+instructions|tool\s*call|filesystem|shell\s+command)",
-        r"(?:nba_query|nba_schedule|nba_news|这三个工具|三个工具|工具返回|调用(?:了)?(?:这个|这些|受控)?工具|无法实时联网)",
+        r"(?:nba_query|nba_schedule|nba_news|nba_search|这(?:几个|四个|三个)工具|"
+        r"工具返回|(?:NBA\s*)?工具(?:核验|查询|检索|确认)|"
+        r"调用(?:了)?(?:这个|这些|受控)?工具|无法实时联网)",
+        # Runtime budget/termination status is an implementation detail.  It
+        # must never reach the public answer even when the Agent stops after
+        # a completed tool call and reports the reason verbatim.
+        r"(?:工具预算|调用预算|迭代预算|工具调用(?:次数)?(?:已)?(?:达到|超过)(?:上限|限制)|预算(?:已)?(?:用尽|耗尽)|(?:输出|生成)(?:内容)?(?:已)?(?:被)?截断|输出不完整|无法继续(?:调用|生成)|内部(?:执行|流程))",
     )
     _HTML_LEAK_PATTERNS = _compile(
         r"<\s*/?\s*(?:script|iframe|object|embed|style|form|img|svg)\b",
@@ -370,6 +553,14 @@ class OutputGuard:
     _FACTUAL_PROPER_NAME_RE = re.compile(
         r"\b[A-Z][A-Za-z'’-]{1,24}(?:[ .-]+[A-Z][A-Za-z'’-]{1,24}){1,4}\b"
         r"|[\u4e00-\u9fff]{1,8}·[\u4e00-\u9fff·-]{1,20}"
+    )
+    _SEARCH_FACT_INTENTS = frozenset({"web_search", "nba_news"})
+    _SEARCH_RESULT_ROW_RE = re.compile(
+        r"^\s*(?:[-*+]|\d+[.)、])\s+(?P<body>.*?)\s*$"
+    )
+    _DECORATED_SEARCH_ROW_RE = re.compile(
+        r"^(?:\*\*(?P<bold>.+?)\*\*|__(?P<underline>.+?)__|`(?P<code>.+?)`)"
+        r"\s*(?:[：:]\s*(?P<summary>.+))?$"
     )
 
     @staticmethod
@@ -427,6 +618,126 @@ class OutputGuard:
                 yield from OutputGuard._walk_text(item)
         elif value is not None and not isinstance(value, (bool, bytes)):
             yield str(value)
+
+    @staticmethod
+    def _is_search_title_marker(value: Any) -> bool:
+        marker = re.sub(r"[\s_-]+", "", str(value or "").casefold())
+        return marker.endswith(("title", "headline", "标题")) or marker in {
+            "title",
+            "headline",
+            "newstitle",
+            "articletitle",
+            "searchtitle",
+            "resulttitle",
+            "标题",
+            "新闻标题",
+            "文章标题",
+            "搜索标题",
+            "结果标题",
+        }
+
+    @classmethod
+    def _search_markdown_fact_text(cls, value: Any) -> list[str]:
+        """Return search snippets while discarding retrieval-only headlines."""
+
+        if not isinstance(value, str) or not value.strip():
+            return []
+        summaries: list[str] = []
+        saw_result_row = False
+        for raw_line in value.splitlines():
+            row = cls._SEARCH_RESULT_ROW_RE.match(raw_line)
+            if row is None:
+                continue
+            saw_result_row = True
+            body = row.group("body").strip()
+            decorated = cls._DECORATED_SEARCH_ROW_RE.match(body)
+            if decorated is not None:
+                summary = str(decorated.group("summary") or "").strip()
+                if summary:
+                    summaries.append(summary)
+                continue
+            # Older bounded projections used ``- title：summary`` without
+            # emphasis. Treat the left side as a retrieval label as well.
+            _title, separator, summary = body.partition("：")
+            if not separator:
+                _title, separator, summary = body.partition(":")
+            if separator and summary.strip():
+                summaries.append(summary.strip())
+
+        # A few legacy tools return a single prose summary rather than result
+        # rows. Preserve that body; once rows are present, only their explicit
+        # snippets are factual authority and headings/title-only rows are not.
+        return summaries if saw_result_row else [value.strip()]
+
+    @classmethod
+    def _search_block_fact_values(cls, blocks: Any) -> list[Any]:
+        """Project structured search blocks to summary/content fields only."""
+
+        facts: list[Any] = []
+        content_fields = {
+            "body",
+            "content",
+            "description",
+            "newssummary",
+            "snippet",
+            "summary",
+            "text",
+            "value",
+            "正文",
+            "内容",
+            "摘要",
+            "新闻摘要",
+        }
+        container_fields = {"blocks", "data", "items", "results"}
+
+        def visit(value: Any, *, selected: bool = False) -> None:
+            if value is None or isinstance(value, (bool, bytes)):
+                return
+            if isinstance(value, Mapping):
+                label = value.get("label")
+                block_type = value.get("type")
+                if cls._is_search_title_marker(label) or cls._is_search_title_marker(
+                    block_type
+                ):
+                    return
+                for key, item in value.items():
+                    marker = re.sub(r"[\s_-]+", "", str(key).casefold())
+                    if cls._is_search_title_marker(marker):
+                        continue
+                    if marker in content_fields:
+                        visit(item, selected=True)
+                    elif marker in container_fields:
+                        visit(item)
+                return
+            if isinstance(value, (list, tuple, set)):
+                for item in value:
+                    visit(item, selected=selected)
+                return
+            if selected or isinstance(value, str):
+                facts.append(value)
+
+        visit(blocks)
+        return facts
+
+    @classmethod
+    def _agent_fact_authority(
+        cls, observations: Iterable[Mapping[str, Any]]
+    ) -> list[Any]:
+        """Build the one projection used by all Agent grounding checks."""
+
+        authority: list[Any] = []
+        for observation in observations:
+            intent = str(observation.get("intent", "")).strip().casefold()
+            if intent not in cls._SEARCH_FACT_INTENTS:
+                authority.append(observation)
+                continue
+            authority.extend(
+                cls._search_markdown_fact_text(observation.get("answer_markdown"))
+            )
+            authority.extend(
+                cls._search_block_fact_values(observation.get("blocks") or [])
+            )
+        return authority
 
     @classmethod
     def _numeric_values(cls, facts: Any) -> set[str]:
@@ -625,11 +936,16 @@ class OutputGuard:
         draft = cls._coerce_draft(answer)
         text_parts = list(cls._walk_text(draft.model_dump(mode="python")))
         all_text = "\n".join(text_parts)
+        normalized_text = _normalise_public_boundary_text(all_text)
         if _CONTROL_RE.search(all_text):
             raise OutputGuardError("答案包含不可显示的控制字符", reasons=("control",))
-        if any(pattern.search(all_text) for pattern in cls._LEAK_PATTERNS):
+        if any(unicodedata.category(char) == "Cf" for char in all_text):
+            raise OutputGuardError("答案包含不可显示的格式字符", reasons=("control",))
+        if contains_public_implementation_leak(all_text) or any(
+            pattern.search(normalized_text) for pattern in cls._LEAK_PATTERNS
+        ):
             raise OutputGuardError("答案包含内部实现信息", reasons=("leakage",))
-        if any(pattern.search(all_text) for pattern in cls._HTML_LEAK_PATTERNS):
+        if any(pattern.search(normalized_text) for pattern in cls._HTML_LEAK_PATTERNS):
             raise OutputGuardError("答案包含不安全的标记", reasons=("unsafe_markup",))
 
         # A second local safety pass prevents a model/composer from drifting into a red-line
@@ -642,7 +958,10 @@ class OutputGuard:
         # Public correction text is intentionally stricter than general markdown: callers
         # cannot smuggle canonical IDs, URLs, or raw claims through the correction channel.
         for correction in draft.corrections:
-            if any(pattern.search(correction.message) for pattern in cls._LEAK_PATTERNS):
+            normalized_correction = _normalise_public_boundary_text(correction.message)
+            if contains_public_implementation_leak(correction.message) or any(
+                pattern.search(normalized_correction) for pattern in cls._LEAK_PATTERNS
+            ):
                 raise OutputGuardError("纠偏说明包含内部信息", reasons=("correction_leakage",))
             if SafetyGuard().classify(correction.message).outcome is not SafetyOutcome.ALLOW:
                 raise OutputGuardError("纠偏说明未通过安全检查", reasons=("correction_red_line",))
@@ -705,20 +1024,40 @@ class OutputGuard:
                 raise OutputGuardError(
                     "零工具问候包含 NBA 事实声明", reasons=("greeting_fact_claim",)
                 )
-        known = cls._numeric_values(usable)
+        fact_authority = cls._agent_fact_authority(usable)
+        known = cls._numeric_values(fact_authority)
         unknown = cls._untraceable_numbers(all_text, known)
         if unknown:
             raise OutputGuardError(
                 "Agent 回答包含观察中不存在的数字",
                 reasons=("unobserved_number", *unknown[:8]),
             )
-        observation_text = "\n".join(cls._walk_text(usable))
+        observation_text = "\n".join(cls._walk_text(fact_authority))
+        # The Chinese-name pattern intentionally allows surrounding prose, so
+        # a greedy match may capture text such as “标之一是像格兰特·希尔
+        # 那样出任…”.  If the dotted name itself is present in the observed
+        # text, treat that larger match as grounded instead of rejecting an
+        # otherwise good synthesis.
+        observed_dotted_names = {
+            item.casefold()
+            for item in re.findall(
+                r"[\u4e00-\u9fff]{1,8}·[\u4e00-\u9fff·-]{1,20}",
+                observation_text,
+            )
+        }
         unsupported_names = sorted(
             {
                 name.strip()
                 for name in cls._FACTUAL_PROPER_NAME_RE.findall(all_text)
                 if name.strip()
                 and name.casefold() not in observation_text.casefold()
+                and not (
+                    "·" in name
+                    and any(
+                        dotted in name.casefold() or name.casefold() in dotted
+                        for dotted in observed_dotted_names
+                    )
+                )
                 and name.casefold()
                 not in {
                     "national basketball association",
@@ -764,6 +1103,8 @@ __all__ = [
     "SafetyDecision",
     "SafetyCategory",
     "SafetyOutcome",
+    "contains_public_implementation_leak",
+    "neutralize_external_internal_names",
     "classify_safety",
     "refusal_text",
 ]

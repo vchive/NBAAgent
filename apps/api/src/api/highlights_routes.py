@@ -48,6 +48,18 @@ def _cache_ttl(request: Request, name: str, default: int) -> int:
     return int(getattr(settings, name, default))
 
 
+def _cache_namespace(request: Request) -> str:
+    """Separate deterministic demo projections from public-source cache rows."""
+
+    settings = getattr(request.app.state, "settings", None)
+    mode = str(getattr(settings, "public_data_mode", "fixture")).lower()
+    return "demo" if mode == "fixture" else "public"
+
+
+def _projection_cache_key(request: Request, kind: str, *parts: object) -> str:
+    return stable_cache_key(kind, _cache_namespace(request), *parts)
+
+
 def _remember_cached_projection(
     service: HighlightsService,
     value: BaseModel,
@@ -88,6 +100,7 @@ def _schedule_refresh[ProjectionT: BaseModel](
     ttl_seconds: int | Callable[[ProjectionT], int],
     now,
     loader: Callable[[], Awaitable[ProjectionT]],
+    cache_value_allowed: Callable[[ProjectionT], bool] | None = None,
 ) -> None:
     owner = cache.acquire_refresh(key, now=now)
     if owner is None:
@@ -96,8 +109,9 @@ def _schedule_refresh[ProjectionT: BaseModel](
     async def refresh() -> None:
         try:
             value = await loader()
-            ttl = ttl_seconds(value) if callable(ttl_seconds) else ttl_seconds
-            cache.set(key, kind, value, ttl_seconds=ttl, now=now)
+            if cache_value_allowed is None or cache_value_allowed(value):
+                ttl = ttl_seconds(value) if callable(ttl_seconds) else ttl_seconds
+                cache.set(key, kind, value, ttl_seconds=ttl, now=now)
         except Exception:
             # A stale historical projection remains valid when a low-priority
             # refresh fails. The foreground response has already completed.
@@ -122,6 +136,7 @@ async def _load_cached_projection[ProjectionT: BaseModel](
     timezone_name: str,
     allow_stale: bool,
     stale_value_allowed: Callable[[ProjectionT], bool] | None = None,
+    cache_value_allowed: Callable[[ProjectionT], bool] | None = None,
     loader: Callable[[], Awaitable[ProjectionT]],
 ) -> ProjectionT:
     cache = _persistent_cache(request)
@@ -148,6 +163,7 @@ async def _load_cached_projection[ProjectionT: BaseModel](
                 ttl_seconds=ttl_seconds,
                 now=now,
                 loader=loader,
+                cache_value_allowed=cache_value_allowed,
             )
         return hit.value
 
@@ -166,9 +182,17 @@ async def _load_cached_projection[ProjectionT: BaseModel](
             )
             return hit.value
         value = await loader()
-        ttl = ttl_seconds(value) if callable(ttl_seconds) else ttl_seconds
-        cache.set(key, kind, value, ttl_seconds=ttl, now=now)
+        if cache_value_allowed is None or cache_value_allowed(value):
+            ttl = ttl_seconds(value) if callable(ttl_seconds) else ttl_seconds
+            cache.set(key, kind, value, ttl_seconds=ttl, now=now)
         return value
+
+
+def _recent_cache_value_allowed(value: HighlightsRangeResponse) -> bool:
+    """Do not persist an inconclusive empty scan as recent-game truth."""
+
+    state = str(getattr(value.evidence_state, "value", value.evidence_state)).lower()
+    return bool(value.games) or state != "partial"
 
 
 def _schedule_detail_prefetch(
@@ -191,7 +215,7 @@ def _schedule_detail_prefetch(
     live_ttl = int(getattr(settings, "highlights_cache_live_ttl_seconds", 45))
 
     async def prefetch_one(game) -> None:
-        key = stable_cache_key("detail", timezone_name, game.game_id)
+        key = _projection_cache_key(request, "detail", timezone_name, game.game_id)
         now = _cache_now(service)
         if cache.get(
             key,
@@ -340,7 +364,13 @@ async def highlights_recent(
         zone = validate_timezone(timezone_name)
         configured_demo = _fixture_demo_date(request)
         reference_day = configured_demo or service._now().astimezone(zone).date()
-        key = stable_cache_key("recent", zone.key, reference_day.isoformat(), limit)
+        key = _projection_cache_key(
+            request,
+            "recent",
+            zone.key,
+            reference_day.isoformat(),
+            limit,
+        )
 
         async def load_recent() -> HighlightsRangeResponse:
             return await service.recent(
@@ -362,6 +392,7 @@ async def highlights_recent(
             ),
             timezone_name=zone.key,
             allow_stale=True,
+            cache_value_allowed=_recent_cache_value_allowed,
             loader=load_recent,
         )
         _schedule_detail_prefetch(
@@ -428,7 +459,8 @@ async def highlights_range(
     try:
         local_today = service._now().astimezone(zone).date()
         historical = end < local_today
-        key = stable_cache_key(
+        key = _projection_cache_key(
+            request,
             "range",
             zone.key,
             start.isoformat(),
@@ -436,6 +468,72 @@ async def highlights_range(
         )
 
         async def load_range() -> HighlightsRangeResponse:
+            # A prewarm job stores one typed projection per Beijing date. If
+            # every day in a custom window is already cached, compose the
+            # range locally instead of issuing another upstream fan-out.
+            persistent = _persistent_cache(request)
+            if persistent is not None:
+                rows: list[HighlightsResponse] = []
+                current = start
+                while current <= end:
+                    day_key = _projection_cache_key(
+                        request,
+                        "date",
+                        zone.key,
+                        current.isoformat(),
+                    )
+                    hit = persistent.get(
+                        day_key,
+                        HighlightsResponse,
+                        now=_cache_now(service),
+                        allow_stale=historical,
+                    )
+                    if hit is None:
+                        rows = []
+                        break
+                    rows.append(hit.value)
+                    current += timedelta(days=1)
+                if len(rows) == (end - start).days + 1:
+                    games_by_id = {
+                        game.game_id: game
+                        for row in rows
+                        for game in row.games
+                    }
+                    origins = {
+                        game.data_origin
+                        for game in games_by_id.values()
+                        if game.data_origin in {"public", "demo_snapshot"}
+                    }
+                    origin = (
+                        "none"
+                        if not origins
+                        else next(iter(origins))
+                        if len(origins) == 1
+                        else "mixed"
+                    )
+                    evidence_state = (
+                        "partial"
+                        if any(row.evidence_state == "partial" for row in rows)
+                        else "verified"
+                        if games_by_id
+                        else "none"
+                    )
+                    return HighlightsRangeResponse(
+                        timezone=zone.key,
+                        from_date=start.isoformat(),
+                        to_date=end.isoformat(),
+                        games=sorted(
+                            games_by_id.values(),
+                            key=lambda game: game.start_utc,
+                            reverse=True,
+                        ),
+                        as_of_beijing=next(
+                            (row.as_of_beijing for row in reversed(rows) if row.as_of_beijing),
+                            None,
+                        ),
+                        evidence_state=evidence_state,
+                        data_origin=origin,
+                    )
             return await service.for_range(start, end, timezone_name=zone.key)
 
         result = await _load_cached_projection(
@@ -519,7 +617,12 @@ async def highlights(
     try:
         local_today = service._now().astimezone(zone).date()
         historical = target < local_today
-        key = stable_cache_key("date", timezone_name, target.isoformat())
+        key = _projection_cache_key(
+            request,
+            "date",
+            timezone_name,
+            target.isoformat(),
+        )
 
         async def load_date() -> HighlightsResponse:
             return await service.for_date(target, timezone_name=timezone_name)
@@ -592,7 +695,7 @@ async def highlight_detail(
         async def load_detail() -> HighlightDetailResponse:
             return await service.detail(game_id, timezone_name=timezone_name)
 
-        key = stable_cache_key("detail", timezone_name, game_id)
+        key = _projection_cache_key(request, "detail", timezone_name, game_id)
         # Final details are immutable enough for stale-while-revalidate. Live
         # or scheduled details must be fresh and use the short TTL.
         final_ttl = _cache_ttl(

@@ -173,7 +173,11 @@ def derive_series(
     if not valid:
         return DerivedResult(missing=["系列赛比赛记录"], partial=True)
     participants = (series.home, series.away) if series else (valid[0].home, valid[0].away)
-    result = DerivedResult(partial=partial)
+    # Retain the canonical, chronological rows for consumers that need to
+    # compare games within the series (for example a "哪场最精彩" Agent turn).
+    # The rows are already de-duplicated and verified above; exposing them here
+    # avoids a second provider call or a lossy score-only aggregate.
+    result = DerivedResult(partial=partial, games=valid)
     source_ids = [f"game:{game.game_id}" for game in valid]
     for participant in participants:
         if participant is None:
@@ -243,6 +247,7 @@ def derive_pbp(
             "shooter": event.shooter.display_name if event.shooter else None,
             "assister": event.assister.display_name if event.assister else None,
             "shot_type": event.shot_type.value,
+            "action_text": event.action_text,
             "home_score_after": event.home_score_after,
             "away_score_after": event.away_score_after,
         }

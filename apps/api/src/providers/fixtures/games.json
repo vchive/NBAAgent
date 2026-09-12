@@ -10,6 +10,8 @@
       "status": "FINAL",
       "home_score": 108,
       "away_score": 104,
+      "home_coach": "乔·马祖拉",
+      "away_coach": "马克·戴格诺特",
       "series_id": "2026-finals-bos-okc",
       "series_game_number": 4,
       "venue": {"name": "TD Garden", "city": "Boston", "state": "MA", "country": "USA"}

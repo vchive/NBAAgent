@@ -7,7 +7,11 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 
-from apps.api.src.api.schemas import HighlightDetailResponse, HighlightGame
+from apps.api.src.api.schemas import (
+    HighlightDetailResponse,
+    HighlightGame,
+    HighlightsRangeResponse,
+)
 from apps.api.src.application.chat_use_case import ChatUseCase
 from apps.api.src.application.highlights import HighlightsService
 from apps.api.src.config import Settings
@@ -82,6 +86,112 @@ async def test_historical_endpoints_write_then_hit_without_provider(
 
 
 @pytest.mark.asyncio
+async def test_partial_empty_recent_projection_is_not_cached(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    provider = FixtureProvider()
+    clock = _MutableClock(datetime(2026, 8, 31, 12, tzinfo=UTC))
+    app = _app(str(tmp_path / "highlights.sqlite3"), provider=provider, clock=clock)
+    calls = 0
+
+    async def partial_recent(
+        self: HighlightsService,
+        *,
+        limit: int,
+        timezone_name: str,
+        reference_day=None,
+    ) -> HighlightsRangeResponse:
+        nonlocal calls
+        calls += 1
+        return HighlightsRangeResponse(
+            timezone=timezone_name,
+            from_date="2026-05-13",
+            to_date="2026-09-09",
+            games=[],
+            evidence_state="partial",
+            data_origin="none",
+        )
+
+    monkeypatch.setattr(HighlightsService, "recent", partial_recent)
+    endpoint = "/api/v1/highlights/recent?limit=5&timezone=Asia/Shanghai"
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        first = await client.get(endpoint)
+        second = await client.get(endpoint)
+
+    assert first.status_code == second.status_code == 200
+    assert first.json()["evidence_state"] == "partial"
+    assert first.json()["games"] == []
+    assert calls == 2
+    assert app.state.highlights_cache.count() == 0
+
+
+@pytest.mark.asyncio
+async def test_authoritative_empty_recent_projection_remains_cacheable(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    provider = FixtureProvider()
+    clock = _MutableClock(datetime(2026, 8, 31, 12, tzinfo=UTC))
+    app = _app(str(tmp_path / "highlights.sqlite3"), provider=provider, clock=clock)
+    calls = 0
+
+    async def empty_recent(
+        self: HighlightsService,
+        *,
+        limit: int,
+        timezone_name: str,
+        reference_day=None,
+    ) -> HighlightsRangeResponse:
+        nonlocal calls
+        calls += 1
+        return HighlightsRangeResponse(
+            timezone=timezone_name,
+            from_date="2026-05-13",
+            to_date="2026-09-09",
+            games=[],
+            evidence_state="none",
+            data_origin="none",
+        )
+
+    monkeypatch.setattr(HighlightsService, "recent", empty_recent)
+    endpoint = "/api/v1/highlights/recent?limit=5&timezone=Asia/Shanghai"
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        first = await client.get(endpoint)
+        second = await client.get(endpoint)
+
+    assert first.status_code == second.status_code == 200
+    assert first.json()["evidence_state"] == "none"
+    assert first.json()["games"] == []
+    assert calls == 1
+    assert app.state.highlights_cache.count() == 1
+
+
+@pytest.mark.asyncio
+async def test_range_composes_pre_warmed_date_projections_without_provider(tmp_path) -> None:
+    provider = FixtureProvider()
+    clock = _MutableClock(datetime(2026, 8, 31, 12, tzinfo=UTC))
+    app = _app(str(tmp_path / "highlights.sqlite3"), provider=provider, clock=clock)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        date_response = await client.get(
+            "/api/v1/highlights?date=2026-06-10&timezone=Asia/Shanghai"
+        )
+        calls = provider.operation_calls.get("search_games", 0)
+        provider.scenario = "timeout"
+        ranged = await client.get(
+            "/api/v1/highlights/range?from=2026-06-10&to=2026-06-10&timezone=Asia/Shanghai"
+        )
+
+    assert date_response.status_code == ranged.status_code == 200
+    assert ranged.json()["games"] == date_response.json()["games"]
+    assert provider.operation_calls.get("search_games", 0) == calls
+
+
+@pytest.mark.asyncio
 async def test_stale_historical_result_is_served_when_background_refresh_fails(tmp_path) -> None:
     provider = FixtureProvider()
     clock = _MutableClock(datetime(2026, 8, 31, 12, tzinfo=UTC))
@@ -123,6 +233,47 @@ async def test_expired_current_day_result_is_not_served_as_live_fact(tmp_path) -
     assert first.status_code == 200
     assert expired.status_code == 504
     assert expired.json()["error"]["code"] == "UPSTREAM_TIMEOUT"
+
+
+@pytest.mark.asyncio
+async def test_fixture_cache_cannot_leak_into_hybrid_profile(tmp_path) -> None:
+    """A shared SQLite file must preserve the public/demo trust boundary."""
+
+    path = str(tmp_path / "highlights.sqlite3")
+    clock = _MutableClock(datetime(2026, 8, 31, 12, tzinfo=UTC))
+    fixture_app = _app(path, provider=FixtureProvider(), clock=clock)
+    endpoint = "/api/v1/highlights?date=2026-06-12&timezone=Asia/Shanghai"
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=fixture_app), base_url="http://fixture"
+    ) as client:
+        fixture = await client.get(endpoint)
+    fixture_app.state.highlights_cache.close()
+    assert fixture.status_code == 200
+    assert fixture.json()["data_origin"] == "demo_snapshot"
+
+    primary = FixtureProvider(scenario="timeout")
+    snapshot = FixtureProvider()
+    config = _settings(
+        path,
+        public_data_mode="hybrid",
+        highlights_demo_date="",
+    )
+    gateway = ProviderGateway(primary, fallback=snapshot, max_retries=0)
+    usecase = ChatUseCase(
+        primary,
+        gateway=gateway,
+        clock=clock,
+        settings=config,
+    )
+    hybrid_app = create_app(settings=config, usecase=usecase)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=hybrid_app), base_url="http://hybrid"
+    ) as client:
+        public = await client.get(endpoint)
+
+    assert public.status_code == 504
+    assert public.json()["error"]["code"] == "UPSTREAM_TIMEOUT"
+    assert snapshot.calls == 0
 
 
 @pytest.mark.asyncio

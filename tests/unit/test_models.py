@@ -132,9 +132,25 @@ def test_pbp_bundle_preserves_nulls_and_validates_sequence() -> None:
         clock_seconds_remaining=Decimal("5"),
         event_type=PlayEventType.SHOT,
         points=None,
+        action_text="  底角三分跳投不中  ",
     )
     bundle = PlayByPlayBundle(game_id="g1", events=[event], sequence_valid=True)
     assert bundle.events[0].points is None
+    assert bundle.events[0].action_text == "底角三分跳投不中"
+    with pytest.raises(ValidationError):
+        PlayEvent.model_validate(
+            {**event.model_dump(), "action_text": "<script>alert(1)</script>"}
+        )
+    with pytest.raises(ValidationError):
+        PlayEvent(
+            event_id="unsafe",
+            game_id="g1",
+            provider_index=2,
+            period=4,
+            clock_seconds_remaining=0,
+            event_type=PlayEventType.OTHER,
+            action_text="终场\x00标记",
+        )
     with pytest.raises(ValidationError):
         PlayByPlayBundle(
             game_id="g1",

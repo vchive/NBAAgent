@@ -22,6 +22,7 @@ from apps.api.src.domain.models import (
     QueryIntent,
     VerificationState,
 )
+from apps.api.src.domain.safety import SafetyGuard, neutralize_external_internal_names
 from apps.api.src.domain.time_policy import format_beijing
 
 
@@ -33,6 +34,22 @@ def _num(value: Any) -> str:
     if isinstance(value, float) and value.is_integer():
         return str(int(value))
     return str(value)
+
+
+def _home_away_score(
+    home_score: Any,
+    away_score: Any,
+    *,
+    game: Game | None,
+) -> str:
+    """Render provider-order scores without leaving their direction implicit."""
+
+    if game is None:
+        return f"主队 {home_score}–{away_score} 客队"
+    return (
+        f"{game.home.display_name} {home_score}–{away_score} "
+        f"{game.away.display_name}"
+    )
 
 
 # News text is an untrusted external-content projection.  The normalizer
@@ -69,10 +86,18 @@ def _news_parts(value: Any) -> tuple[str | None, str | None]:
             return None
         # Keep the renderer defensive even when a manually-created fact did
         # not pass through ``Normalizer.news``.
-        text = " ".join(text.split())
+        text = neutralize_external_internal_names(" ".join(text.split()))
+        # Search results can contain an unrelated sensitive headline even
+        # when the user's NBA question is benign.  Filter that individual
+        # title/summary instead of letting the final OutputGuard reject the
+        # entire otherwise useful answer with a 500.
+        if SafetyGuard().classify(text).outcome.value != "ALLOW":
+            return None
         return text[:limit] or None
 
-    return clean(title, limit=500), clean(summary, limit=4000)
+    # Keep public news cards readable and bounded.  Long search snippets are
+    # context for synthesis, not a substitute for the article body.
+    return clean(title, limit=500), clean(summary, limit=600)
 
 
 def _public_corrections(corrections: Iterable[Correction]) -> list[PublicCorrection]:
@@ -118,6 +143,56 @@ def _public_corrections(corrections: Iterable[Correction]) -> list[PublicCorrect
     return output
 
 
+def _key_replay_events(events: list[Any], *, limit: int = 8) -> list[Any]:
+    """Keep a long closing window readable without losing decisive plays.
+
+    The right-hand replay can retain every source row.  Chat prose is more
+    useful when a one-minute window prioritises score changes, the final shot
+    attempts and turnovers/blocks instead of repeating substitutions and every
+    rebound.  Order is restored after selection so the result remains a
+    truthful timeline.
+    """
+
+    if len(events) <= limit:
+        return events
+
+    scoring = [
+        index
+        for index, event in enumerate(events)
+        if getattr(event, "points", None) not in {None, 0}
+    ]
+    shots = [
+        index
+        for index, event in enumerate(events)
+        if str(
+            getattr(
+                getattr(event, "shot_type", None),
+                "value",
+                getattr(event, "shot_type", ""),
+            )
+        ).upper()
+        not in {"", "NONE", "UNKNOWN"}
+    ]
+    critical = [
+        index
+        for index, event in enumerate(events)
+        if re.search(
+            r"(?:失误|抢断|封盖|违例|犯规)",
+            str(getattr(event, "action_text", "") or ""),
+        )
+    ]
+
+    selected: set[int] = set(scoring[-limit:])
+    for pool in (reversed(shots), reversed(critical), iter(range(len(events)))):
+        for index in pool:
+            if len(selected) >= limit:
+                break
+            selected.add(index)
+        if len(selected) >= limit:
+            break
+    return [events[index] for index in sorted(selected)]
+
+
 class TemplateComposer:
     """Pure renderer; it never performs retrieval or arithmetic."""
 
@@ -137,6 +212,32 @@ class TemplateComposer:
         lines: list[str] = []
         evidence = facts.evidence_state
         schedule_games = list(getattr(derived, "games", []) or [])
+        series_scoped_matchup = getattr(intent, "matchup", False) and any(
+            getattr(metric.scope, "value", metric.scope) == "SERIES"
+            for metric in intent.metrics
+        )
+        if series_scoped_matchup:
+            # A provider may return regular-season meetings alongside a
+            # playoff series for the same two teams.  When the question asks
+            # for the series/Finals and every game, render only one canonical
+            # series group instead of silently mixing those unrelated rows
+            # into the Finals table.  Rows without trusted series identity
+            # remain available for a broad head-to-head query.
+            groups: dict[str, list[Game]] = {}
+            for item in schedule_games:
+                if item.series_id and item.series_game_number is not None:
+                    groups.setdefault(item.series_id, []).append(item)
+            if groups:
+                schedule_games = sorted(
+                    max(
+                        groups.values(),
+                        key=lambda games: (
+                            len(games),
+                            max(game.start_utc for game in games),
+                        ),
+                    ),
+                    key=lambda game: (game.series_game_number or 99, game.start_utc),
+                )
         multi_game_schedule = (
             intent.intent_name.value == "SCHEDULE_RESULT" and len(schedule_games) > 1
         )
@@ -152,19 +253,23 @@ class TemplateComposer:
             getattr(metric, "name", "")
             for metric in getattr(intent, "metrics", [])
         }
-        metadata_metrics = requested_game_metrics & {"venue", "game_duration"}
+        metadata_metrics = requested_game_metrics & {"venue", "game_duration", "coaches"}
         metadata_only = bool(metadata_metrics) and requested_game_metrics <= {
             "venue",
             "game_duration",
+            "coaches",
         }
         unavailable_game_metrics: set[str] = set()
         if "venue" in metadata_metrics and (game is None or game.venue is None):
             unavailable_game_metrics.add("venue")
-        # Elapsed wall-clock duration is still not part of the canonical
-        # provider payload. Keep it explicitly unavailable rather than
-        # deriving it from scheduled/PBP timestamps.
-        if "game_duration" in metadata_metrics:
+        if "game_duration" in metadata_metrics and (
+            game is None or game.duration_seconds is None
+        ):
             unavailable_game_metrics.add("game_duration")
+        if "coaches" in metadata_metrics and (
+            game is None or game.home_coach is None or game.away_coach is None
+        ):
+            unavailable_game_metrics.add("coaches")
 
         if (
             game is not None
@@ -195,6 +300,49 @@ class TemplateComposer:
             )
             lines.append(venue_text)
 
+        if game is not None and "coaches" in metadata_metrics and not multi_game_schedule:
+            if game.home_coach is not None:
+                home_coach_text = f"主队 **{game.home.display_name}** 教练：**{game.home_coach}**。"
+                blocks.append(
+                    AnswerBlock(
+                        type=AnswerBlockType.FACT,
+                        label="主队教练",
+                        value=game.home_coach,
+                    )
+                )
+                lines.append(home_coach_text)
+            if game.away_coach is not None:
+                away_coach_text = f"客队 **{game.away.display_name}** 教练：**{game.away_coach}**。"
+                blocks.append(
+                    AnswerBlock(
+                        type=AnswerBlockType.FACT,
+                        label="客队教练",
+                        value=game.away_coach,
+                    )
+                )
+                lines.append(away_coach_text)
+
+        if (
+            game is not None
+            and "game_duration" in metadata_metrics
+            and game.duration_seconds is not None
+            and not multi_game_schedule
+        ):
+            hours, remainder = divmod(game.duration_seconds, 3600)
+            minutes = remainder // 60
+            duration_text = (
+                f"{hours}小时{minutes}分钟" if hours else f"{minutes}分钟"
+            )
+            text = f"这场比赛的实际耗时为 **{duration_text}**。"
+            blocks.append(
+                AnswerBlock(
+                    type=AnswerBlockType.FACT,
+                    label="比赛耗时",
+                    value=duration_text,
+                )
+            )
+            lines.append(text)
+
         # Missing metadata is answered explicitly before any score/leader
         # renderer. This keeps a venue/duration question focused and honest.
         if game is not None and unavailable_game_metrics and not multi_game_schedule:
@@ -204,6 +352,8 @@ class TemplateComposer:
                 labels.append("场馆/举办地点")
             if "game_duration" in unavailable_game_metrics:
                 labels.append("比赛实际时长")
+            if "coaches" in unavailable_game_metrics:
+                labels.append("双方教练信息")
             label_text = "和".join(labels)
             missing_text = (
                 f"这场比赛（{matchup}）的{label_text}"
@@ -230,7 +380,17 @@ class TemplateComposer:
             "TACTICAL",
             "FOLLOW_UP",
         } and not multi_game_schedule and not metadata_only:
-            if intent.intent_name.value in {"FOLLOW_UP", "RECAP", "TACTICAL"}:
+            if intent.intent_name.value == "RECAP" and game.series_game_number is not None:
+                season = game.season.label if game.season is not None else "本赛季"
+                game_label = (
+                    f"这是 **{season} 系列赛 G{game.series_game_number}**，"
+                    f"北京时间 **{format_beijing(game.start_utc)}** 开赛。"
+                )
+                blocks.append(AnswerBlock(type=AnswerBlockType.TEXT, content=game_label))
+                lines.append(game_label)
+            if intent.intent_name.value in {"FOLLOW_UP", "RECAP", "TACTICAL"} or getattr(
+                intent, "matchup", False
+            ):
                 matchup = (
                     f"对阵双方：**{game.away.display_name}** vs **{game.home.display_name}**。"
                 )
@@ -265,6 +425,41 @@ class TemplateComposer:
                     AnswerBlock(type=AnswerBlockType.WARNING, content="比分尚未完成核验。")
                 )
                 lines.append("比分尚未完成核验。")
+
+            if intent.intent_name.value == "RECAP":
+                point_rows = [
+                    (line.subject.display_name, line.metrics.get("points"))
+                    for line in (bundle.leaders if bundle is not None else [])
+                    if line.metrics.get("points") is not None
+                ]
+                if point_rows:
+                    leader_name, leader_points = max(point_rows, key=lambda row: row[1])
+                    leader_text = (
+                        f"现有技术统计中，**{leader_name}** 得到全场最高的 "
+                        f"**{_num(leader_points)} 分**。"
+                    )
+                    blocks.append(
+                        AnswerBlock(
+                            type=AnswerBlockType.FACT,
+                            label="全场得分最高",
+                            value=leader_name,
+                            unit=f"{_num(leader_points)} 分",
+                        )
+                    )
+                    lines.append(leader_text)
+                if game.duration_seconds is not None:
+                    hours, remainder = divmod(game.duration_seconds, 3600)
+                    minutes = remainder // 60
+                    duration = f"{hours}小时{minutes}分钟" if hours else f"{minutes}分钟"
+                    duration_text = f"比赛实际耗时 **{duration}**。"
+                    blocks.append(
+                        AnswerBlock(
+                            type=AnswerBlockType.FACT,
+                            label="比赛耗时",
+                            value=duration,
+                        )
+                    )
+                    lines.append(duration_text)
 
             if any(
                 getattr(metric, "name", "") == "start_time"
@@ -320,16 +515,70 @@ class TemplateComposer:
                     rows=rows,
                 )
             )
+            matchup_series_facts = [
+                fact
+                for fact in getattr(derived, "facts", [])
+                if fact.predicate == "series_wins"
+            ]
+            if getattr(intent, "matchup", False) and len(matchup_series_facts) >= 2:
+                matchup_series_facts.sort(key=lambda fact: fact.value, reverse=True)
+                series_text = (
+                    f"系列赛大比分：**{matchup_series_facts[0].subject.display_name} "
+                    f"{matchup_series_facts[0].value}–{matchup_series_facts[1].value} "
+                    f"{matchup_series_facts[1].subject.display_name}**。"
+                )
+                blocks.insert(0, AnswerBlock(type=AnswerBlockType.TEXT, content=series_text))
+                lines.append(series_text)
             schedule_text = (
-                "该日期的比赛如下，比分与状态均按已核验记录整理。"
+                (
+                    "两队相关比赛如下，比分与状态均按已核验记录整理。"
+                    if getattr(intent, "matchup", False)
+                    else "该日期的比赛如下，比分与状态均按已核验记录整理。"
+                )
                 if evidence is EvidenceState.VERIFIED
-                else "该日期的比赛如下，部分字段仍待核验，请以标注的缺失状态为准。"
+                else (
+                    "两队相关比赛如下，部分字段仍待核验，请以标注的缺失状态为准。"
+                    if getattr(intent, "matchup", False)
+                    else "该日期的比赛如下，部分字段仍待核验，请以标注的缺失状态为准。"
+                )
             )
             blocks.append(AnswerBlock(type=AnswerBlockType.TEXT, content=schedule_text))
             lines.append(schedule_text)
+            lines.extend(
+                [
+                    "| 北京时间 | 客队 | 比分 | 主队 | 状态 |",
+                    "|---|---|---:|---|---|",
+                    *[
+                        "| " + " | ".join(str(cell) for cell in row) + " |"
+                        for row in rows
+                    ],
+                ]
+            )
 
+        requested_players = [
+            item for item in getattr(intent, "entities", []) if item.kind is EntityKind.PLAYER
+        ]
+        box_score_metric_names = {
+            "points",
+            "rebounds",
+            "assists",
+            "three_pointers",
+            "field_goal_percentage",
+        }
+        requested_box_score_metrics = requested_game_metrics & box_score_metric_names
         if (
-            intent.intent_name.value in {"DATA", "FACT_CHECK"}
+            (
+                intent.intent_name.value in {"DATA", "FACT_CHECK"}
+                or bool(requested_players)
+                # A selected-game question is parsed as FOLLOW_UP so it can
+                # inherit the canonical game.  Render its box-score answer
+                # only when the turn explicitly carried a supported metric;
+                # ordinary shorthand must remain a matchup/score response.
+                or (
+                    intent.intent_name.value == "FOLLOW_UP"
+                    and bool(requested_box_score_metrics)
+                )
+            )
             and bundle is not None
             and bundle.leaders
         ):
@@ -337,18 +586,11 @@ class TemplateComposer:
             # metric explicitly requested by the parser instead of always
             # answering with points; this keeps “篮板/助攻/三分” questions
             # from receiving a plausible but irrelevant points leader.
-            metric_names = {
-                "points",
-                "rebounds",
-                "assists",
-                "three_pointers",
-                "field_goal_percentage",
-            }
             requested_metric = next(
                 (
                     getattr(metric, "name", "")
                     for metric in getattr(intent, "metrics", [])
-                    if getattr(metric, "name", "") in metric_names
+                    if getattr(metric, "name", "") in box_score_metric_names
                 ),
                 "points",
             )
@@ -376,7 +618,45 @@ class TemplateComposer:
                     "field_goal_percentage": ("命中率最高", "命中率最高", "%"),
                 }
                 label, phrase, unit = labels[requested_metric]
-                if requested_rank is not None:
+                requested_player = requested_players[0] if requested_players else None
+                if requested_player is not None:
+                    player_row = next(
+                        (
+                            row
+                            for row in metric_rows
+                            if row[0] == requested_player.display_name
+                            or any(
+                                line.subject.canonical_id == requested_player.canonical_id
+                                and line.subject.display_name == row[0]
+                                for line in bundle.leaders
+                            )
+                        ),
+                        None,
+                    )
+                    if player_row is None:
+                        text = (
+                            f"当前记录没有 **{requested_player.display_name}** 的"
+                            f"{label.replace('王', '')}数据，暂时无法核验。"
+                        )
+                        blocks.append(AnswerBlock(type=AnswerBlockType.WARNING, content=text))
+                        lines.append(text)
+                    else:
+                        player_name, player_value = player_row
+                        text = (
+                            f"**{player_name}** 本场{label.replace('王', '')}为 "
+                            f"**{_num(player_value)} {unit}**。"
+                        )
+                        blocks.append(
+                            AnswerBlock(
+                                type=AnswerBlockType.FACT,
+                                label=f"{player_name}{label.replace('王', '')}",
+                                value=player_value,
+                                unit=unit,
+                            )
+                        )
+                        lines.append(text)
+                    metric_rows = []
+                elif requested_rank is not None:
                     if requested_rank > len(metric_rows):
                         text = (
                             f"当前可核验的 {requested_metric} 记录不足 {requested_rank} 位，"
@@ -470,6 +750,7 @@ class TemplateComposer:
         if intent.intent_name.value == "PLAY_BY_PLAY" or follow_up_replay:
             events = list(getattr(derived, "events", []) or [])
             if events:
+                rendered_events = _key_replay_events(events)
                 rows = []
                 shot_labels = {
                     "TWO_POINT": "两分球",
@@ -479,9 +760,10 @@ class TemplateComposer:
                     "UNKNOWN": "未标注",
                 }
                 if not direct_last_shot_detail:
-                    for event in events:
+                    for event in rendered_events:
                         actor = event.shooter.display_name if event.shooter else "未标注"
                         assister = event.assister.display_name if event.assister else "未标注"
+                        action_text = event.action_text or "未提供"
                         points = "—" if event.points is None else f"{event.points} 分"
                         shot_type = shot_labels.get(
                             getattr(getattr(event, "shot_type", None), "value", "UNKNOWN"),
@@ -490,13 +772,18 @@ class TemplateComposer:
                         if event.home_score_after is None or event.away_score_after is None:
                             score_after = "未标注"
                         else:
-                            score_after = f"{event.home_score_after}–{event.away_score_after}"
+                            score_after = _home_away_score(
+                                event.home_score_after,
+                                event.away_score_after,
+                                game=game,
+                            )
                         rows.append(
                             [
                                 f"第{event.period}节",
                                 f"{float(event.clock_seconds_remaining):g}秒",
                                 actor,
                                 assister,
+                                action_text,
                                 shot_type,
                                 points,
                                 score_after,
@@ -510,6 +797,7 @@ class TemplateComposer:
                                 "剩余时间",
                                 "出手者",
                                 "助攻者",
+                                "事件描述",
                                 "类型",
                                 "结果",
                                 "事件后比分",
@@ -532,11 +820,17 @@ class TemplateComposer:
                 else:
                     scope_text = "按全场结束前的时间窗口"
                 if not direct_last_shot_detail:
-                    text = f"{scope_text}，共找到 **{len(events)} 个回合**。"
+                    if len(rendered_events) < len(events):
+                        text = (
+                            f"{scope_text}，共找到 **{len(events)} 个回合**；"
+                            "以下展示代表性关键节点。"
+                        )
+                    else:
+                        text = f"{scope_text}，共找到 **{len(events)} 个回合**。"
                     blocks.append(AnswerBlock(type=AnswerBlockType.TEXT, content=text))
                     lines.append(text)
                 event_lines = []
-                for event in events:
+                for event in rendered_events:
                     actor = event.shooter.display_name if event.shooter else "未标注球员"
                     points = "得分值未标注" if event.points is None else f"{event.points} 分"
                     shot_type = shot_labels.get(
@@ -544,19 +838,31 @@ class TemplateComposer:
                         "未标注",
                     )
                     assister = event.assister.display_name if event.assister else "未标注助攻者"
+                    action_text = (
+                        f"，记录为“{event.action_text}”" if event.action_text else ""
+                    )
                     if event.home_score_after is None or event.away_score_after is None:
                         score_after = "事件后比分未标注"
                     else:
                         score_after = (
-                            f"事件后比分 {event.home_score_after}–{event.away_score_after}"
+                            "事件后比分 "
+                            + _home_away_score(
+                                event.home_score_after,
+                                event.away_score_after,
+                                game=game,
+                            )
                         )
                     event_lines.append(
                         f"第{event.period}节 {float(event.clock_seconds_remaining):g}秒："
-                        f"{actor}，{points}，类型 {shot_type}，助攻者 {assister}，{score_after}"
+                        f"{actor}，{points}，类型 {shot_type}，助攻者 {assister}"
+                        f"{action_text}，{score_after}"
                     )
                 if event_lines and not direct_last_shot_detail:
-                    detail = "；".join(event_lines) + "。"
-                    blocks.append(AnswerBlock(type=AnswerBlockType.TEXT, content=detail))
+                    # ``blocks`` already contains the structured event table.
+                    # Keep a Markdown-list projection for text-only Agent
+                    # observations without making the browser render the same
+                    # timeline twice.
+                    detail = "\n".join(f"- {item}。" for item in event_lines)
                     lines.append(detail)
 
                 # Answer “最后一攻/最后一球是谁投的、事件后比分” directly.
@@ -629,16 +935,26 @@ class TemplateComposer:
                                 f"第{last_identified.period}节还剩 {identified_clock:g} 秒的"
                                 f"{identified_type}"
                             )
+                            if last_identified.action_text:
+                                focus_parts.append(
+                                    f"公开逐回合原文记为“{last_identified.action_text}”"
+                                )
                     else:
                         focus_parts.append(
                             f"最后一条记录的出手者是 **{final_shooter.display_name}**"
                         )
+                        if final_event.action_text:
+                            focus_parts.append(f"公开逐回合原文记为“{final_event.action_text}”")
 
                 if score_fact is not None and isinstance(score_fact.value, Mapping):
                     home = score_fact.value.get("home")
                     away = score_fact.value.get("away")
                     if home is not None and away is not None:
-                        focus_parts.append(f"终场比分为 **{home}–{away}**")
+                        focus_parts.append(
+                            "终场比分为 **"
+                            + _home_away_score(home, away, game=game)
+                            + "**"
+                        )
                     else:
                         focus_parts.append("最新记录后的比分暂无可核验结果。")
                 else:
@@ -701,7 +1017,13 @@ class TemplateComposer:
             if winner is not None and winner_event is not None:
                 event_score = (
                     "，将比分带到 "
-                    f"**{winner_event.home_score_after}–{winner_event.away_score_after}**"
+                    "**"
+                    + _home_away_score(
+                        winner_event.home_score_after,
+                        winner_event.away_score_after,
+                        game=game,
+                    )
+                    + "**"
                     if winner_event.home_score_after is not None
                     and winner_event.away_score_after is not None
                     else ""
@@ -711,9 +1033,13 @@ class TemplateComposer:
                     f"**{winner_event.shooter.display_name}** 得到 {winner_event.points} 分"
                     f"{event_score}。"
                 )
+                closing_margin = winner_margin(winner_event)
                 analysis = (
-                    f"{winner.display_name} 能赢下比赛，已核验的直接依据是末节这一回合后"
-                    "建立并守住了领先优势。"
+                    f"收官阶段，{winner.display_name}在第四节还剩 "
+                    f"{float(winner_event.clock_seconds_remaining):g} 秒时领先 "
+                    f"{closing_margin} 分，并把优势守到终场。"
+                    "这是当前逐回合记录能直接支持的赢球环节；"
+                    "单凭这一条记录不能完整解释整场胜因。"
                 )
                 blocks.append(AnswerBlock(type=AnswerBlockType.ANALYSIS, content=analysis))
                 blocks.append(
@@ -733,7 +1059,12 @@ class TemplateComposer:
                     ]
                 )
             else:
-                message = "当前只有终场结果，缺少可核验的关键回合，不能据此判断具体战术原因。"
+                message = (
+                    "当前记录没有逐回合或分节走势，因此只能给出上述有限回顾，"
+                    "不能还原每节攻防过程。"
+                    if intent.intent_name.value == "RECAP"
+                    else "当前只有终场结果，缺少可核验的关键回合，不能据此判断具体战术原因。"
+                )
                 blocks.append(AnswerBlock(type=AnswerBlockType.WARNING, content=message))
                 lines.append(message)
 
@@ -844,8 +1175,19 @@ class TemplateComposer:
             series_facts = [fact for fact in derived.facts if fact.predicate == "series_wins"]
             if (
                 series_facts
-                and intent.metrics
-                and getattr(intent.metrics[0].scope, "value", intent.metrics[0].scope) == "SERIES"
+                and not (multi_game_schedule and getattr(intent, "matchup", False))
+                and (
+                    (
+                        intent.metrics
+                        and getattr(
+                            intent.metrics[0].scope,
+                            "value",
+                            intent.metrics[0].scope,
+                        )
+                        == "SERIES"
+                    )
+                    or getattr(intent, "matchup", False)
+                )
             ):
                 series_facts = sorted(series_facts, key=lambda fact: fact.value, reverse=True)
                 if len(series_facts) >= 2:

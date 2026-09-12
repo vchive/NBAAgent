@@ -64,7 +64,7 @@ The password and session token never appear in JSON responses or public logs.
 Response `200` (liveness; readiness may use `503`):
 
 ```json
-{"status":"ok|degraded|not_ready","version":"v1","mode":"live|fixture|hybrid","capabilities":{"full_intelligence":true,"web_search":false},"dependencies":{"session_store":"ok|degraded","cache":"ok|degraded","hermes":"disabled|ok|degraded","auth":"ok|degraded","web_search":"enabled|disabled"}}
+{"status":"ok|degraded|not_ready","version":"v1","mode":"live|fixture|hybrid","capabilities":{"full_intelligence":true,"default_intelligence_mode":"hybrid|full","web_search":false},"dependencies":{"session_store":"ok|degraded","cache":"ok|degraded","assistant_runtime":"disabled|ok|degraded","auth":"ok|degraded","web_search":"enabled|disabled"}}
 ```
 
 `/healthz` is a compatibility alias for the public liveness response and must not expose
@@ -114,7 +114,14 @@ or `no_data`). These are successful protocol responses, not transport failures:
     "mode": "agent",
     "status": "used",
     "latency_ms": 980
-  }
+  },
+  "notices": [
+    {
+      "code": "INTELLIGENCE_QUOTA_EXHAUSTED|SEARCH_QUOTA_EXHAUSTED|INTELLIGENCE_AUTH_UNAVAILABLE|SEARCH_AUTH_UNAVAILABLE|INTELLIGENCE_TEMPORARILY_UNAVAILABLE|SEARCH_TEMPORARILY_UNAVAILABLE",
+      "retryable": false,
+      "message": "面向用户的供应商无关能力提示"
+    }
+  ]
 }
 ```
 
@@ -133,6 +140,12 @@ server safely uses hybrid routing. `auto` or an omitted field uses the configure
 response uses `answer_markdown` as the single question and may include `follow_up`. `corrections`
 is always the public mapping described above; internal `Correction.claim`, canonical IDs and
 evidence references are never serialized.
+
+`notices` is always present and may be empty. It describes a current-request capability issue
+without naming a model, provider, endpoint, tool, cache, or account. A response may remain
+`completed` when usable facts or observations survived the issue. When no usable evidence exists,
+the server returns the §5 technical failure instead of `no_data` or a clarification. Notices are
+request-scoped metadata and are never restored from a shared data/result cache.
 
 ## 4. Streaming chat
 
@@ -180,7 +193,7 @@ another session never reuses a result.
 
 Every `message.completed` payload MUST equal the §3 conversational response envelope (including
 `request_id`, `session_id`, `status`, `blocks`, `corrections`, `follow_up`, `evidence_state`,
-`as_of_beijing`, `latency_ms` and `composition`); the example above is abbreviated only for
+`as_of_beijing`, `latency_ms`, `composition`, and `notices`); the example above is abbreviated only for
 readability.
 
 `blocks` follows the canonical `AnswerBlock` union: `text`, `analysis` and `warning` require
@@ -251,6 +264,8 @@ facts:
       "status": "final",
       "home_score": 108,
       "away_score": 104,
+      "home_coach": "乔·马祖拉",
+      "away_coach": "马克·戴格诺特",
       "venue_name": "TD Garden",
       "venue_city": "Boston",
       "venue_state": "MA",
@@ -280,16 +295,18 @@ per-game origin into server-owned registries; the browser cannot supply or upgra
     "code":"INVALID_PAYLOAD|SERVICE_BUSY|UPSTREAM_TIMEOUT|UPSTREAM_RATE_LIMITED|UPSTREAM_AUTH|INVALID_UPSTREAM_DATA|COMPOSER_UNAVAILABLE|OUTPUT_BLOCKED",
     "retryable":true,
     "message":"面向用户的简短说明"
-  }
+  },
+  "notices": []
 }
 ```
 
 `message` is localized and must not contain internal URLs, stack traces, field names or prompts.
-For SSE, `run.error` has the same `error` object and includes `request_id`/`session_id`:
+For SSE, `run.error` has the same `error` and `notices` fields and includes
+`request_id`/`session_id`:
 
 ```text
 event: run.error
-data: {"request_id":"uuid","session_id":"uuid","status":"failed","error":{"code":"UPSTREAM_TIMEOUT","retryable":true,"message":"数据暂时不可用，请稍后重试"}}
+data: {"request_id":"uuid","session_id":"uuid","status":"failed","error":{"code":"UPSTREAM_TIMEOUT","retryable":true,"message":"数据暂时不可用，请稍后重试"},"notices":[]}
 ```
 
 `OUT_OF_SCOPE` is a conversational `no_data` outcome with a short basketball redirection and

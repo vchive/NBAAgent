@@ -31,6 +31,7 @@ from apps.api.src.domain.models import (
     SourceClass,
     TrustLevel,
 )
+from apps.api.src.domain.safety import neutralize_external_internal_names
 
 DDG_ENDPOINT = "https://api.duckduckgo.com/"
 DDG_HOST = "api.duckduckgo.com"
@@ -61,6 +62,7 @@ def _clean_text(value: Any, *, limit: int) -> str | None:
     text = " ".join(text.split())
     if not text or _INJECTION_RE.search(text):
         return None
+    text = neutralize_external_internal_names(text)
     return text[:limit] or None
 
 
@@ -159,7 +161,7 @@ class DuckDuckGoAdapter:
         own_client = self.client is None
         client = self.client or httpx.AsyncClient(
             follow_redirects=False,
-            headers={"User-Agent": "NBAAgent/0.1 (+https://github.com/vchive/NBAAgent)"},
+            headers={"User-Agent": "COURTSIDE/0.1"},
         )
         self.calls += 1
         try:
@@ -217,12 +219,12 @@ class DuckDuckGoAdapter:
 
             candidates: list[tuple[str, str | None, str | None]] = []
             abstract_title = _clean_text(payload.get("Heading"), limit=500)
-            abstract = _clean_text(payload.get("AbstractText"), limit=4000)
+            abstract = _clean_text(payload.get("AbstractText"), limit=1200)
             abstract_url = payload.get("AbstractURL")
             if abstract_title and abstract:
                 candidates.append((abstract_title, abstract, str(abstract_url or "")))
             for item in self._topics(payload):
-                text = _clean_text(item.get("Text"), limit=4000)
+                text = _clean_text(item.get("Text"), limit=1200)
                 if not text:
                     continue
                 title = text.split(" - ", 1)[0][:500] or "NBA 相关新闻"
@@ -273,6 +275,11 @@ class DuckDuckGoAdapter:
         finally:
             if own_client:
                 await client.aclose()
+
+    async def search_web(
+        self, query: NewsQuery, budget: RequestBudget
+    ) -> ProviderResult[list[NewsItem]]:
+        return await self.search_news(query, budget)
 
 
 __all__ = ["DDG_ENDPOINT", "DuckDuckGoAdapter"]

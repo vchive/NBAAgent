@@ -48,8 +48,8 @@ async def test_broad_news_query_is_valid_without_an_entity_clarification() -> No
 
 
 @pytest.mark.asyncio
-async def test_hybrid_news_empty_live_archive_uses_bounded_snapshot() -> None:
-    """A missing live news archive should not regress to a stats message."""
+async def test_hybrid_news_empty_live_archive_does_not_use_demo_snapshot() -> None:
+    """Fixture news is product-demo content, not a silent public fallback."""
 
     primary = FixtureProvider(scenario="empty")
     fallback = FixtureProvider()
@@ -67,6 +67,8 @@ async def test_hybrid_news_empty_live_archive_uses_bounded_snapshot() -> None:
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["status"] == "completed"
-    assert payload["evidence_state"] == "partial"
-    assert "总决赛" in payload["answer_markdown"]
+    assert payload["status"] == "no_data"
+    assert payload["evidence_state"] == "none"
+    assert payload["data_origin"] == "none"
+    assert "总决赛" not in payload["answer_markdown"]
+    assert fallback.calls == 0

@@ -103,7 +103,8 @@ _MODEL_META_RE = re.compile(
     r"raw[_ -]?(?:json|response|payload)|request[_ -]?id|session[_ -]?id|trace[_ -]?id|"
     r"verified[_ -]?facts?|evidence[_ -]?state|contract[_ -]?version|used[_ -]?fact[_ -]?ids?|"
     r"finish[_ -]?reason|error[_ -]?code|"
-    r"siliconflow|deepseek)",
+    r"siliconflow|deepseek|"
+    r"(?<![A-Za-z0-9_])hermes(?:[-_ ]?(?:agent|lite(?:[-_ ]?mode)?))?(?![A-Za-z0-9_]))",
     re.IGNORECASE,
 )
 # Placeholder prose means the model did not finish a claim.  It is never a

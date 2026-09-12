@@ -8,7 +8,7 @@ run without network access or a model installation.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal, Protocol
@@ -64,6 +64,11 @@ class ProviderResult[T](PortModel):
     # the payload. This stays inside the application boundary so callers can
     # avoid presenting a stale snapshot as a live, date-sensitive answer.
     used_fallback: bool = False
+    # Recoverable capability failures from an earlier provider in the same
+    # request.  For example, a bounded fallback search may return useful data
+    # after the preferred search quota is exhausted.  These issues are
+    # request-scoped diagnostics: gateways must remove them before caching.
+    capability_issues: list[ProviderError] = Field(default_factory=list, max_length=8)
     error: ProviderError | None = None
     retrieved_at_utc: datetime
 
@@ -73,6 +78,28 @@ class ProviderResult[T](PortModel):
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("retrieved_at_utc must include a timezone")
         return value
+
+
+def merge_capability_issues(
+    *groups: Iterable[ProviderError | None],
+) -> list[ProviderError]:
+    """Merge bounded provider issues, preferring non-retryable severity."""
+
+    merged: list[ProviderError] = []
+    by_kind: dict[object, int] = {}
+    for group in groups:
+        for issue in group:
+            if not isinstance(issue, ProviderError):
+                continue
+            index = by_kind.get(issue.kind)
+            if index is None:
+                if len(merged) >= 8:
+                    continue
+                by_kind[issue.kind] = len(merged)
+                merged.append(issue)
+            elif merged[index].retryable and not issue.retryable:
+                merged[index] = issue
+    return merged
 
 
 class RequestBudget:
@@ -311,6 +338,10 @@ class ProviderPort(Protocol):
         self, query: NewsQuery, budget: RequestBudget
     ) -> ProviderResult[list[NewsItem]]: ...
 
+    async def search_web(
+        self, query: NewsQuery, budget: RequestBudget
+    ) -> ProviderResult[list[NewsItem]]: ...
+
 
 class AgentRuntimePort(Protocol):
     async def compose(self, input: ComposerInput, cancel: CancelToken) -> RuntimeResult: ...
@@ -347,4 +378,5 @@ __all__ = [
     "SafetyPort",
     "StylePolicy",
     "ToolPolicy",
+    "merge_capability_issues",
 ]

@@ -10,10 +10,10 @@ deterministic local provider and template composer. An opt-in, constrained Silic
 OpenAI-compatible composer is now available for F/G analysis after its contract tests pass;
 formal isolated Hermes sidecar deployment remains a separate hardening item.
 
-**Status snapshot (2026-08-27)**: `[X]` means the implementation and a local check are present in
-the current workspace. `[ ]` is intentionally retained for work that is missing, only partially
-covered, or still requires deployment/acceptance evidence. The unchecked items are the next
-delivery queue; they are not hidden prerequisites for running fixture mode.
+**Status snapshot (2026-09-02)**: `[X]` means the implementation and a local check are present in
+the current workspace. `[ ]` is reserved for work that is genuinely missing or still awaiting
+acceptance evidence; all tasks in this snapshot are complete. Historical convergence notes remain
+in each task description for traceability, but do not indicate an unfinished implementation.
 
 ## Phase 1: Setup (Shared Infrastructure)
 
@@ -249,7 +249,7 @@ zero Agent/tool calls, and timeout/repeated-tool cases fall back safely.
 ### Implementation for User Story 7
 
 - [X] T073 [US7] Lock the official Hermes dependency and add validated Agent configuration/capability fields in `pyproject.toml`, `apps/api/src/config.py`, `.env.example`, and `docker-compose.siliconflow.yml`.
-- [X] T074 [US7] Implement the process-global schema/task-local bridge for `nba_query`, `nba_schedule`, and `nba_news`, including budgets, deduplication, sanitized observations, ASGI-loop dispatch, and cleanup in `apps/api/src/infrastructure/agent_tools.py`.
+- [X] T074 [US7] Implement the process-global schema/task-local bridge for `nba_query`, `nba_schedule`, `nba_news`, and `nba_search`, including budgets, deduplication, sanitized observations, ASGI-loop dispatch, and cleanup in `apps/api/src/infrastructure/agent_tools.py` per FR-031/FR-038/FR-039.
 - [X] T075 [US7] Implement the lazy official `run_agent.AIAgent` integration, exact `nba` toolset self-test, server-owned prompt, bounded worker execution, cancellation, usage and result normalization in `apps/api/src/infrastructure/hermes_agent_runtime.py`.
 - [X] T076 [US7] Route full mode after SafetyGuard/context but before deterministic parsing, implement internal-tool non-recursive queries and fallback, and commit bounded context in `apps/api/src/application/chat_use_case.py` and `apps/api/src/application/runtime_selector.py`.
 - [X] T077 [US7] Add Agent output validation, unobserved-number checks, tool/iteration telemetry and provider-neutral `agent/used` projection in `apps/api/src/domain/safety.py`, `apps/api/src/infrastructure/telemetry.py`, `apps/api/src/domain/models.py`, and `apps/api/src/api/schemas.py`.
@@ -280,16 +280,16 @@ zero Agent/tool calls, and timeout/repeated-tool cases fall back safely.
 ## Phase 15: Regression convergence
 
 - [X] T083 [US1] Resolve `本周`、`下周` and bounded `未来 N 天` schedule scopes as
-  Beijing-time half-open date ranges per FR-009 and SC-015 (partial) in
+  Beijing-time half-open date ranges per FR-009 and SC-015 in
   `apps/api/src/domain/time_policy.py` and `apps/api/src/application/parser.py`, with parser/time
   policy regression coverage.
 - [X] T084 [US2] Resolve “最近一场比赛的关键回合” through the latest completed game and its
   verified play-by-play without requiring a manual card selection per FR-016 and US2/AC2
-  (partial) in `apps/api/src/application/{parser.py,query_planner.py,chat_use_case.py}`, with
+  in `apps/api/src/application/{parser.py,query_planner.py,chat_use_case.py}`, with
   unit and integration coverage.
 - [X] T085 [US7] Add a validated low-latency reasoning policy for the fixed SiliconFlow Hermes
   runtime, disable unnecessary model thinking by default, and verify the official runtime request
-  contract plus live timeout/fallback behavior per SC-007 and SC-016 (partial) in
+  contract plus live timeout/fallback behavior per SC-007 and SC-016 in
   `apps/api/src/{config.py,infrastructure/hermes_agent_runtime.py}`, deployment configuration,
   documentation, and contract tests.
 
@@ -298,7 +298,7 @@ zero Agent/tool calls, and timeout/repeated-tool cases fall back safely.
 - [X] T086 [US7] Reject a successful full-mode answer when its observations are semantically
   unrelated to a high-risk play-by-play request (for example, an empty schedule result for
   “最近一场关键回合”), then fall back to the verified deterministic path per FR-016 and SC-016
-  (partial) in `apps/api/src/application/chat_use_case.py`, with integration regression coverage.
+  in `apps/api/src/application/chat_use_case.py`, with integration regression coverage.
 
 ## Phase 17: General Agent observation consistency
 
@@ -311,7 +311,7 @@ zero Agent/tool calls, and timeout/repeated-tool cases fall back safely.
 
 - [X] T088 [US1] Preserve wrapped provider calendar-slice capabilities and optional standings/news
   call signatures so the public search composition can classify empty calendar days correctly and
-  keep gateway fallbacks compatible per FR-027/FR-029 (partial); add provider-composition contract
+  keep gateway fallbacks compatible per FR-027/FR-029; add provider-composition contract
   coverage in `apps/api/src/providers/search_augmented_provider.py` and
   `tests/contract/test_provider_composition.py`.
 
@@ -319,7 +319,7 @@ zero Agent/tool calls, and timeout/repeated-tool cases fall back safely.
 
 - [X] T090 [US1] Bound live recent-game scanning to a short window, fill an off-season recent-five
   projection from the configured historical snapshot, and filter the result to completed games per
-  FR-027/SC-011 (partial); add hybrid regression coverage in
+  FR-027/SC-011; add hybrid regression coverage in
   `apps/api/src/application/highlights.py` and `tests/contract/test_highlights.py`.
 
 ## Phase 20: Selected-game chat context convergence
@@ -343,21 +343,21 @@ zero Agent/tool calls, and timeout/repeated-tool cases fall back safely.
 
 - [X] T093 [US4] Align the multi-turn golden evaluation's terminal-shot expectation with the
   explicit `PLAY_BY_PLAY` intent, and add a regression that fails if a fresh event question is
-  scored as a generic follow-up again (partial).
+  scored as a generic follow-up again.
 
 ## Phase 23: Hybrid historical standings convergence
 
 - [X] T094 [US1] Preserve verified historical standings in hybrid public-data mode when the
   live archive has no row for the requested season: make the bounded snapshot fallback an
   explicit `get_standings` policy, retain `partial` evidence state, and cover the East-rank
-  regression per US1/AC3 and FR-014 (partial).
+  regression per US1/AC3 and FR-014.
 
 ## Phase 24: Historical snapshot fallback convergence
 
 - [X] T095 [US1] Apply an explicit, cache-safe bounded snapshot fallback to historical
   championship/franchise-record lookups, explicit fixture game snapshots, and season-scoped
   series queries when the live archive is empty; retain `partial` evidence and do not change
-  current-day schedule empty semantics per US1/AC3 and FR-014 (partial).
+  current-day schedule empty semantics per US1/AC3 and FR-014.
 
 ## Phase 25: Selected-game full-intelligence routing convergence
 
@@ -367,7 +367,7 @@ zero Agent/tool calls, and timeout/repeated-tool cases fall back safely.
   fallback and output guards, and add selected-game objective/tactical routing regressions in
   `apps/api/src/application/chat_use_case.py`,
   `apps/api/src/infrastructure/hermes_agent_runtime.py`, and
-  `tests/integration/test_full_intelligence.py` per FR-030/FR-031/SC-014 (contradicts).
+  `tests/integration/test_full_intelligence.py` per FR-030/FR-031/SC-014.
 
 ## Phase 26: Full-intelligence logical session continuity
 
@@ -376,7 +376,7 @@ zero Agent/tool calls, and timeout/repeated-tool cases fall back safely.
   turn while retaining per-request tool task IDs, clear continuity through a new application
   session, and keep prior facts non-authoritative so every factual follow-up still uses verified
   NBA tools; update the official runtime contract, multi-turn integration/evaluation coverage,
-  HLD/LLD and reviewer documentation per FR-002/FR-030/FR-031/SC-003/SC-014 (partial).
+  HLD/LLD and reviewer documentation per FR-002/FR-030/FR-031/SC-003/SC-014.
 
 ## Phase 27: Session-meta routing and accurate turn accounting
 
@@ -398,30 +398,29 @@ zero Agent/tool calls, and timeout/repeated-tool cases fall back safely.
   through the canonical `Game`, ESPN normalization, persistent highlights projection/rehydration,
   selected-game tools and deterministic composition; keep absent venue null and answer only the
   requested field, with contract/unit/integration regressions and design-contract updates per
-  FR-008/FR-013/FR-014 (partial).
+  FR-008/FR-013/FR-014.
 - [X] T103 [US1/US6] Distinguish fixture/demo snapshot evidence from live public verification in
   chat/highlights responses, never stamp a synthetic snapshot as freshly verified public data or
   imply that a general web search occurred, and add public-label/provenance regressions plus
-  reviewer documentation per Constitution II/FR-007/FR-014 (contradicts, CRITICAL).
+  reviewer documentation per Constitution II/FR-007/FR-014.
 - [X] T104 [US8] Extend the deterministic Session Meta Resolver to answer bounded indexed prior
   user-question references such as “我第三个问题问的啥”, resolve the requested retained turn by
   monotonic `turn_index`, explain when it falls outside the bounded summary, and add classifier,
-  integration and E2E regressions plus spec/design updates per US8/AC2-AC3/FR-036/SC-017 (partial).
+  integration and E2E regressions plus spec/design updates per US8/AC2-AC3/FR-036/SC-017.
 - [X] T105 [US5] Recognize explicit arithmetic/general-knowledge forms such as `1+1等于几` as
   out-of-scope before parser/provider/Agent execution, return the concise NBA redirection instead
   of a query-object clarification, and add zero-downstream-call unit/integration regressions per
-  US5/AC1/FR-020/SC-004 (partial).
+  US5/AC1/FR-020/SC-004.
 
 ## Phase 29: Recommendation and winner-premise convergence
 
 - [X] T106 [US4/US6] Generate selected-game recommendation prompts from the verified final winner
   instead of the home team, omit winner-analysis prompts when the game is not final or scores are
   missing/tied, and add browser regressions for both home and away winners per Constitution II,
-  US4/AC1, US6/AC2 and SC-003 (contradicts, CRITICAL).
+  US4/AC1, US6/AC2 and SC-003.
 - [X] T107 [US2/US3] Treat causal winner wording such as “为什么能赢下这场比赛” as a typed
   winner premise when a team and selected game are present, explicitly correct a losing-team
-  premise before analysis, and add parser/integration regressions per US2/AC3, FR-017 and FR-018
-  (partial).
+  premise before analysis, and add parser/integration regressions per US2/AC3, FR-017 and FR-018.
 
 ## Phase 30: Public re-verification and semantic grounding convergence
 
@@ -430,20 +429,89 @@ zero Agent/tool calls, and timeout/repeated-tool cases fall back safely.
   paraphrases that invert winner/team-score relations, turn a free throw or terminal marker into a
   field-goal claim, introduce unsupported factual proper names, or expose internal tool/runtime
   capability wording, with adversarial unit/integration regressions per Constitution II/IV,
-  FR-007/FR-014/FR-016/FR-017/FR-031/FR-034 (contradicts).
+  FR-007/FR-014/FR-016/FR-017/FR-031/FR-034.
 - [X] T109 [US1/US7] Add explicit public re-verification semantics for prompts such as “联网实时查验”:
   bypass stale cache and fixture fallback, resolve a selected snapshot by exact Beijing date and
   matchup against the primary public scoreboard before using the provider event id, return only a
   public result when uniquely matched, and otherwise state that no public match was found without
   claiming the service lacks network access; add gateway/provider/application tests per
-  FR-013/FR-014/FR-022/FR-030/FR-033 (partial).
+  FR-013/FR-014/FR-022/FR-030/FR-033.
 - [X] T110 [US6/US7] Preserve trusted per-game `public` versus `demo_snapshot` provenance through
   highlights list/detail projections, the server-owned selected-game registry, SQLite schema
   rehydration and the Web UI so a mixed recent-five response never labels every card with one
   aggregate origin; add cache schema migration and contract/E2E regressions per Constitution II,
-  US6/AC1-AC3, FR-007/FR-027 and SC-010/SC-011 (partial).
+  US6/AC1-AC3, FR-007/FR-027 and SC-010/SC-011.
 - [X] T111 [US1/US2/US6/US7] Specify the public re-verification and semantic-grounding acceptance
   rules in spec/HLD/LLD/data model/provider and Agent contracts, extend the golden/live regression
   matrix, run every quality/security/browser/evaluation gate, redeploy the authenticated live
   profile, verify both matched-public and unmatched-snapshot behavior, update the independent test
-  report, and push the completed branch per FR-024/FR-025/FR-026 and Constitution I/IV/V (partial).
+  report, and push the completed branch per FR-024/FR-025/FR-026 and Constitution I/IV/V.
+
+## Phase 31: Game metadata intent convergence
+
+- [X] T112 [US1/US6] Add a typed coach/head-coach metadata metric and optional canonical game
+  coaching fields; preserve nulls when fixture or public payloads omit coaches, and document the
+  provider/API projection per FR-008/FR-013/FR-014.
+- [X] T113 [US1/US6] Add parser/planner, deterministic composer, hybrid/full-intelligence,
+  HTTP/SSE and selected-game regressions proving coach questions never render unrelated score,
+  margin or total facts and return a clear unavailable message when the field is absent per
+  US1/AC4 and FR-014.
+- [X] T114 [US7] Ensure Agent observation relevance/grounding treats coach metadata as an
+  objective field, replacing unrelated `nba_query` paraphrases with the server-owned response
+  and retaining safe fallback/provenance in full mode per FR-030/FR-034.
+- [X] T115 [US1/US7] Run all quality, evaluation and browser gates, update HLD/LLD/data-model,
+  provider/runtime contracts and the independent test report, redeploy the authenticated profile,
+  verify a selected Warriors–Nuggets coach query, and push the completed branch.
+
+## Phase 32: Agent-first long-tail search convergence
+
+- [X] T116 [US7] Add a bounded Baidu-first public search adapter with HTML sanitisation, evidence
+  projection, timeout/size/result limits and an optional secondary HTTP search adapter in
+  `apps/api/src/providers/baidu_adapter.py`; add contract tests in `tests/contract/test_baidu_search.py`.
+- [X] T117 [US7] Register the search capability in the server-owned Agent toolset and bridge it to
+  the typed news/search gateway without exposing shell, curl, arbitrary URLs or provider payloads in
+  `apps/api/src/infrastructure/{agent_tools.py,hermes_agent_runtime.py}` and
+  `apps/api/src/application/chat_use_case.py`; add long-tail integration coverage per FR-038/FR-039.
+- [X] T118 [US7] Make the public SiliconFlow profile Agent-first by default, synchronize the Web
+  switch with the server default, enable Baidu search configuration and keep all normal safe NBA
+  questions in the Agent path in `docker-compose.siliconflow.yml`, `apps/api/src/{config.py,main.py}`
+  and `apps/web-demo/app.js` per FR-037/FR-040.
+- [X] T119 [US7] Remove the framework name from public health/dependency payloads and preserve generic
+  capability labels while retaining internal telemetry; update HTTP/E2E contract tests and ensure
+  user-visible answers contain no framework, tool or search-provider names per FR-041.
+- [X] T120 [US7] Run full pytest, ruff, browser and evaluation gates, exercise unknown A/F/I-style
+  questions against the live Agent profile, update HLD/LLD/contracts/quickstart and the independent
+  test report, then redeploy the authenticated profile and record the public verification evidence per FR-037–FR-041.
+
+## Phase 33: Qianfan search and 2026 cache warmup
+
+- [X] T121 [US7] Add the fixed-endpoint Baidu Qianfan AI Search adapter with server-side secret
+  loading, query/result/response/time bounds, reference projection and prompt-injection cleaning;
+  retain Baidu HTML and DuckDuckGo as bounded fallbacks per FR-038/FR-039.
+- [X] T122 [US7] Add Qianfan secret configuration script, Compose override, live deployment target,
+  readiness capability reporting and environment documentation without exposing credentials.
+- [X] T123 [US7] Add Qianfan contract tests for successful references, auth/key failures, malformed
+  payloads and sanitisation; run the full Python and lint gates per FR-038/FR-041.
+- [X] T124 [US1/US6] Add an idempotent offline `warm-2026-cache.py` job that writes per-date and
+  per-game public projections to SQLite, optionally fetching complete box score/PBP details in
+  bounded batches. Document Hupu schedule/boxscore/PBP as a candidate supplementary source.
+
+## Phase 34: Search recovery presentation convergence
+
+- [X] T125 [US7] Bound and deduplicate public-search recovery observations to three sentence-safe
+  title/summary candidates; preserve the structured no-match result and explicitly label search
+  candidates as pending cross-verification when sources disagree per FR-039/FR-042.
+- [X] T126 [US7] Preserve Markdown line breaks through Agent observation sanitisation and render
+  bullet/numbered lines as accessible Web lists without exposing raw article bodies per FR-041/FR-042.
+- [X] T127 [US7] Add unit, integration and browser regressions for long search snippets, irrelevant
+  matchup results, conflict wording, bounded output and readable list rendering; run all quality,
+  evaluation and deployment gates and verify the public live response per SC-018.
+
+## Phase 35: Explicit matchup search recovery
+
+- [X] T128 [US7] Rank bounded public-search candidates for explicit year+team matchups so series and
+  championship results are preferred without changing the partial evidence level per FR-043.
+- [X] T129 [US7] Replace redundant date/round clarification with a clear structured-source coverage
+  notice when the user already supplied both teams and year.
+- [X] T130 [US7] Add integration regression for `2026尼克斯-马刺`, then rerun quality and deployment
+  gates and record the public verification under SC-019.

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 import re
+import unicodedata
 from collections.abc import Mapping
 from datetime import datetime, timedelta
 from enum import StrEnum
@@ -30,6 +31,7 @@ from ..domain.models import (
 from ..domain.models import (
     PublicCorrection as DomainPublicCorrection,
 )
+from ..domain.safety import contains_public_implementation_leak
 
 type JsonScalar = str | int | float | bool | None
 
@@ -44,14 +46,22 @@ def _has_control_chars(value: str, *, allow_linebreaks: bool = True) -> bool:
 
     for char in value:
         code = ord(char)
-        if code == 0x7F or (code < 32 and (not allow_linebreaks or char not in "\n\t")):
+        if (
+            unicodedata.category(char) == "Cf"
+            or code == 0x7F
+            or (code < 32 and (not allow_linebreaks or char not in "\n\t"))
+        ):
             return True
     return False
 
 
 _PUBLIC_TEXT_LEAK_RE = re.compile(
     r"(?:https?|ftp|file)://|www\."
+    # Framework/provider names are implementation details.  In particular,
+    # never let a model mention the internal runtime name in a public answer
+    # (including when the user explicitly asks which framework is running).
     r"|\b(?:espn|fixture(?:\.v\d+)?|provider|prompt|traceback)\b"
+    r"|(?<![A-Za-z0-9_])hermes(?:[-_ ]?(?:agent|lite(?:[-_ ]?mode)?))?(?![A-Za-z0-9_])"
     r"|(?:source_ref|evidence_ids?|canonical_id|provider(?:[_ -]?(?:call|cache|"
     r"result|response|payload|url|endpoint|name|id))|raw_(?:json|response|payload)|"
     r"trace_id|stack_trace|session_id|request_id|api[_ -]?key|bearer(?:[_ -]?token)?|"
@@ -65,7 +75,8 @@ def _validate_public_text(value: str, *, allow_linebreaks: bool = True) -> str:
 
     if _has_control_chars(value, allow_linebreaks=allow_linebreaks):
         raise ValueError("control characters are not allowed")
-    if _PUBLIC_TEXT_LEAK_RE.search(value):
+    normalized = unicodedata.normalize("NFKC", value)
+    if _PUBLIC_TEXT_LEAK_RE.search(normalized) or contains_public_implementation_leak(value):
         raise ValueError("public text contains internal or provider metadata")
     return value
 
@@ -152,6 +163,34 @@ class CompositionStatus(StrEnum):
     DISABLED = "disabled"
 
 
+class NoticeCode(StrEnum):
+    """Provider-neutral degradation codes safe for browser rendering."""
+
+    INTELLIGENCE_QUOTA_EXHAUSTED = "INTELLIGENCE_QUOTA_EXHAUSTED"
+    SEARCH_QUOTA_EXHAUSTED = "SEARCH_QUOTA_EXHAUSTED"
+    INTELLIGENCE_AUTH_UNAVAILABLE = "INTELLIGENCE_AUTH_UNAVAILABLE"
+    SEARCH_AUTH_UNAVAILABLE = "SEARCH_AUTH_UNAVAILABLE"
+    INTELLIGENCE_TEMPORARILY_UNAVAILABLE = "INTELLIGENCE_TEMPORARILY_UNAVAILABLE"
+    SEARCH_TEMPORARILY_UNAVAILABLE = "SEARCH_TEMPORARILY_UNAVAILABLE"
+
+
+class PublicNotice(_RequestBase):
+    code: NoticeCode
+    message: str = Field(min_length=1, max_length=500)
+    retryable: bool
+
+    @field_validator("code", mode="before")
+    @classmethod
+    def _code(cls, value: Any) -> Any:
+        raw = getattr(value, "value", value)
+        return raw.upper() if isinstance(raw, str) else value
+
+    @field_validator("message")
+    @classmethod
+    def _message_safe(cls, value: str) -> str:
+        return _validate_public_text(value)
+
+
 class CompositionInfo(_WireBase):
     """Safe, minimal generation provenance for a conversational answer.
 
@@ -163,7 +202,6 @@ class CompositionInfo(_WireBase):
     mode: CompositionMode = CompositionMode.DETERMINISTIC
     status: CompositionStatus = CompositionStatus.NOT_REQUESTED
     latency_ms: int = Field(default=0, ge=0)
-
 
 class TechnicalErrorCode(StrEnum):
     INVALID_PAYLOAD = "INVALID_PAYLOAD"
@@ -350,6 +388,7 @@ class ChatResponse(_WireBase):
     follow_up: str | None = Field(default=None, max_length=1000)
     latency_ms: int = Field(ge=0)
     composition: CompositionInfo = Field(default_factory=CompositionInfo)
+    notices: list[PublicNotice] = Field(default_factory=list, max_length=8)
 
     @field_validator("status", mode="before")
     @classmethod
@@ -417,8 +456,13 @@ class ChatResponse(_WireBase):
             ]
             follow_up = payload.get("follow_up")
             composition = payload.get("composition", CompositionInfo())
+            notices = [
+                PublicNotice.model_validate(item)
+                for item in payload.get("notices", []) or []
+            ]
         if isinstance(answer, DraftAnswer):
             composition = CompositionInfo()
+            notices = []
         return cls(
             request_id=request_id,
             session_id=session_id,
@@ -432,6 +476,7 @@ class ChatResponse(_WireBase):
             follow_up=follow_up,
             latency_ms=latency_ms,
             composition=composition,
+            notices=notices,
         )
 
 
@@ -466,6 +511,7 @@ class ErrorResponse(_RequestBase):
     session_id: UUID
     status: str = "failed"
     error: ErrorDetail
+    notices: list[PublicNotice] = Field(default_factory=list, max_length=8)
 
     @field_validator("status")
     @classmethod
@@ -488,24 +534,18 @@ ErrorEnvelope = ErrorResponse
 ErrorDetailSchema = ErrorDetail
 
 
-class DependencyStatus(StrEnum):
-    OK = "ok"
-    DEGRADED = "degraded"
-    DISABLED = "disabled"
-    NOT_READY = "not_ready"
+class HealthCapabilities(_WireBase):
+    """Small product capability projection safe for an anonymous probe."""
 
-
-class HealthDependencies(_WireBase):
-    session_store: DependencyStatus
-    cache: DependencyStatus
-    hermes: DependencyStatus
+    intelligent_analysis: bool
+    default_intelligent_analysis: bool
 
 
 class HealthResponse(_WireBase):
     status: str
     version: str = "v1"
-    mode: str
-    dependencies: HealthDependencies
+    experience: Literal["public", "demo"]
+    capabilities: HealthCapabilities
 
     @field_validator("status")
     @classmethod
@@ -514,11 +554,11 @@ class HealthResponse(_WireBase):
             raise ValueError("invalid health status")
         return value
 
-    @field_validator("mode")
+    @field_validator("experience")
     @classmethod
-    def _health_mode(cls, value: str) -> str:
-        if value not in {"live", "fixture", "hybrid"}:
-            raise ValueError("invalid health mode")
+    def _health_experience(cls, value: str) -> str:
+        if value not in {"public", "demo"}:
+            raise ValueError("invalid health experience")
         return value
 
 
@@ -534,6 +574,8 @@ class HighlightGame(_WireBase):
     status: Literal["scheduled", "live", "final", "postponed", "unknown"]
     home_score: int | None = Field(default=None, ge=0)
     away_score: int | None = Field(default=None, ge=0)
+    home_coach: str | None = Field(default=None, max_length=200)
+    away_coach: str | None = Field(default=None, max_length=200)
     series_game_number: int | None = Field(default=None, ge=1, le=20)
     venue_name: str | None = Field(default=None, max_length=240)
     venue_city: str | None = Field(default=None, max_length=160)
@@ -815,12 +857,39 @@ _RUN_STATUS_TEXT_ALLOWLIST = frozenset(
     }
 )
 
+_PUBLIC_RUN_STAGES = {
+    "understanding",
+    "checking",
+    "completing",
+    "processing",
+}
+_RUN_STAGE_PROJECTION = {
+    "agent_planning": "understanding",
+    "parsing": "understanding",
+    "agent_tool": "checking",
+    "retrieving": "checking",
+    "verifying": "checking",
+    "agent_completing": "completing",
+    "composing": "completing",
+    "model": "completing",
+    "agent_fallback": "processing",
+}
+
 
 class RunStatusPayload(_WireBase):
     stage: str = Field(min_length=1, max_length=80)
     text: str = Field(min_length=1, max_length=500)
 
-    @field_validator("stage", "text")
+    @field_validator("stage", mode="before")
+    @classmethod
+    def _public_stage(cls, value: Any) -> str:
+        """Never expose private orchestration stage names on the SSE wire."""
+
+        normalized = str(value or "").strip().lower()
+        projected = _RUN_STAGE_PROJECTION.get(normalized, normalized)
+        return projected if projected in _PUBLIC_RUN_STAGES else "processing"
+
+    @field_validator("text")
     @classmethod
     def _safe_status_text(cls, value: str) -> str:
         return _validate_public_text(value)
@@ -889,13 +958,12 @@ __all__ = [
     "CompositionInfo",
     "CompositionMode",
     "CompositionStatus",
-    "DependencyStatus",
     "ErrorDetail",
     "ErrorDetailSchema",
     "ErrorEnvelope",
     "ErrorResponse",
     "EvidenceState",
-    "HealthDependencies",
+    "HealthCapabilities",
     "HealthResponse",
     "HighlightAvailabilityDay",
     "HighlightDetailResponse",
@@ -907,6 +975,8 @@ __all__ = [
     "HighlightsRangeResponse",
     "JsonScalar",
     "MessageDeltaPayload",
+    "NoticeCode",
+    "PublicNotice",
     "PublicCorrection",
     "PublicCorrectionSchema",
     "RunErrorPayload",

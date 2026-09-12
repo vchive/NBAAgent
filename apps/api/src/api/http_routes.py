@@ -42,6 +42,7 @@ def _wire(result: ChatResult) -> ChatResponse | ErrorResponse:
                 request_id=result.request_id,
                 session_id=result.session_id,
                 error=ErrorDetail.model_validate(error),
+                notices=result.notices,
             )
         return ChatResponse.from_domain(
             request_id=result.request_id,
@@ -55,6 +56,7 @@ def _wire(result: ChatResult) -> ChatResponse | ErrorResponse:
                 "corrections": result.corrections,
                 "follow_up": result.follow_up,
                 "composition": result.composition,
+                "notices": result.notices,
             },
             latency_ms=result.latency_ms,
             as_of_beijing=result.as_of_beijing,
@@ -77,22 +79,36 @@ def _wire(result: ChatResult) -> ChatResponse | ErrorResponse:
         )
 
 
-def _highlights_cache_state(request: Request) -> dict[str, str | int]:
-    settings = request.app.state.settings
-    if not bool(getattr(settings, "highlights_cache_enabled", False)):
-        return {"status": "disabled", "entries": 0}
-    cache = getattr(request.app.state, "highlights_cache", None)
-    snapshot = getattr(cache, "health_snapshot", None)
-    if callable(snapshot):
-        return snapshot()
-    return {"status": "degraded", "entries": 0}
+def _public_service_payload(settings: object, *, status: str) -> dict[str, object]:
+    """Project readiness to the small, product-facing public contract.
+
+    Health routes are intentionally unauthenticated so infrastructure can
+    probe them.  That also means dependency names, storage counters, search
+    configuration and runtime choices do not belong in their response.  Such
+    diagnostics remain available to in-process telemetry and tests.
+    """
+
+    internal_mode = str(getattr(settings, "public_data_mode", "fixture")).lower()
+    intelligent_analysis = bool(
+        getattr(settings, "full_intelligence_enabled", False)
+    )
+    return {
+        "status": status,
+        "version": "v1",
+        "experience": "demo" if internal_mode == "fixture" else "public",
+        "capabilities": {
+            "intelligent_analysis": intelligent_analysis,
+            "default_intelligent_analysis": intelligent_analysis
+            and str(getattr(settings, "default_intelligence_mode", "hybrid")).lower()
+            == "full",
+        },
+    }
 
 
 @router.get("/healthz")
 async def healthz(request: Request):
     settings = request.app.state.settings
     usecase = _usecase(request)
-    mode = str(getattr(settings, "public_data_mode", "fixture")).lower()
     gateway = getattr(usecase, "gateway", None)
     store = getattr(usecase, "session_store", None)
     cache = getattr(gateway, "cache", None)
@@ -115,29 +131,9 @@ async def healthz(request: Request):
         if auth_manager is None or not auth_manager.enabled or auth_manager.configured
         else "degraded"
     )
-    search_status = (
-        "enabled" if bool(getattr(settings, "ddg_search_enabled", False)) else "disabled"
-    )
-    highlights_cache_state = _highlights_cache_state(request)
     dependency_values = (session_status, cache_status, hermes_status, auth_status)
     status = "degraded" if "degraded" in dependency_values else "ok"
-    return {
-        "status": status,
-        "version": "v1",
-        "mode": mode,
-        "capabilities": {
-            "full_intelligence": bool(getattr(settings, "full_intelligence_enabled", False)),
-            "web_search": bool(getattr(settings, "ddg_search_enabled", False)),
-        },
-        "dependencies": {
-            "session_store": session_status,
-            "cache": cache_status,
-            "hermes": hermes_status,
-            "auth": auth_status,
-            "web_search": search_status,
-            "highlights_cache": highlights_cache_state,
-        },
-    }
+    return _public_service_payload(settings, status=status)
 
 
 @router.get("/livez")
@@ -171,10 +167,6 @@ async def readyz(request: Request):
         if auth_manager is None or not auth_manager.enabled or auth_manager.configured
         else "degraded"
     )
-    search_status = (
-        "enabled" if bool(getattr(settings, "ddg_search_enabled", False)) else "disabled"
-    )
-    highlights_cache_state = _highlights_cache_state(request)
     # When a live composer is explicitly enabled, its local capability/key
     # check is part of readiness.  We do not perform a paid remote probe; a
     # missing key or malformed adapter simply keeps the instance out of the
@@ -185,23 +177,7 @@ async def readyz(request: Request):
         if store_ok and cache_ok and hermes_status in {"ok", "disabled"} and auth_status == "ok"
         else "not_ready"
     )
-    payload = {
-        "status": status,
-        "version": "v1",
-        "mode": str(getattr(settings, "public_data_mode", "fixture")).lower(),
-        "capabilities": {
-            "full_intelligence": bool(getattr(settings, "full_intelligence_enabled", False)),
-            "web_search": bool(getattr(settings, "ddg_search_enabled", False)),
-        },
-        "dependencies": {
-            "session_store": "ok" if store_ok else "not_ready",
-            "cache": "ok" if cache_ok else "not_ready",
-            "hermes": hermes_status,
-            "auth": auth_status,
-            "web_search": search_status,
-            "highlights_cache": highlights_cache_state,
-        },
-    }
+    payload = _public_service_payload(settings, status=status)
     return JSONResponse(status_code=200 if status == "ok" else 503, content=payload)
 
 

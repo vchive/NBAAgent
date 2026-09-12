@@ -56,7 +56,9 @@ from apps.api.src.providers.normalizer import Normalizer, instant
 
 DEFAULT_BASE_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
 DEFAULT_ALLOWED_HOSTS = ("site.api.espn.com", "site.web.api.espn.com")
-USER_AGENT = "NBAAgent/0.1 (+https://github.com/vchive/NBAAgent)"
+# Do not send repository ownership or source-control URLs to upstream sites.
+# A neutral product identifier is enough for their request logs.
+USER_AGENT = "COURTSIDE/0.1"
 _SAFE_PATH_RE = re.compile(r"^[A-Za-z0-9_./-]+$")
 _CLOCK_RE = re.compile(r"(?:(\d+):)?(\d{1,2})(?:\.(\d+))?")
 
@@ -859,8 +861,13 @@ class ESPNAdapter:
             return False
         if filters.status is not None and game.status is not filters.status:
             return False
-        if filters.team_ids and not (
-            {game.home.canonical_id, game.away.canonical_id} & set(filters.team_ids)
+        if (
+            filters.series_game_number is not None
+            and game.series_game_number != filters.series_game_number
+        ):
+            return False
+        if filters.team_ids and not set(filters.team_ids).issubset(
+            {game.home.canonical_id, game.away.canonical_id}
         ):
             return False
         return True
@@ -915,6 +922,7 @@ class ESPNAdapter:
         start = event.get("date") or competition.get("date")
         season_value = season_hint or self._season_from_event(event, start)
         series = _first_mapping(competition.get("series")) or {}
+        coaches = self._coaches(competition, competitors)
         return self.normalizer.game(
             {
                 "game_id": str(event.get("id") or competition["id"]),
@@ -928,6 +936,8 @@ class ESPNAdapter:
                 "series_id": str(series.get("id")) if series.get("id") is not None else None,
                 "series_game_number": self._game_number(event, competition),
                 "venue": self._venue(competition),
+                "home_coach": coaches.get("home"),
+                "away_coach": coaches.get("away"),
             }
         )
 
@@ -950,6 +960,78 @@ class ESPNAdapter:
             if item:
                 value[target] = item
         return value
+
+    @classmethod
+    def _coaches(
+        cls,
+        competition: Mapping[str, Any],
+        competitors: list[Mapping[str, Any]],
+    ) -> dict[str, str | None]:
+        """Extract head-coach names when ESPN includes them.
+
+        ESPN has emitted coach metadata in both competitor-local fields and a
+        competition-level `coaches` list. The association is kept strictly
+        side-based; an unassociated coach is ignored rather than guessed.
+        """
+
+        result: dict[str, str | None] = {"home": None, "away": None}
+
+        def name_from(value: Any) -> str | None:
+            item = _first_mapping(value)
+            if item is None:
+                return None
+            person = _first_mapping(
+                item.get("athlete") or item.get("coach") or item.get("person")
+            ) or item
+            return _optional_text(
+                person.get("displayName")
+                or person.get("fullName")
+                or person.get("shortName")
+                or person.get("name")
+            )
+
+        def side_for_team(value: Any) -> str | None:
+            team = _first_mapping(value) or {}
+            team_id = str(team.get("id") or team.get("uid") or "").casefold()
+            team_name = str(
+                team.get("abbreviation") or team.get("displayName") or team.get("name") or ""
+            ).casefold()
+            for competitor in competitors:
+                candidate = _first_mapping(competitor.get("team")) or competitor
+                candidate_id = str(
+                    candidate.get("id") or candidate.get("uid") or ""
+                ).casefold()
+                candidate_name = str(
+                    candidate.get("abbreviation")
+                    or candidate.get("displayName")
+                    or candidate.get("name")
+                    or ""
+                ).casefold()
+                if (team_id and team_id == candidate_id) or (
+                    team_name and team_name == candidate_name
+                ):
+                    side = str(competitor.get("homeAway") or "").casefold()
+                    return side if side in {"home", "away"} else None
+            return None
+
+        for competitor in competitors:
+            side = str(competitor.get("homeAway") or "").casefold()
+            if side not in result:
+                continue
+            coach_value = competitor.get("coach")
+            if coach_value is None:
+                coach_value = competitor.get("coaches")
+            coach_name = name_from(coach_value)
+            if coach_name:
+                result[side] = coach_name
+
+        for item in _list_or_single_mapping(competition.get("coaches")):
+            side = str(item.get("homeAway") or item.get("side") or "").casefold()
+            if side not in result:
+                side = side_for_team(item.get("team"))
+            if side in result and result[side] is None:
+                result[side] = name_from(item)
+        return result
 
     @staticmethod
     def _team_ref(item: Mapping[str, Any]) -> dict[str, Any]:
@@ -1549,6 +1631,15 @@ class ESPNAdapter:
         ):
             return ShotType.TWO_POINT
         return ShotType.UNKNOWN
+
+    async def search_web(
+        self, query: NewsQuery, budget: RequestBudget
+    ) -> ProviderResult[list[NewsItem]]:
+        # ESPN is the structured/public sports source.  This compatibility
+        # method is only used by legacy injected stacks; production
+        # SearchAugmentedProvider routes web searches to its dedicated search
+        # adapter and never calls ESPN news here.
+        return await self.search_news(query, budget)
 
 
 __all__ = [

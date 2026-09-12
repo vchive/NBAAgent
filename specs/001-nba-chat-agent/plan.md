@@ -10,7 +10,8 @@
 
 交付一个可在线访问的中文 NBA Chat Agent，并配套简要方案说明 PDF。系统采用分层、可
 替换的数据访问架构：Web 聊天入口 → 检索前安全门 → 双运行通道。混合通道继续使用本地
-意图/实体/赛季解析、结构化 Provider、核验与确定性渲染；全智能通道在安全门之后由正式
+意图/实体/赛季解析、结构化 Provider、核验与确定性渲染；公开演示默认进入 full 全智能通道，
+本地 fixture profile 仍可选择 hybrid；全智能通道在安全门之后由正式
 Hermes Agent 参与理解和规划，只能调用服务器批准的 NBA 查询/赛程/新闻工具，这些工具再
 复用同一 Provider、Verifier 和 Derivation 事实底座。Agent、工具或模型失败时回退确定性
 通道。HLD 与 LLD 记录边界和契约；黄金题集验证 PDF 的事实、安全、多轮和性能维度，并增加
@@ -24,7 +25,7 @@ Session Meta Resolver，负责准确轮次、上一问答、近期摘要、活�
 for the current Web Demo (a React/Next.js migration remains optional after the fixture MVP)
 **Primary Dependencies**: FastAPI/ASGI, Pydantic v2, httpx, `hermes-agent==0.19.0`, SiliconFlow
 OpenAI-compatible model endpoint, browser `fetch`/ReadableStream for POST-SSE, pytest；
-DuckDuckGo 作为受控背景搜索，正式生产仍优先将 Hermes 迁移到独立 sidecar
+百度优先的受控在线搜索（DuckDuckGo 作为固定 HTTPS 备用），正式生产仍优先将 Hermes 迁移到独立 sidecar
 **Storage**: 首版无 NBA 内部数据库；会话与 TTL 缓存采用可替换的轻量存储，准确会话计数与最多
 8 条的摘要窗口分离，评测 fixture 使用版本化 JSON
 **Testing**: pytest（单元/集成/契约）、Playwright（Web E2E）、黄金题回放与时延采集
@@ -41,7 +42,7 @@ DuckDuckGo 作为受控背景搜索，正式生产仍优先将 Hermes 迁移到�
 
 | Gate | Result | Evidence |
 |---|---|---|
-| Specification-first | PASS | `spec.md` defines scope, scenarios, FR-001–036 and SC-001–017 |
+| Specification-first | PASS | `spec.md` defines scope, scenarios, FR-001–041 and SC-001–017 |
 | Evidence-first facts | PASS | Provider → Normalizer → Verifier → Derivation chain in HLD/LLD |
 | Safety before retrieval | PASS | Safety Guard is the first orchestrator branch; no-retrieval test required |
 | Contract/test-first | PASS | API/provider/evaluation contracts and traceability matrix planned |
@@ -105,7 +106,7 @@ apps/
 └── web-demo/
     ├── index.html                   # zero-build chat/HUD layout
     ├── styles.css                   # responsive broadcast-style visual system
-    ├── app.js                       # UI state, PBP replay and fixture fallback
+    ├── app.js                       # UI state, PBP replay and explicit fixture mode
     └── api-client.js                # optional FastAPI/SSE/highlights transport
 
 tests/
@@ -156,21 +157,26 @@ docs/
 | FR-019 | HLD Safety Guard；LLD safety policy | `SEC-REDLINE-001..010` 检索前拦截 |
 | FR-020 | LLD refusal template | `SEC-REDLINE-011` 1–2 句拒答 |
 | FR-021 | LLD allow boundary | `SEC-ALLOW-001` 合规预测不误拦截 |
-| FR-022 | LLD error/retry；provider contract | `INT-ERROR-001..006` timeout/429/空 |
+| FR-022 | LLD typed failure/notice；provider and HTTP contracts | Runtime、Qianfan/Aliyun/Baidu adapter、Gateway、同步 HTTP 与 SSE 的 quota/auth/timeout/空结果回归 |
 | FR-023 | HLD observability；LLD telemetry | `OPS-TELEM-001` 脱敏和 provider/cache=0 |
 | FR-024 | HLD delivery；evaluation contract | `DOC-001` 方案 PDF 清单 |
 | FR-025 | Quickstart；evaluation contract | `DOC-002`, `EVAL-RUN-001` 可复现 |
 | FR-026 | Evaluation contract | `EVAL-REPORT-001` 七维汇总 |
-| FR-027 | HLD highlights projection；逐场来源；SQLite v4；HTTP contract；Web Demo | `tests/contract/test_highlights.py`, `tests/contract/test_highlights_cache.py`, `E2E-HIGHLIGHTS-001` |
+| FR-027 | HLD highlights projection；逐场来源；SQLite v5；HTTP contract；Web Demo | `tests/contract/test_highlights.py`, `tests/contract/test_highlights_cache.py`, `E2E-HIGHLIGHTS-001` |
 | FR-028 | HLD public demo access control；Cookie session；Compose secret | `tests/contract/test_auth.py`, `DOC-AUTH-001` |
 | FR-029 | HLD web-search boundary；DuckDuckGo adapter；evidence ranking | `tests/contract/test_web_search.py`, `tests/integration/test_web_search.py` |
 | FR-030 | HLD full-intelligence routing；server-owned objective grounding；OutputGuard fallback | `tests/contract/test_intelligence_mode.py`, `tests/integration/test_full_intelligence.py`, `tests/e2e/test_chat.spec.ts` |
 | FR-031 | HLD Agent tool boundary；agent runtime contract | `tests/contract/test_hermes_agent_runtime.py`, `tests/integration/test_agent_tools.py` |
 | FR-032 | LLD conversational fast path and typo-tolerant Agent routing | `tests/integration/test_full_intelligence.py` |
 | FR-033 | LLD empty-result observation and scoped explanation | `tests/integration/test_full_intelligence.py`, `tests/evaluation/test_agent_cases.py` |
-| FR-034 | Agent fallback/provenance；显式公开复核（force refresh/no fallback） | `tests/unit/test_gateway.py`, `tests/integration/test_full_intelligence.py`, `tests/e2e/test_chat.spec.ts` |
+| FR-034 | Agent fallback/provenance；request-scoped capability notice；显式公开复核（force refresh/no fallback） | `tests/contract/test_hermes_agent_runtime.py`, `tests/unit/test_agent_tools.py`, `tests/contract/test_http_chat.py`, `tests/integration/test_full_intelligence.py`, `tests/e2e/test_chat.spec.ts` |
 | FR-035 | HLD pre-Agent safety；tool result trust boundary | `tests/integration/test_agent_safety.py` |
 | FR-036 | HLD/LLD Session Meta Resolver；准确计数与有界摘要分离 | `tests/unit/test_session_meta.py`, `tests/integration/test_session_meta.py`, `tests/e2e/test_chat.spec.ts` |
+| FR-037 | HLD/LLD full-intelligence default routing；安全后 Agent-first 分流与会话关闭开关 | `tests/contract/test_intelligence_mode.py`, `tests/integration/test_full_intelligence.py`, `tests/e2e/test_chat.spec.ts` |
+| FR-038 | HLD/LLD 受控网页检索；百度 Qianfan-first、固定端点、清洗与限额 | `tests/contract/test_qianfan_search.py`, `tests/contract/test_baidu_search.py`, `tests/contract/test_web_search.py` |
+| FR-039 | Agent tool bridge 长尾搜索与结构化空结果协同 | `tests/integration/test_full_intelligence.py`, `tests/unit/test_agent_tools.py` |
+| FR-040 | 公开演示默认全智能配置与用户可关闭模式 | `tests/contract/test_provider_mode.py`, `tests/e2e/test_chat.spec.ts` |
+| FR-041 | 公共输出/健康接口脱敏，禁止 Agent、工具、搜索供应商和凭据泄露 | `tests/unit/test_safety.py`, `tests/contract/test_http_chat.py`, `tests/unit/test_agent_tools.py` |
 | SC-001 | HLD deployment；quickstart | `OPS-001` 公网 URL/HTTPS 探活 |
 | SC-002 | Evaluation contract | `EVAL-COVERAGE-001` A–I 覆盖报告 |
 | SC-003 | HLD multi-turn；LLD context | `EVAL-H-001` 三轮一致 |

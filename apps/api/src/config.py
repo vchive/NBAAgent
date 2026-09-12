@@ -88,12 +88,44 @@ class Settings:
     highlights_cache_detail_ttl_seconds: int = 604_800
     highlights_cache_lease_seconds: int = 30
     highlights_cache_busy_timeout_ms: int = 1_500
+    # Queryable public NBA records live beside (but not inside) the exact
+    # highlights response cache.  Keep local/fixture runs disabled by default;
+    # live deployments opt in on the existing writable data volume.
+    game_index_enabled: bool = False
+    game_index_db: str = "data/highlights.sqlite3"
+    game_index_max_documents: int = 10_000
+    game_index_max_document_bytes: int = 8_192
+    game_index_busy_timeout_ms: int = 1_500
+    hupu_enrichment_enabled: bool = False
+    hupu_timeout_seconds: float = 8.0
+    hupu_max_response_bytes: int = 2_000_000
     session_ttl_seconds: int = 86_400
     max_session_turns: int = 8
     max_session_bytes: int = 16_384
     cache_max_entries: int = 10_000
     # Optional, bounded web-search augmentation.  Fixture mode remains
     # offline even if these flags are accidentally present.
+    # Alibaba Cloud IQS is the preferred pure-search adapter for the live
+    # profile. Keep its bearer key out of repr/logs and prefer a secret file.
+    aliyun_iqs_search_enabled: bool = False
+    aliyun_iqs_api_key: str = field(default="", repr=False)
+    aliyun_iqs_api_key_file: str = field(default="", repr=False)
+    aliyun_iqs_timeout_seconds: float = 5.5
+    aliyun_iqs_max_results: int = 5
+    aliyun_iqs_max_response_bytes: int = 800_000
+    baidu_search_enabled: bool = False
+    baidu_timeout_seconds: float = 4.0
+    baidu_max_results: int = 5
+    baidu_max_response_bytes: int = 800_000
+    # Baidu Qianfan AI Search is the key-authenticated first choice for
+    # long-tail/background web search.  Keep the key out of repr/logs and
+    # prefer the mounted Docker secret in deployments.
+    qianfan_search_enabled: bool = False
+    qianfan_search_api_key: str = field(default="", repr=False)
+    qianfan_search_api_key_file: str = field(default="", repr=False)
+    qianfan_search_timeout_seconds: float = 8.0
+    qianfan_search_max_results: int = 5
+    qianfan_search_max_response_bytes: int = 800_000
     ddg_search_enabled: bool = False
     ddg_timeout_seconds: float = 3.0
     ddg_max_results: int = 5
@@ -135,7 +167,7 @@ class Settings:
     agent_max_tool_result_bytes: int = 16_384
     agent_max_output_bytes: int = 20_000
     agent_package_version: str = "0.19.0"
-    # This bounded three-tool workflow does not need a hidden reasoning pass
+    # This bounded NBA-tool workflow does not need a hidden reasoning pass
     # by default. Make the policy explicit so a provider default cannot spend
     # most of the request deadline before returning a tool decision.
     agent_reasoning_effort: str = "none"
@@ -206,10 +238,41 @@ class Settings:
             highlights_cache_busy_timeout_ms=_int(
                 "HIGHLIGHTS_CACHE_BUSY_TIMEOUT_MS", 1_500
             ),
+            game_index_enabled=_bool("GAME_INDEX_ENABLED", False),
+            game_index_db=os.getenv(
+                "GAME_INDEX_DB",
+                os.getenv("HIGHLIGHTS_CACHE_DB", "data/highlights.sqlite3"),
+            ).strip(),
+            game_index_max_documents=_int("GAME_INDEX_MAX_DOCUMENTS", 10_000),
+            game_index_max_document_bytes=_int("GAME_INDEX_MAX_DOCUMENT_BYTES", 8_192),
+            game_index_busy_timeout_ms=_int("GAME_INDEX_BUSY_TIMEOUT_MS", 1_500),
+            hupu_enrichment_enabled=_bool("HUPU_ENRICHMENT_ENABLED", False),
+            hupu_timeout_seconds=_float("HUPU_TIMEOUT_SECONDS", 8.0),
+            hupu_max_response_bytes=_int("HUPU_MAX_RESPONSE_BYTES", 2_000_000),
             session_ttl_seconds=_int("SESSION_TTL_SECONDS", 86_400),
             max_session_turns=_int("MAX_SESSION_TURNS", 8),
             max_session_bytes=_int("MAX_SESSION_BYTES", 16_384),
             cache_max_entries=_int("CACHE_MAX_ENTRIES", 10_000),
+            aliyun_iqs_search_enabled=_bool("ALIYUN_IQS_SEARCH_ENABLED", False),
+            aliyun_iqs_api_key=os.getenv("ALIYUN_IQS_API_KEY", "").strip(),
+            aliyun_iqs_api_key_file=os.getenv("ALIYUN_IQS_API_KEY_FILE", "").strip(),
+            aliyun_iqs_timeout_seconds=_float("ALIYUN_IQS_TIMEOUT_SECONDS", 5.5),
+            aliyun_iqs_max_results=_int("ALIYUN_IQS_MAX_RESULTS", 5),
+            aliyun_iqs_max_response_bytes=_int(
+                "ALIYUN_IQS_MAX_RESPONSE_BYTES", 800_000
+            ),
+            baidu_search_enabled=_bool("BAIDU_SEARCH_ENABLED", False),
+            baidu_timeout_seconds=_float("BAIDU_TIMEOUT_SECONDS", 4.0),
+            baidu_max_results=_int("BAIDU_MAX_RESULTS", 5),
+            baidu_max_response_bytes=_int("BAIDU_MAX_RESPONSE_BYTES", 800_000),
+            qianfan_search_enabled=_bool("QIANFAN_SEARCH_ENABLED", False),
+            qianfan_search_api_key=os.getenv("QIANFAN_SEARCH_API_KEY", "").strip(),
+            qianfan_search_api_key_file=os.getenv("QIANFAN_SEARCH_API_KEY_FILE", "").strip(),
+            qianfan_search_timeout_seconds=_float("QIANFAN_SEARCH_TIMEOUT_SECONDS", 8.0),
+            qianfan_search_max_results=_int("QIANFAN_SEARCH_MAX_RESULTS", 5),
+            qianfan_search_max_response_bytes=_int(
+                "QIANFAN_SEARCH_MAX_RESPONSE_BYTES", 800_000
+            ),
             ddg_search_enabled=_bool("DDG_SEARCH_ENABLED", False),
             ddg_timeout_seconds=_float("DDG_TIMEOUT_SECONDS", 3.0),
             ddg_max_results=_int("DDG_MAX_RESULTS", 5),
@@ -331,6 +394,66 @@ class Settings:
             ord(char) < 32 or ord(char) == 127 for char in self.highlights_cache_db
         ):
             raise ValueError("HIGHLIGHTS_CACHE_DB contains control characters")
+        if self.game_index_enabled and not self.game_index_db:
+            raise ValueError("GAME_INDEX_DB must not be empty when enabled")
+        if self.game_index_db and any(
+            ord(char) < 32 or ord(char) == 127 for char in self.game_index_db
+        ):
+            raise ValueError("GAME_INDEX_DB contains control characters")
+        if not 1 <= self.game_index_max_documents <= 100_000:
+            raise ValueError("GAME_INDEX_MAX_DOCUMENTS must be between 1 and 100000")
+        if not 1_024 <= self.game_index_max_document_bytes <= 65_536:
+            raise ValueError("GAME_INDEX_MAX_DOCUMENT_BYTES must be between 1024 and 65536")
+        if not 1 <= self.game_index_busy_timeout_ms <= 30_000:
+            raise ValueError("GAME_INDEX_BUSY_TIMEOUT_MS must be between 1 and 30000")
+        if (
+            not math.isfinite(self.hupu_timeout_seconds)
+            or self.hupu_timeout_seconds <= 0
+            or not 65_536 <= self.hupu_max_response_bytes <= 4_194_304
+        ):
+            raise ValueError("Hupu enrichment limits are invalid")
+        if (
+            self.aliyun_iqs_timeout_seconds <= 0
+            or not 1 <= self.aliyun_iqs_max_results <= 5
+            or self.aliyun_iqs_max_response_bytes <= 0
+        ):
+            raise ValueError("ALIYUN_IQS search limits are invalid")
+        for name, value in {
+            "ALIYUN_IQS_API_KEY": self.aliyun_iqs_api_key,
+            "ALIYUN_IQS_API_KEY_FILE": self.aliyun_iqs_api_key_file,
+        }.items():
+            if not isinstance(value, str):
+                raise ValueError(f"{name} must be a string")
+            if any(ord(char) < 32 or ord(char) == 127 for char in value):
+                raise ValueError(f"{name} contains control characters")
+        if self.aliyun_iqs_api_key and (
+            len(self.aliyun_iqs_api_key) > 512
+            or any(char.isspace() for char in self.aliyun_iqs_api_key)
+        ):
+            raise ValueError("ALIYUN_IQS_API_KEY must be a single token")
+        if self.baidu_timeout_seconds <= 0 or not 1 <= self.baidu_max_results <= 5:
+            raise ValueError("Baidu search limits are invalid")
+        if self.baidu_max_response_bytes <= 0:
+            raise ValueError("BAIDU_MAX_RESPONSE_BYTES must be positive")
+        if (
+            self.qianfan_search_timeout_seconds <= 0
+            or not 1 <= self.qianfan_search_max_results <= 5
+            or self.qianfan_search_max_response_bytes <= 0
+        ):
+            raise ValueError("QIANFAN search limits are invalid")
+        for name, value in {
+            "QIANFAN_SEARCH_API_KEY": self.qianfan_search_api_key,
+            "QIANFAN_SEARCH_API_KEY_FILE": self.qianfan_search_api_key_file,
+        }.items():
+            if not isinstance(value, str):
+                raise ValueError(f"{name} must be a string")
+            if any(ord(char) < 32 or ord(char) == 127 for char in value):
+                raise ValueError(f"{name} contains control characters")
+        if self.qianfan_search_api_key and (
+            len(self.qianfan_search_api_key) > 512
+            or any(char.isspace() for char in self.qianfan_search_api_key)
+        ):
+            raise ValueError("QIANFAN_SEARCH_API_KEY must be a single token")
         if not 1 <= self.highlights_cache_max_entries <= 100_000:
             raise ValueError("HIGHLIGHTS_CACHE_MAX_ENTRIES must be between 1 and 100000")
         if not 1_024 <= self.highlights_cache_max_payload_bytes <= 8_388_608:
@@ -355,6 +478,20 @@ class Settings:
             "provider_timeout_seconds": self.provider_timeout_seconds,
             "llm_timeout_seconds": self.llm_timeout_seconds,
             "provider_max_response_bytes": self.provider_max_response_bytes,
+            "aliyun_iqs_timeout_seconds": self.aliyun_iqs_timeout_seconds,
+            "aliyun_iqs_max_results": self.aliyun_iqs_max_results,
+            "aliyun_iqs_max_response_bytes": self.aliyun_iqs_max_response_bytes,
+            "baidu_timeout_seconds": self.baidu_timeout_seconds,
+            "baidu_max_results": self.baidu_max_results,
+            "baidu_max_response_bytes": self.baidu_max_response_bytes,
+            "qianfan_search_timeout_seconds": self.qianfan_search_timeout_seconds,
+            "qianfan_search_max_results": self.qianfan_search_max_results,
+            "qianfan_search_max_response_bytes": self.qianfan_search_max_response_bytes,
+            "game_index_max_documents": self.game_index_max_documents,
+            "game_index_max_document_bytes": self.game_index_max_document_bytes,
+            "game_index_busy_timeout_ms": self.game_index_busy_timeout_ms,
+            "hupu_timeout_seconds": self.hupu_timeout_seconds,
+            "hupu_max_response_bytes": self.hupu_max_response_bytes,
             "request_deadline_ms": self.request_deadline_ms,
             "max_provider_operations": self.max_provider_operations,
             "session_ttl_seconds": self.session_ttl_seconds,
@@ -472,6 +609,8 @@ class Settings:
             raise ValueError("DDG_MAX_RESULTS must be <= 5")
         if self.ddg_max_response_bytes > 1_048_576:
             raise ValueError("DDG_MAX_RESPONSE_BYTES must be <= 1048576")
+        if self.aliyun_iqs_max_response_bytes > 1_048_576:
+            raise ValueError("ALIYUN_IQS_MAX_RESPONSE_BYTES must be <= 1048576")
 
 
 settings = Settings.from_env()

@@ -12,9 +12,10 @@
   `GET /api/v1/highlights/range`；选中比赛后按需请求
   `GET /api/v1/highlights/{game_id}/detail` 获取终场摘要、得分王和 PBP；
 - SSE 客户端在收到 `message.completed`/`run.error` 后立即释放连接；若代理只发送心跳却不
-  发送终止事件，15 秒后会自动退出加载态并切换到离线演示，避免“正在准备”永久卡住；
-- API 不可用时，自动切换到内置 fixture，仍可完整演示交互，不需要 Node、构建工具、外网
-  或 API 凭据。
+  发送终止事件，客户端超时后会退出加载态并展示可重试错误，避免“正在准备”永久卡住；
+- public/live 页面在 API 不可用时不会用内置 fixture 回答。只有服务端明确报告
+  `mode: fixture`，或静态开发页在加载 `app.js` 前显式设置
+  `window.COURTSIDE_RUNTIME_MODE = "fixture"`，才允许使用固定演示快照。
 
 页面不会主动抓取任意 URL，也不会把 Provider 字段渲染给用户。输入框旁的“全智能分析
 （实验）”是会话级开关；勾选后每次同步/SSE 请求都会带 `intelligence_mode=full`，服务端
@@ -29,7 +30,15 @@ fixture 在 2026-06-12 提供三场演示赛事，便于面试时直接演示切
 
 ## 启动离线 Demo
 
-在仓库根目录执行：
+固定快照必须显式启用。静态托管时，在 `api-client.js` 和 `app.js` 之前加入以下运行时配置：
+
+```html
+<script>window.COURTSIDE_RUNTIME_MODE = "fixture";</script>
+<script src="./api-client.js" defer></script>
+<script src="./app.js" defer></script>
+```
+
+然后在仓库根目录执行：
 
 ```bash
 python3 -m http.server 4173 --directory apps/web-demo
@@ -60,7 +69,8 @@ uvicorn apps.api.src.main:app --reload --port 8000
 
 然后仍访问 <http://localhost:4173>。页面默认在 `localhost/127.0.0.1` 上尝试
 `http://127.0.0.1:8000`；探测成功后，发送问题会消费真实 POST-SSE，日期切换会消费真实
-highlights 响应。API 返回的技术错误会保留在错误卡片中，网络不可达则回退离线 fixture。
+highlights 响应。API 返回的错误或网络中断会保留为带“重试”操作的错误卡片，不会静默改用
+固定快照作答。
 
 若 API 部署在其他地址，可在加载页面前设置全局变量：
 
@@ -73,19 +83,17 @@ highlights 响应。API 返回的技术错误会保留在错误卡片中，网�
 
 ## 日期与回放交互
 
-左栏保留两个互斥模式：
+左栏默认处于“漫游模式”，不请求或展示“今日赛事”投影；用户可直接提出全局 NBA 问题。
+点击“赛事下钻”后，默认展示按开赛时间倒序排列的最近 5 场比赛，并可通过日历定位到今天
+或其他已核验日期。点击“自定义时间”后选择开始/结束日期，接口返回区间内全部比赛（最多
+93 天）。请求期间会显示“正在拉取”状态，完成后再渲染列表；未来日期、逆序日期和超长区间
+会在提交前提示。这个切换只影响 scoreboard/highlights 投影，不会把聊天中的 `HISTORY` 意图
+误当成同一件事。
 
-- “今日赛事”：请求当前 `Asia/Shanghai` 日历日，并在服务探测完成后才渲染当天结果；
-- “精彩回顾”：默认展示按开赛时间倒序排列的最近 5 场比赛；点击“自定义时间”后
-  选择开始/结束日期，接口返回区间内全部比赛（最多 93 天）。请求期间会显示“正在拉取”
-  状态，完成后再渲染列表；未来日期、逆序日期和超长区间会在提交前提示。
-
-这个切换只影响 scoreboard/highlights 投影，不会把聊天中的 `HISTORY` 意图误当成同一件事。
-API 模式按服务端时钟返回“今天”；离线 Demo 为保证视觉可复现，将“今天”固定到 fixture
-日期 `2026-06-12`，`2026-06-13` 用于演示无数据状态。
-单端口 Docker 的 fixture profile 可设置 `HIGHLIGHTS_DEMO_DATE=2026-06-12`，这样即使部署
-当天没有比赛，API 的无参数 highlights 请求也会返回这组演示赛事；live/hybrid profile 忽略
-该变量并按北京时间查询真实日期。页面会把这种返回标记为“演示日期”，避免与真实今日混淆。
+API 模式按服务端时钟计算北京时间“今天”；离线 Demo 的固定快照只会在用户主动进入赛事下钻
+并定位到对应日期时显示。单端口 Docker 的 fixture profile 可设置
+`HIGHLIGHTS_DEMO_DATE=2026-06-12`，live/hybrid profile 忽略该变量并按北京时间查询真实日期。
+页面会把快照标记为“演示日期”，避免与真实赛事混淆。
 
 为演示真实 NBA 日程“一天多场”的交互，内置 `2026-06-12` 快照包含三场比赛：总决赛
 `2026-finals-g4`（默认主卡）以及两场无系列赛编号的演示场次

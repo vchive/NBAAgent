@@ -31,6 +31,7 @@
     gameListCount: $("#game-list-count"),
     gamesSectionTitle: $("#games-section-title"),
     highlightsTitle: $("#highlights-title"),
+    highlightsBadgeLabel: $("#highlights-badge-label"),
     highlightModes: $$("[data-highlight-mode]"),
     historyControls: $("#history-controls"),
     historyRecent: $("#history-recent"),
@@ -63,6 +64,7 @@
     recommendationList: $("#recommendation-list"),
     intelligenceMode: $("#intelligence-mode"),
     intelligenceHelp: $("#intelligence-help"),
+    conversationScope: $("#conversation-scope"),
     streamStatus: $("#stream-status"),
     streamStage: $("#stream-stage"),
     stopStream: $("#stop-stream"),
@@ -103,17 +105,54 @@
   };
 
   const STORAGE_KEY = "courtside-demo-session-v1";
+  // A fixed snapshot is an opt-in development transport, never an implicit
+  // recovery path for a public/live page.  It can be enabled either by the
+  // server reporting `mode: fixture` or by setting this runtime value before
+  // app.js loads in a standalone static demo.
+  const EXPLICIT_RUNTIME_MODE = String(window.COURTSIDE_RUNTIME_MODE || "").trim().toLowerCase();
+  const EXPLICIT_FIXTURE_MODE = EXPLICIT_RUNTIME_MODE === "demo";
   const STAGE_COPY = {
-    agent_planning: "正在理解问题",
-    agent_tool: "正在调用受控 NBA 数据工具",
-    agent_completing: "已完成回答",
-    agent_fallback: "正在回退到已核验事实链路",
-    parsing: "正在解析问题",
-    retrieving: "正在核对比赛数据",
-    verifying: "正在核验事实口径",
-    composing: "正在整理回答",
-    model: "正在生成智能分析",
+    understanding: "正在理解问题",
+    checking: "正在核对相关信息",
+    completing: "正在整理回答",
+    processing: "正在处理请求",
   };
+
+  // Recommendation prompts are a browser-side convenience only.  Keep the
+  // alias map deliberately small and deterministic: it identifies the topic
+  // already visible in the conversation, but never tries to infer a result.
+  const NBA_TEAM_ALIASES = [
+    ["老鹰", "亚特兰大老鹰", "Hawks", "ATL"],
+    ["凯尔特人", "波士顿凯尔特人", "Celtics", "BOS"],
+    ["篮网", "布鲁克林篮网", "Nets", "BKN"],
+    ["黄蜂", "夏洛特黄蜂", "Hornets", "CHA"],
+    ["公牛", "芝加哥公牛", "Bulls", "CHI"],
+    ["骑士", "克利夫兰骑士", "Cavaliers", "CLE"],
+    ["独行侠", "达拉斯独行侠", "小牛", "Mavericks", "DAL"],
+    ["掘金", "丹佛掘金", "Nuggets", "DEN"],
+    ["活塞", "底特律活塞", "Pistons", "DET"],
+    ["勇士", "金州勇士", "Warriors", "GSW"],
+    ["火箭", "休斯顿火箭", "Rockets", "HOU"],
+    ["步行者", "印第安纳步行者", "Pacers", "IND"],
+    ["快船", "洛杉矶快船", "Clippers", "LAC"],
+    ["湖人", "洛杉矶湖人", "Lakers", "LAL"],
+    ["灰熊", "孟菲斯灰熊", "Grizzlies", "MEM"],
+    ["热火", "迈阿密热火", "Heat", "MIA"],
+    ["雄鹿", "密尔沃基雄鹿", "Bucks", "MIL"],
+    ["森林狼", "明尼苏达森林狼", "Timberwolves", "MIN"],
+    ["鹈鹕", "新奥尔良鹈鹕", "Pelicans", "NOP"],
+    ["尼克斯", "纽约尼克斯", "Knicks", "NYK"],
+    ["雷霆", "俄克拉荷马城雷霆", "Thunder", "OKC"],
+    ["魔术", "奥兰多魔术", "Magic", "ORL"],
+    ["76人", "费城76人", "Sixers", "PHI"],
+    ["太阳", "菲尼克斯太阳", "Suns", "PHX"],
+    ["开拓者", "波特兰开拓者", "Trail Blazers", "POR"],
+    ["国王", "萨克拉门托国王", "Kings", "SAC"],
+    ["马刺", "圣安东尼奥马刺", "Spurs", "SAS"],
+    ["猛龙", "多伦多猛龙", "Raptors", "TOR"],
+    ["爵士", "犹他爵士", "Jazz", "UTA"],
+    ["奇才", "华盛顿奇才", "Wizards", "WAS"],
+  ];
 
   // Fixture events are deliberately small and deterministic: they make the
   // replay useful offline while keeping the browser out of the fact pipeline.
@@ -144,7 +183,7 @@
   const state = {
     sessionId: loadSessionId(),
     currentPeriod: "Q4",
-    pbpIndex: 5,
+    pbpIndex: 0,
     replayTimer: null,
     run: null,
     streaming: false,
@@ -152,7 +191,10 @@
     lastRequest: null,
     contextRequest: null,
     retryCount: 0,
-    highlightMode: "today",
+    recommendationContext: null,
+    // The left rail starts unbound.  A game context is created only after the
+    // user explicitly enters 赛事下钻 and clicks a game card.
+    highlightMode: "roaming",
     highlightDate: "2026-06-12",
     historyDate: "2026-06-12",
     historyView: "recent",
@@ -161,7 +203,7 @@
     historyLoading: false,
     historyLoadingTimer: null,
     activeGame: null,
-    activePbp: PBP,
+    activePbp: null,
     highlightGames: [],
     selectedGameId: null,
     detailRequest: 0,
@@ -169,7 +211,7 @@
     gameDetails: new Map(),
     apiAvailable: false,
     apiProbeComplete: false,
-    apiDataMode: "fixture",
+    apiDataMode: EXPLICIT_FIXTURE_MODE ? "demo" : "unknown",
     highlightRequest: 0,
     // Availability is kept in the browser projection because the current
     // highlights contract is intentionally date-scoped. Unknown API dates are
@@ -184,8 +226,14 @@
     authenticated: false,
     authBootstrapped: false,
     intelligenceMode: "hybrid",
+    defaultIntelligenceMode: "hybrid",
     fullIntelligenceEnabled: true,
   };
+
+  function fixtureTransportEnabled() {
+    return EXPLICIT_FIXTURE_MODE
+      || (state.apiProbeComplete && state.apiDataMode === "demo");
+  }
 
   // The static demo keeps a deterministic multi-game slate offline. The same
   // shape is returned by GET /api/v1/highlights in the API implementation, so
@@ -429,6 +477,18 @@
     el.historyStatus.dataset.state = tone;
   }
 
+  function handleHighlightTransportFailure(message, mode = "history") {
+    state.historyLoading = false;
+    setHistoryControls("history", state.historyView);
+    clearHighlightProjection(message || "公开赛事数据暂时不可用，请稍后重试。");
+    setHistoryStatus(
+      `${message || "公开赛事数据暂时不可用。"} 可点击“${mode === "range" ? "查看" : "最近 5 场"}”重试。`,
+      true,
+      "error",
+    );
+    setConnection("error", "连接异常");
+  }
+
   function setHistoryRangeDefaults() {
     const today = beijingDateString();
     const end = isIsoDate(state.historyRangeTo) && state.historyRangeTo <= today
@@ -571,36 +631,66 @@
     }
   }
 
-  function setTransportLabel(available, dataMode = "fixture") {
+  function setTransportLabel(available, dataMode = state.apiDataMode) {
     const live = Boolean(available);
-    const normalizedMode = String(dataMode || "fixture").toLowerCase();
+    const normalizedMode = String(dataMode || "unknown").toLowerCase();
+    const checking = !live && !state.apiProbeComplete && Boolean(window.CourtsideApi?.baseUrl);
+    const offlineFixture = !live && fixtureTransportEnabled();
     const modeText = normalizedMode === "live"
       ? "LIVE DATA"
       : normalizedMode === "hybrid"
         ? "HYBRID DATA"
-        : "FIXTURE MODE";
+        : normalizedMode === "demo"
+          ? "DEMO SNAPSHOT"
+          : "DATA SERVICE";
     if (el.modeLabel) {
-      el.modeLabel.textContent = live ? modeText : "FIXTURE MODE";
+      el.modeLabel.textContent = live
+        ? modeText
+        : checking
+          ? "DATA SERVICE"
+          : offlineFixture
+            ? "DEMO SNAPSHOT"
+            : "SERVICE OFFLINE";
       el.modeLabel.parentElement?.setAttribute(
         "title",
         live
-          ? (normalizedMode === "fixture" ? "已连接 NBA Agent API，使用演示快照" : "已连接公开数据服务")
-          : "当前为本地 fixture 演示数据",
+          ? (normalizedMode === "demo" ? "已连接对话服务，使用演示快照" : "已连接公开数据服务")
+          : checking
+            ? "正在检查数据服务"
+            : offlineFixture
+              ? "已显式启用本地演示快照"
+              : "公开数据服务暂时不可用",
       );
     }
     if (el.onlineLabel) {
       if (el.onlineLabelText) {
-        el.onlineLabelText.textContent = live ? "API READY" : "OFFLINE DEMO";
+        el.onlineLabelText.textContent = live
+          ? "API READY"
+          : checking
+            ? "CONNECTING"
+            : offlineFixture
+              ? "OFFLINE DEMO"
+              : "SERVICE OFFLINE";
       }
       el.onlineLabel.parentElement?.setAttribute(
         "title",
-        live ? "已连接 NBA Agent API" : "当前使用内置 fixture 演示数据",
+        live
+          ? "已连接对话服务"
+          : checking
+            ? "正在连接对话服务"
+            : offlineFixture
+              ? "当前使用显式启用的演示数据"
+              : "数据服务暂时不可用",
       );
     }
   }
 
-  function setIntelligenceCapability(enabled) {
+  function setIntelligenceCapability(enabled, defaultMode = null) {
     state.fullIntelligenceEnabled = Boolean(enabled);
+    const normalizedDefault = String(defaultMode || "").toLowerCase();
+    if (normalizedDefault === "full" || normalizedDefault === "hybrid") {
+      state.defaultIntelligenceMode = normalizedDefault;
+    }
     if (!el.intelligenceMode) return;
     el.intelligenceMode.disabled = Boolean(
       state.apiProbeComplete && state.apiAvailable && !enabled
@@ -610,12 +700,18 @@
         ? "服务端未开启"
         : "全量智能分析";
     }
+    // Reflect the server default after the API probe so the first message
+    // follows the mode shown by the switch. Offline preview remains hybrid.
+    if (state.apiAvailable && state.fullIntelligenceEnabled) {
+      state.intelligenceMode = state.defaultIntelligenceMode;
+      el.intelligenceMode.checked = state.intelligenceMode === "full";
+    }
   }
 
   function setWelcomeForTransport(dataMode) {
     if (!el.welcomeMessage) return;
-    const normalized = String(dataMode || "fixture").toLowerCase();
-    if (normalized === "fixture") {
+    const normalized = String(dataMode || "unknown").toLowerCase();
+    if (normalized === "demo") {
       setWelcomeForFixtureTransport();
       return;
     }
@@ -639,27 +735,13 @@
     const copy = $(".answer-lead p", el.welcomeMessage);
     const grid = $(".fact-grid", el.welcomeMessage);
     const foot = $(".answer-foot", el.welcomeMessage);
-    if (label) label.textContent = "演示快照";
-    if (title) title.textContent = "已连接赛事数据演示";
-    if (copy) copy.textContent = "当前为固定比赛快照，可体验赛程、关键回合与战术复盘。";
-    if (grid) grid.hidden = false;
-    if (foot) foot.textContent = "演示日期 2026/06/12 · 不代表今日真实赛程";
-  }
-
-  function setWelcomeLoading(today) {
-    if (!el.welcomeMessage) return;
-    const label = $(".answer-label", el.welcomeMessage);
-    const title = $("h3", el.welcomeMessage);
-    const copy = $(".answer-lead p", el.welcomeMessage);
-    const grid = $(".fact-grid", el.welcomeMessage);
-    const foot = $(".answer-foot", el.welcomeMessage);
-    const divider = $("span", el.dayDivider);
-    if (label) label.textContent = "赛事数据加载中";
-    if (title) title.textContent = "正在获取今天的 NBA 赛程";
-    if (copy) copy.textContent = "正在按北京时间连接公开赛事数据服务，请稍候。";
+    // Fixture transport is still a valid offline answer source, but it must
+    // not look like a selected/current game while the app is in roaming mode.
+    if (label) label.textContent = "漫游模式";
+    if (title) title.textContent = "直接问一个 NBA 问题。";
+    if (copy) copy.textContent = "无需先选择比赛；想查看具体赛事时，再进入“赛事下钻”选择比赛。";
     if (grid) grid.hidden = true;
-    if (foot) foot.textContent = "正在拉取数据 · 不会展示过期比赛";
-    if (divider) divider.textContent = `今天 · ${formatShortDate(today)}`;
+    if (foot) foot.textContent = "漫游模式 · 等待您的问题";
   }
 
   function setWelcomeForOfflineFixture() {
@@ -674,6 +756,20 @@
     if (copy) copy.textContent = "当前展示固定演示快照，不代表今天的真实赛程。";
     if (grid) grid.hidden = true;
     if (foot) foot.textContent = "离线演示数据 · 演示日期 2026/06/12";
+  }
+
+  function setWelcomeForUnavailableTransport() {
+    if (!el.welcomeMessage) return;
+    const label = $(".answer-label", el.welcomeMessage);
+    const title = $("h3", el.welcomeMessage);
+    const copy = $(".answer-lead p", el.welcomeMessage);
+    const grid = $(".fact-grid", el.welcomeMessage);
+    const foot = $(".answer-foot", el.welcomeMessage);
+    if (label) label.textContent = "连接提示";
+    if (title) title.textContent = "公开赛事数据服务暂时不可用";
+    if (copy) copy.textContent = "当前不会使用固定演示数据代替回答；请检查网络后重试。";
+    if (grid) grid.hidden = true;
+    if (foot) foot.textContent = "连接恢复后可继续当前会话";
   }
 
   function setComposerBusy(busy) {
@@ -880,14 +976,15 @@
     if (dateValue > beijingDateString()) return "future";
     const known = state.highlightAvailability.get(dateValue);
     if (known) return known;
-    // The fixture snapshot is complete for offline mode. In API mode, leave
-    // unseen dates explicitly unknown until the calendar verifies them.
-    return state.apiAvailable ? "unknown" : "empty";
+    // Only an explicitly enabled fixture snapshot can prove an offline date
+    // empty. In public/live mode, an unavailable transport means unknown.
+    if (state.apiAvailable) return "unknown";
+    return fixtureTransportEnabled() ? "empty" : "unknown";
   }
 
   function recordHighlightAvailability(dateValue, hasGames, source = "api") {
     if (!isIsoDate(dateValue)) return;
-    if (source === "fixture") {
+    if (source === "demo_snapshot") {
       state.highlightAvailability.set(dateValue, hasGames ? "available" : "empty");
       return;
     }
@@ -897,7 +994,11 @@
   }
 
   function calendarStatusCopy() {
-    if (!state.apiAvailable) return "演示数据：灰色日期无比赛，不可选择";
+    if (!state.apiAvailable) {
+      return fixtureTransportEnabled()
+        ? "演示数据：可选择日期查看固定演示结果"
+        : "公开赛事数据服务不可用，日期暂无法核验";
+    }
     const values = datesInMonth(state.calendarMonth)
       .filter(Boolean)
       .map((dateValue) => availabilityForDate(dateValue));
@@ -905,14 +1006,14 @@
     if (values.includes("unknown") || values.includes("error")) {
       return "尚未核验的日期暂不可选，核对完成后会自动开放";
     }
-    return "灰色日期无比赛，不可选择";
+    return "可选择有比赛或已确认无比赛的日期；灰色日期尚未核验";
   }
 
   function calendarDayLabel(dateValue, status) {
     const [, month, day] = String(dateValue).split("-");
     const suffix = {
       available: "有比赛",
-      empty: "无比赛，不可选",
+      empty: "无比赛，可查看",
       future: "未来日期，不可选",
       loading: "正在核对",
       unknown: "尚未核验",
@@ -952,7 +1053,11 @@
         day.setAttribute("aria-selected", "false");
       }
       if (dateValue === beijingDateString()) day.classList.add("today");
-      if (status !== "available") {
+      // Confirmed empty days are still selectable: entering 赛事下钻 and
+      // choosing today should be able to prove that there are no games,
+      // rather than trapping the user on the previous date. Unknown/error
+      // and future days remain disabled until they can be verified.
+      if (["future", "loading", "unknown", "error"].includes(status)) {
         day.disabled = true;
         day.setAttribute("aria-disabled", "true");
       }
@@ -1007,7 +1112,10 @@
       datesInMonth(monthMarker).forEach((dateValue) => {
         if (!dateValue) return;
         if (!state.highlightAvailability.has(dateValue)) {
-          state.highlightAvailability.set(dateValue, fixtureDateSet().has(dateValue) ? "available" : "empty");
+          state.highlightAvailability.set(
+            dateValue,
+            fixtureTransportEnabled() && fixtureDateSet().has(dateValue) ? "available" : "unknown",
+          );
         }
       });
       renderCalendar(monthMarker);
@@ -1169,14 +1277,14 @@
 
   function selectCalendarDate(dateValue) {
     const status = availabilityForDate(dateValue);
-    if (status !== "available") {
+    if (["future", "loading", "unknown", "error"].includes(status)) {
       showToast(status === "loading" || status === "unknown"
         ? "正在核对该日期是否有比赛，请稍候"
         : status === "error"
           ? "该日期暂时无法核验，请稍后重试"
           : status === "future"
             ? "不能选择未来日期"
-            : "这一天没有比赛，暂不可选");
+            : "不能选择未来日期");
       return;
     }
     selectHighlightDate(dateValue);
@@ -1221,12 +1329,243 @@
     return fragment;
   }
 
+  // Search snippets are internal grounding material.  They may still be
+  // present in the response envelope so the server can audit provenance, but
+  // the chat surface should show the composed answer rather than a raw
+  // "补充线索/公开资料线索" result list.  Keep this projection deliberately
+  // narrow: normal prose that merely mentions a public report is retained.
+  const SUPPLEMENTAL_HEADING_RE = /^(?:补充线索|补充资料|相关报道(?:还)?提到|公开资料(?:新闻)?(?:线索|摘要|结果)|公开资料检索到以下(?:相关)?(?:线索|摘要|结果)|公开网页(?:线索|摘要|结果)|网页(?:搜索|检索)(?:结果|摘要|线索)|搜索(?:结果|摘要|线索)|检索(?:结果|摘要|线索)|公开报道(?:线索|摘要|结果))(?:\s*[（(][^）)]{0,80}[）)])?(?:\s*$|\s*[：:].*)$/u;
+  const INLINE_SUPPLEMENTAL_RE = /^(.*?[。！？!?；;，,])\s*(?:\*\*|__|`)*(?:补充线索|补充资料|相关报道(?:还)?提到|公开资料(?:新闻)?(?:线索|摘要|结果)|公开网页(?:线索|摘要|结果)|搜索(?:结果|摘要|线索)|检索(?:结果|摘要|线索))(?:\s*[（(][^）)]{0,80}[）)])?(?:\*\*|__|`)*\s*[：:].*$/u;
+  const SUPPLEMENTAL_CAVEAT_RE = /^(?:这些内容目前按公开网页线索处理，不标记为已核验事实|这些内容不标记为已核验事实|公开报道尚未与(?:官方|结构化)?比赛记录交叉核验|以上(?:为|公开资料仅作)线索，?尚未(?:与(?:官方|结构化)?比赛记录)?交叉核验|尚未与(?:官方|结构化)?比赛记录交叉核验)(?:[；;，,。.!！?？].*)?$/u;
+  const INTERNAL_RETRIEVAL_RE = /^(?:已找到与问题相关的公开报道[；;，,。]?\s*)?(?:当前接入的)?结构化比赛(?:记录|数据)[^。.!！?？]{0,180}(?:暂未|尚未|没有|未)[^。.!！?？]{0,180}[。.!！?？]?$/u;
+  const INTERNAL_PROCESS_LINE_RE = /^(?=[^\n]{0,360}(?:查询|检索|调用|命中|未命中|复用|读取|写入|返回|未找到|没有找到|完成搜索|失败))(?=[^\n]{0,360}(?:结构化(?:比赛)?(?:记录|数据)|缓存|数据库|索引|工具|搜索))[^\n]{1,360}$/u;
+  const INTERNAL_SCALAR_RE = /^(?:工具|缓存|数据库|索引|结构化比赛(?:记录|数据))(?:状态|结果|信息|详情)?$/u;
+  // Construct the private runtime token without publishing its literal name
+  // in the browser bundle.  The client still blocks accidental server/model
+  // disclosure, while users inspecting public assets do not see the brand.
+  const PRIVATE_RUNTIME_TOKEN = String.fromCharCode(104, 101, 114, 109, 101, 115);
+  const FORBIDDEN_INTERNAL_IDENTIFIER_RE = new RegExp(
+    `(?:^|[^A-Za-z0-9_])(?:${PRIVATE_RUNTIME_TOKEN}|provider)(?=$|[^A-Za-z0-9_])`,
+    "iu",
+  );
+  const SEARCH_PROCESS_LEAD_RE = /^(?:(?:我|我们|助手|系统|服务)\s*)?(?:进行(?:了)?\s*)?(?:在线|网页|公开资料)?\s*(?:搜索|检索|查询)(?:了)?[^，,:：。！？!?\n]{0,24}?(?:后|之后)?(?:发现|显示|表明|得知|可见)\s*[，,:：]\s*/u;
+  const STRUCTURED_MISSING_LINE_RE = /^(?:(?:我|我们|助手|系统|服务)\s*)?(?:查询|检索|检查|读取)(?:了)?\s*(?:当前)?结构化(?:比赛)?(?:记录|数据)\s*[，,]?\s*(?:但|不过|然而)?\s*(?:没有|未能|未|缺少)\s*(?:找到|提供|包含|返回)?\s*([^。！？!?；;\n]{1,120})[。！？!?]?$/u;
+  const MODEL_WORKFLOW_META_LINE_RE = /^(?:(?=[^\n]{0,520}(?:搜索|检索|来源|核验))(?=[^\n]{0,520}(?:我只使用|谨慎综合|存在不一致|说法不同|未经核验))[^\n]{1,520}|先给结论[^\n]{0,240}(?:明确标注|确认事实|过程细节)[^\n]{0,240})$/u;
+  const COMPOSED_ANSWER_BOUNDARY_RE = /^(?:综合结论|最终(?:结论|回答)|结论|总结|综合来看|总体来看|总的来说|综合判断|简要回答)(?:\s*[：:].*|$)/u;
+  const INTERNAL_STREAM_STARTS = Object.freeze([
+    "补充线索", "补充资料", "相关报道还提到", "相关报道提到",
+    "公开资料线索", "公开资料摘要", "公开资料结果", "公开资料新闻摘要",
+    "公开网页线索", "公开网页摘要", "网页搜索结果", "网页搜索摘要",
+    "搜索结果", "搜索摘要", "搜索线索", "检索结果", "检索摘要", "检索线索",
+    "公开报道线索", "公开报道摘要", "根据搜索结果", "据搜索结果", "基于搜索结果",
+    "补充资料显示", "缓存", "数据库", "索引", "结构化比赛记录", "结构化比赛数据",
+    "我查询了结构化比赛", "我检索了结构化比赛", "我查询了结构化记录",
+    "本轮已调用工具", "已调用工具", "我们搜索", "我们检索", "我们查询",
+    "命中缓存", PRIVATE_RUNTIME_TOKEN, "provider",
+  ]);
+
+  function normalizeSupplementalLine(line) {
+    // Search adapters/models occasionally wrap section labels in Markdown
+    // emphasis (for example ``**搜索摘要**``).  Normalize only the outer
+    // decoration used for a heading/caveat; ordinary inline emphasis remains
+    // untouched in content that is kept for the user.
+    return String(line || "")
+      .trim()
+      .replace(/^(?:>\s*)+/, "")
+      .replace(/^#{1,6}\s*/, "")
+      .replace(/^(?:\*\*|__|`)+/, "")
+      .replace(/(?:\*\*|__|`)+(?=\s*(?:[：:（(]|$))/, "")
+      .trim();
+  }
+
+  function isSupplementalHeading(line) {
+    return SUPPLEMENTAL_HEADING_RE.test(normalizeSupplementalLine(line));
+  }
+
+  function stripSupplementalEvidence(markdown) {
+    const lines = String(markdown ?? "").replace(/\r\n?/g, "\n").split("\n");
+    const output = [];
+    let hiding = false;
+
+    lines.forEach((rawLine) => {
+      let line = String(rawLine || "");
+      let trimmed = line.trim();
+      let normalized = normalizeSupplementalLine(trimmed);
+      const structuredMissing = normalized.match(STRUCTURED_MISSING_LINE_RE);
+      if (structuredMissing) {
+        const detail = String(structuredMissing[1] || "")
+          .trim()
+          .replace(/^(?:可用的?|对应的?)\s*/u, "");
+        line = /^(?:直接|对应)?匹配(?:项|内容|记录|结果)?$/u.test(detail)
+          ? ""
+          : `目前缺少${detail}。`;
+      } else {
+        line = line.replace(SEARCH_PROCESS_LEAD_RE, "");
+      }
+      trimmed = line.trim();
+      normalized = normalizeSupplementalLine(trimmed);
+      // Every provider-shaped heading starts (or restarts) the hidden evidence
+      // section.  Search adapters may emit multiple adjacent sections (for
+      // example "搜索摘要" followed by "公开资料摘要"); checking `!hiding`
+      // here would let the second section's bullets leak into the public chat.
+      if (isSupplementalHeading(trimmed)) {
+        hiding = true;
+        return;
+      }
+      const inlineSupplemental = normalized.match(INLINE_SUPPLEMENTAL_RE);
+      if (inlineSupplemental) {
+        const prefix = String(inlineSupplemental[1] || "")
+          .trim()
+          .replace(/[，,；;：:\s]+$/u, "");
+        if (prefix) output.push(prefix);
+        hiding = true;
+        return;
+      }
+      if (hiding) {
+        if (!trimmed) return;
+        if (SUPPLEMENTAL_CAVEAT_RE.test(normalized)) {
+          hiding = false;
+          return;
+        }
+        // Search responses are not consistently formatted as Markdown lists.
+        // Keep plain titles and multi-line excerpts hidden as well, and resume
+        // only when the answer declares a new composed section explicitly.
+        if (!COMPOSED_ANSWER_BOUNDARY_RE.test(normalized)) return;
+        hiding = false;
+      }
+      if (SUPPLEMENTAL_CAVEAT_RE.test(normalized)) return;
+      if (INTERNAL_RETRIEVAL_RE.test(normalized)) return;
+      if (FORBIDDEN_INTERNAL_IDENTIFIER_RE.test(normalized)) return;
+      if (MODEL_WORKFLOW_META_LINE_RE.test(normalized)) return;
+      if (INTERNAL_PROCESS_LINE_RE.test(normalized)) return;
+      output.push(line);
+    });
+
+    return output
+      .join("\n")
+      .replace(/^\s*(?:(?:根据|据|基于|结合)(?:本次|当前|现有)?(?:公开)?(?:网页)?(?:搜索|检索)(?:结果|资料|信息)?|搜索结果(?:显示|表明)|相关报道(?:还)?提到|补充资料(?:显示|表明))\s*[，,:：]\s*/gmu, "")
+      .replace(/^(?:基于|结合)[^。！？!?\n]{0,160}(?:交叉检索|检索材料|已核验事实|比赛记录)[^。！？!?\n]{0,100}(?:回答)?\s*[：:]\s*/u, "")
+      .replace(/[（(](?:已核验(?:的)?硬事实|依据公开报道(?:，?谨慎表述)?|基于公开报道(?:，?谨慎表述)?|交叉检索材料|结构化数据)[）)]/gu, "")
+      .replace(/^\s*(?:根据|据)(?:相关|现有)?公开(?:报道|资料|信息)\s*[，,:：]\s*/gmu, "")
+      .replace(/^\s*>?\s*(?:说明|注|备注)\s*[：:][^\n]{0,400}(?:结构化|检索|公开复盘|来源|官方\/?赛事录像|交叉核验)[^\n]*$/gmu, "")
+      .replace(/^\s*数据截至北京时间\s*[^\n]{0,120}(?:已核验|部分核验)[。.!！]?\s*$/gmu, "")
+      .replace(/^\s*(?:已经|已|目前)?(?:拿到|获得|取得|汇总(?:了)?|整理(?:了)?)[^。！？!?\n]{0,160}(?:硬事实|过程线索|检索材料|资料)[^。！？!?\n]{0,100}(?:综合回答|回答如下)?[。！？!?]?\s*$/gmu, "")
+      .replace(/(?:需要说明(?:的是|一点)?\s*[，,:：]?\s*)?(?:当前)?结构化(?:比赛)?记录(?:里|中)?(?:没有|未提供|缺少|不含)\s*([^，,。！？!?；;\n]{1,120})[，,]/gu, "目前缺少$1，")
+      .replace(/(?:打法|过程|战术)?细节(?:[（(][^）)]{0,140}[）)])?[^。！？!?；;\n]{0,80}(?:来自|依据|基于)[^。！？!?；;\n]{0,100}(?:公开)?(?:报道|资料|搜索|检索)(?:线索|材料)?[^。！？!?；;\n]{0,120}[；;]/gu, "因此无法可靠还原具体回合和反超节点；")
+      .replace(/(?:这些|以上)(?:信息|内容|数据)?(?:是|属于)?已核验(?:的)?硬事实/gu, "这些可以确认")
+      .replace(/^\s*(?:\*\*)?(?:当前)?可以确认的硬事实(?:\*\*)?\s*[：:]?\s*$/gmu, "**关键数据**")
+      .replace(/^\s*(?:\*\*)?可以推断的有限可能因素(?:\*\*)?\s*[：:]\s*/gmu, "**谨慎分析**：")
+      .replace(/[，,]\s*公开(?:报道|资料|网页)[^。！？!?；;\n]{0,220}(?:不一致|冲突)[^。！？!?；;\n]{0,160}[，,]/gu, "，")
+      .replace(/我不能凭空(?:替你|为你)?(?:还原|补全|编出)/gu, "因此暂时无法可靠还原")
+      .replace(/(?:本场(?:比赛)?|这场(?:比赛)?|该场(?:比赛)?|单场|G\s*\d+)(?:中)?\s*([\u4e00-\u9fffA-Za-z·.'’\-]{1,32})\s*(?:当选|获选|获评|获得|荣膺|拿下)(?:了)?\s*(?:本届)?\s*((?:(?:总决赛|系列赛)\s*(?:的)?\s*(?:MVP|最有价值球员))|FMVP)/giu, (_match, subject, award) => `${subject}最终当选${String(award).includes("系列赛") ? "系列赛" : "总决赛"} MVP`)
+      .replace(/(?:在\s*)?(?:本场(?:比赛)?|这场(?:比赛)?|该场(?:比赛)?|单场|G\s*\d+)(?:中)?\s*(?:当选|获选|获评|获得|荣膺|拿下)(?:了)?\s*(?:本届)?\s*((?:(?:总决赛|系列赛)\s*(?:的)?\s*(?:MVP|最有价值球员))|FMVP)/giu, (_match, award) => `最终当选${String(award).includes("系列赛") ? "系列赛" : "总决赛"} MVP`)
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }
+
+  function containsInternalImplementationText(value) {
+    const normalized = normalizeSupplementalLine(String(value ?? ""));
+    if (!normalized) return false;
+    return INTERNAL_SCALAR_RE.test(normalized)
+      || FORBIDDEN_INTERNAL_IDENTIFIER_RE.test(normalized)
+      || INTERNAL_PROCESS_LINE_RE.test(normalized)
+      || isSupplementalHeading(normalized);
+  }
+
+  function projectStreamingAnswer(markdown) {
+    const raw = String(markdown ?? "").replace(/\r\n?/g, "\n");
+    let projected = stripSupplementalEvidence(raw);
+    if (!raw || raw.endsWith("\n")) return projected;
+
+    // A stream can split an internal heading at any character ("搜" →
+    // "搜索摘" → "搜索摘要：").  Until that trailing fragment is either a
+    // complete safe sentence or clearly not an internal prefix, keep only the
+    // already-safe part of the answer on screen.
+    const trailingLine = raw.slice(raw.lastIndexOf("\n") + 1);
+    let suffixStart = 0;
+    for (const delimiter of ["。", "！", "？", "!", "?", "；", ";"]) {
+      suffixStart = Math.max(suffixStart, trailingLine.lastIndexOf(delimiter) + 1);
+    }
+    const unsafeSuffix = trailingLine.slice(suffixStart).trim();
+    const normalized = normalizeSupplementalLine(unsafeSuffix);
+    const folded = normalized.toLocaleLowerCase("en-US");
+    const potentialInternal = Boolean(normalized) && INTERNAL_STREAM_STARTS.some((label) => {
+      const foldedLabel = label.toLocaleLowerCase("en-US");
+      return foldedLabel.startsWith(folded) || folded.startsWith(foldedLabel);
+    });
+    if (!potentialInternal || !projected) return projected;
+    if (projected.endsWith(unsafeSuffix)) {
+      projected = projected.slice(0, -unsafeSuffix.length).trimEnd();
+    }
+    return projected;
+  }
+
+  // Expose only this pure, provider-neutral projection for browser smoke
+  // tests/embedders. It does not expose response metadata or search sources.
+  window.CourtsideMarkdownUtils = Object.freeze({
+    stripSupplementalEvidence,
+    projectStreamingAnswer,
+  });
+
+  // Render the small Markdown subset used by the API without injecting HTML.
+  // Agent/search answers commonly contain bullets; putting the whole answer
+  // in one <p> made those bullets run together in the browser even though
+  // the wire response contained line breaks.
+  function appendMarkdownContent(container, markdown, paragraphClass = "block-text-line") {
+    const lines = String(markdown ?? "").replace(/\r\n?/g, "\n").split("\n");
+    let list = null;
+    let listType = null;
+    const closeList = () => {
+      list = null;
+      listType = null;
+    };
+    lines.forEach((rawLine) => {
+      const line = rawLine.trim();
+      if (!line) {
+        closeList();
+        return;
+      }
+      const bullet = line.match(/^[-*]\s+(.+)$/);
+      const numbered = line.match(/^\d+[.)]\s+(.+)$/);
+      if (bullet || numbered) {
+        const nextType = numbered ? "ol" : "ul";
+        if (!list || listType !== nextType) {
+          closeList();
+          list = document.createElement(nextType);
+          list.className = "markdown-list";
+          container.append(list);
+          listType = nextType;
+        }
+        const item = document.createElement("li");
+        item.append(createTextWithBold((bullet || numbered)[1]));
+        list.append(item);
+        return;
+      }
+      closeList();
+      const paragraph = document.createElement("p");
+      paragraph.className = paragraphClass;
+      paragraph.append(createTextWithBold(line));
+      container.append(paragraph);
+    });
+  }
+
   function appendBlock(container, block, index) {
     if (!block || typeof block !== "object") return;
     const type = String(block.type || "text").toLowerCase();
     if (!["text", "analysis", "warning", "clarification", "no_data", "table", "fact"].includes(type)) return;
 
+    const rawLabel = String(block.label || "").trim();
+    if (isSupplementalHeading(rawLabel)) return;
+    const cleanLabel = stripSupplementalEvidence(rawLabel);
+    if (rawLabel && (!cleanLabel || INTERNAL_SCALAR_RE.test(normalizeSupplementalLine(cleanLabel)))) return;
+    const cleanContent = stripSupplementalEvidence(block.content || "");
+    if (["text", "analysis", "warning", "clarification", "no_data"].includes(type) && !cleanContent) {
+      return;
+    }
+
     if (type === "fact") {
+      if (containsInternalImplementationText(block.value)
+        || containsInternalImplementationText(block.unit)) return;
       let grid = $(".fact-grid.dynamic-facts", container);
       if (!grid) {
         grid = document.createElement("div");
@@ -1238,25 +1577,35 @@
       card.className = `fact-card accent-${["green", "orange", "blue"][index % 3]}`;
       const label = document.createElement("span");
       label.className = "fact-label";
-      label.textContent = block.label || "事实";
+      label.textContent = cleanLabel || "事实";
       const value = document.createElement("strong");
       value.className = "fact-value";
-      value.textContent = block.value === null || block.value === undefined ? "暂无数据" : String(block.value);
+      const projectedValue = stripSupplementalEvidence(block.value ?? "");
+      if (block.value !== null && block.value !== undefined && !projectedValue) return;
+      value.textContent = projectedValue || "暂无数据";
       const unit = document.createElement("span");
       unit.className = "fact-unit";
-      unit.textContent = block.unit || "";
+      unit.textContent = stripSupplementalEvidence(block.unit || "");
       card.append(label, value, unit);
       grid.append(card);
       return;
     }
 
     if (type === "table") {
+      const rawColumns = Array.isArray(block.columns) ? block.columns : [];
+      const rawRows = Array.isArray(block.rows) ? block.rows : [];
+      if (
+        containsInternalImplementationText(rawLabel)
+        || rawColumns.some((value) => containsInternalImplementationText(value))
+        || rawRows.some((row) => Array.isArray(row)
+          && row.some((value) => containsInternalImplementationText(value)))
+      ) return;
       const section = document.createElement("section");
       section.className = "answer-block table-block";
-      if (block.label) {
-        const label = document.createElement("div");
-        label.className = "block-label";
-        label.textContent = block.label;
+      if (cleanLabel) {
+      const label = document.createElement("div");
+      label.className = "block-label";
+        label.textContent = cleanLabel;
         section.append(label);
       }
       const wrap = document.createElement("div");
@@ -1265,16 +1614,19 @@
       table.className = "answer-table";
       const caption = document.createElement("caption");
       caption.className = "sr-only";
-      caption.textContent = block.label || "数据表格";
+      caption.textContent = cleanLabel || "数据表格";
       table.append(caption);
-      const columns = Array.isArray(block.columns) ? block.columns : [];
-      const rows = Array.isArray(block.rows) ? block.rows : [];
+      const columns = rawColumns;
+      const rows = rawRows;
       const thead = document.createElement("thead");
       const headRow = document.createElement("tr");
       columns.forEach((column) => {
         const th = document.createElement("th");
         th.scope = "col";
-        th.textContent = String(column ?? "");
+        const projectedColumn = stripSupplementalEvidence(column ?? "");
+        th.textContent = projectedColumn && !INTERNAL_SCALAR_RE.test(normalizeSupplementalLine(projectedColumn))
+          ? projectedColumn
+          : "—";
         headRow.append(th);
       });
       thead.append(headRow);
@@ -1285,7 +1637,12 @@
         columns.forEach((_column, columnIndex) => {
           const td = document.createElement("td");
           const value = row[columnIndex];
-          td.textContent = value === null || value === undefined ? "暂无数据" : String(value);
+          const projectedCell = stripSupplementalEvidence(value ?? "");
+          td.textContent = value === null || value === undefined
+            ? "暂无数据"
+            : projectedCell && !INTERNAL_SCALAR_RE.test(normalizeSupplementalLine(projectedCell))
+              ? projectedCell
+              : "—";
           tr.append(td);
         });
         tbody.append(tr);
@@ -1301,15 +1658,15 @@
     section.className = `answer-block ${type === "no_data" ? "no-data" : type}-block`;
     const label = document.createElement("div");
     label.className = "block-label";
-    label.textContent = block.label || (
+    label.textContent = cleanLabel || (
       type === "analysis" ? "分析" :
       type === "clarification" ? "需要补充条件" :
       type === "no_data" ? "暂无匹配记录" :
       type === "warning" ? "提示" : "事实"
     );
-    const text = document.createElement("p");
+    const text = document.createElement("div");
     text.className = "block-text";
-    text.append(createTextWithBold(block.content || ""));
+    appendMarkdownContent(text, cleanContent);
     section.append(label, text);
     container.append(section);
   }
@@ -1333,30 +1690,23 @@
       const latency = Number.isFinite(Number(value?.latency_ms)) && Number(value.latency_ms) > 0
         ? ` · ${Math.round(Number(value.latency_ms) / 100) / 10}s`
         : "";
-      if (conversational) {
-        return {
-          text: `智能分析${latency}`,
-          className: "agent",
-          title: "已完成智能回答",
-        };
-      }
       return {
-        text: `智能分析 · 已调用工具${latency}`,
+        text: `智能分析${latency}`,
         className: "agent",
-        title: "已通过受控 NBA 数据工具完成回答",
+        title: conversational ? "已完成智能回答" : "已完成智能分析与事实核验",
       };
     }
     if (mode === "model" && status === "used") {
       const latency = Number.isFinite(Number(value?.latency_ms)) && Number(value.latency_ms) > 0
         ? ` · ${Math.round(Number(value.latency_ms) / 100) / 10}s`
         : "";
-      return { text: `智能分析${latency}`, className: "model", title: "已完成受限模型分析" };
+      return { text: `智能分析${latency}`, className: "model", title: "已完成智能分析" };
     }
     if (mode === "fallback" && status === "disabled") {
-      return { text: "确定性模板", className: "fallback", title: "模型未启用，使用已核验模板" };
+      return { text: "已完成事实核验", className: "fallback", title: "已使用已核验事实回答" };
     }
     if (mode === "fallback") {
-      return { text: "Agent 回退 · 已核验事实", className: "fallback", title: "智能链路未完成，已回退到确定性核验事实" };
+      return { text: "已补充事实核验", className: "fallback", title: "回答已由已核验事实补充完成" };
     }
     if (conversational) {
       return { text: "会话处理", className: "deterministic", title: "由当前应用会话状态确定性回答" };
@@ -1365,14 +1715,12 @@
   }
 
   function renderSimpleMarkdown(container, markdown) {
-    const text = String(markdown || "").trim();
+    const text = stripSupplementalEvidence(markdown);
     if (!text) return;
-    text.split(/\n{2,}|\n/).filter(Boolean).forEach((line) => {
-      const paragraph = document.createElement("p");
-      paragraph.className = "assistant-plain answer-block";
-      paragraph.append(createTextWithBold(line.replace(/^[-*]\s+/, "")));
-      container.append(paragraph);
-    });
+    const content = document.createElement("div");
+    content.className = "assistant-plain answer-block";
+    appendMarkdownContent(content, text, "assistant-plain-line");
+    container.append(content);
   }
 
   function verifiedFinalWinnerName(game) {
@@ -1388,22 +1736,163 @@
     return String(winner || "").trim() || null;
   }
 
+  function teamAliasIndex(text, alias) {
+    const source = String(text || "");
+    const token = String(alias || "");
+    if (!source || !token) return -1;
+    if (!/^[a-z\s]+$/i.test(token)) return source.indexOf(token);
+    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+    const match = new RegExp(`(^|[^a-z])${escaped}(?=$|[^a-z])`, "i").exec(source);
+    return match ? match.index + match[1].length : -1;
+  }
+
+  function teamsMentionedIn(text) {
+    const hits = NBA_TEAM_ALIASES.map(([canonical, ...aliases]) => {
+      const indices = [canonical, ...aliases]
+        .map((alias) => teamAliasIndex(text, alias))
+        .filter((index) => index >= 0);
+      return indices.length ? { name: canonical, index: Math.min(...indices) } : null;
+    }).filter(Boolean);
+    hits.sort((left, right) => left.index - right.index);
+    return hits.map((hit) => hit.name);
+  }
+
+  function appendRecommendationEvidence(value, target) {
+    if (value == null) return;
+    if (Array.isArray(value)) {
+      value.forEach((item) => appendRecommendationEvidence(item, target));
+      return;
+    }
+    if (typeof value === "object") {
+      Object.values(value).forEach((item) => appendRecommendationEvidence(item, target));
+      return;
+    }
+    const text = String(value).trim();
+    if (text) target.push(text);
+  }
+
+  function verifiedRecommendationEvidence(response) {
+    const evidenceState = String(response?.evidence_state || "none").toLowerCase();
+    if (!new Set(["verified", "partial"]).has(evidenceState)) return "";
+    const evidence = [];
+    appendRecommendationEvidence(response?.answer_markdown, evidence);
+    (Array.isArray(response?.blocks) ? response.blocks : []).forEach((block) => {
+      appendRecommendationEvidence(block?.label, evidence);
+      appendRecommendationEvidence(block?.content, evidence);
+      appendRecommendationEvidence(block?.value, evidence);
+      appendRecommendationEvidence(block?.unit, evidence);
+      appendRecommendationEvidence(block?.columns, evidence);
+      appendRecommendationEvidence(block?.rows, evidence);
+    });
+    (Array.isArray(response?.corrections) ? response.corrections : []).forEach((correction) => {
+      appendRecommendationEvidence(correction?.message, evidence);
+    });
+    return evidence.join("\n");
+  }
+
+  function seriesRecommendationDetails(text) {
+    const source = String(text || "");
+    const isSeries = /系列赛|总决赛|季后赛|\bG\s*[1-7]\b|第[一二三四五六七1-7]场|收官战/i.test(source);
+    if (!isSeries) return { isSeries: false, maxGames: 0 };
+    let maxGames = 0;
+    for (const match of source.matchAll(/\bG\s*([1-7])\b/gi)) {
+      maxGames = Math.max(maxGames, Number(match[1]));
+    }
+    for (const match of source.matchAll(/(?:共|计入)\s*([1-7])\s*场/g)) {
+      maxGames = Math.max(maxGames, Number(match[1]));
+    }
+    for (const match of source.matchAll(/([0-4])\s*[–—-]\s*([0-4])/g)) {
+      const games = Number(match[1]) + Number(match[2]);
+      if (games >= 3) maxGames = Math.max(maxGames, games);
+    }
+    return { isSeries: true, maxGames };
+  }
+
+  function isContextualRecommendationQuestion(text) {
+    return /这轮|该轮|系列赛|这场|那场|哪一场|哪场|最精华|最精彩|最经典|最好看|最值得|收官战|转折点|刚才|上(?:一|个)场|最近(?:的)?一场|为什么不是|\bG\s*[1-7]\b/i.test(String(text || ""));
+  }
+
+  function updateRecommendationContext(response) {
+    const question = String(state.run?.message || "").trim();
+    const evidence = verifiedRecommendationEvidence(response);
+    const questionTeams = teamsMentionedIn(question);
+    const evidenceTeams = teamsMentionedIn(evidence);
+    const previous = state.recommendationContext;
+    let teams = null;
+
+    if (questionTeams.length === 2) {
+      teams = questionTeams;
+    } else if (questionTeams.length === 1) {
+      const counterpart = evidenceTeams.find((team) => team !== questionTeams[0]);
+      if (counterpart) teams = [questionTeams[0], counterpart];
+      else if (previous?.teams?.includes(questionTeams[0]) && isContextualRecommendationQuestion(question)) {
+        teams = previous.teams;
+      }
+    } else if (evidenceTeams.length === 2) {
+      teams = evidenceTeams;
+    } else if (
+      previous?.teams?.length === 2
+      && isContextualRecommendationQuestion(question)
+      && (evidenceTeams.length === 0 || previous.teams.every((team) => evidenceTeams.includes(team)))
+    ) {
+      teams = previous.teams;
+    }
+
+    if (!teams) {
+      state.recommendationContext = null;
+      return null;
+    }
+
+    const details = seriesRecommendationDetails(`${question}\n${evidence}`);
+    state.recommendationContext = {
+      teams: [...teams],
+      isSeries: details.isSeries || Boolean(previous?.isSeries && teams.every((team) => previous.teams.includes(team))),
+      maxGames: Math.max(
+        details.maxGames,
+        teams.every((team) => previous?.teams?.includes(team)) ? Number(previous?.maxGames || 0) : 0,
+      ),
+    };
+    return state.recommendationContext;
+  }
+
+  function contextualRecommendations(context) {
+    const [first, second] = context?.teams || [];
+    if (!first || !second) return [];
+    if (context.isSeries) {
+      return [
+        `${first} 与 ${second} 这轮哪场最值得回看？`,
+        "这轮系列赛的收官战是怎么赢下来的？",
+        context.maxGames >= 4
+          ? "比较这轮系列赛的 G2 和 G4。"
+          : "这轮系列赛的转折点是什么？",
+      ];
+    }
+    return [
+      `${first} 与 ${second} 最近一次交手结果如何？`,
+      "两队最近一次交手有哪些关键回合？",
+      `比较 ${first} 与 ${second} 的近期攻防表现。`,
+    ];
+  }
+
   function renderRecommendations(response) {
     if (!el.recommendations || !el.recommendationList) return;
     const game = state.activeGame;
     const home = game?.home_name || "这场比赛主队";
     const away = game?.away_name || "这场比赛客队";
-    const suggestions = [];
-    if (response?.follow_up) suggestions.push(String(response.follow_up));
+    let suggestions = [];
     if (game) {
       suggestions.push(`${away} 对 ${home} 谁得分最高？`);
       suggestions.push("这场比赛最后 5 秒发生了什么？");
       const winner = verifiedFinalWinnerName(game);
       if (winner) suggestions.push(`${winner} 为什么能赢下这场比赛？`);
     } else {
-      suggestions.push("今天有哪些 NBA 比赛？");
-      suggestions.push("最近一场比赛的关键回合是什么？");
-      suggestions.push("你能帮我做哪些 NBA 数据分析？");
+      const context = updateRecommendationContext(response);
+      suggestions = contextualRecommendations(context);
+      if (!suggestions.length) {
+        suggestions.push("今天有哪些 NBA 比赛？");
+        suggestions.push("最近一场比赛的关键回合是什么？");
+        suggestions.push("你能帮我做哪些 NBA 数据分析？");
+      }
     }
     const values = [...new Set(suggestions.map((item) => item.trim()).filter(Boolean))].slice(0, 3);
     el.recommendationList.textContent = "";
@@ -1419,6 +1908,12 @@
   }
 
   function renderError(container, response, retryable) {
+    if (Array.isArray(response?.notices) && response.notices.length) {
+      const noticeCard = document.createElement("div");
+      noticeCard.className = "answer-card capability-notice-card";
+      renderCapabilityNotices(noticeCard, response.notices);
+      if (noticeCard.children.length) container.append(noticeCard);
+    }
     const card = document.createElement("div");
     card.className = "error-card dynamic-error";
     const label = document.createElement("div");
@@ -1443,6 +1938,63 @@
     actions.append(ref);
     card.append(actions);
     container.append(card);
+  }
+
+  const CAPABILITY_NOTICE_DEFAULTS = Object.freeze({
+    INTELLIGENCE_QUOTA_EXHAUSTED: {
+      label: "智能分析提醒",
+      message: "智能分析额度已用完；已核验的赛事事实仍可查询，开放性分析暂时受限。",
+    },
+    SEARCH_QUOTA_EXHAUSTED: {
+      label: "在线搜索提醒",
+      message: "在线搜索额度已用完；本轮可能改用已有赛事事实或其他公开资料，最新内容可能不完整。",
+    },
+    SEARCH_CAPACITY_LIMITED: {
+      label: "在线搜索提醒",
+      message: "部分在线搜索额度已用完；本轮已使用其他公开资料，结果可能不完整。",
+    },
+    INTELLIGENCE_TEMPORARILY_UNAVAILABLE: {
+      label: "智能分析提醒",
+      message: "智能分析暂时不可用；已核验的赛事事实仍可查询，开放性分析可能受限。",
+    },
+    INTELLIGENCE_AUTH_UNAVAILABLE: {
+      label: "智能分析提醒",
+      message: "智能分析当前不可用；已核验的赛事事实仍可查询，开放性分析暂时受限。",
+    },
+    SEARCH_TEMPORARILY_UNAVAILABLE: {
+      label: "在线搜索提醒",
+      message: "在线搜索暂时不可用，当前无法补充最新网页资料；已核验比赛仍可查询。",
+    },
+    SEARCH_AUTH_UNAVAILABLE: {
+      label: "在线搜索提醒",
+      message: "在线搜索当前不可用，暂时无法补充最新网页资料；已核验比赛仍可查询。",
+    },
+  });
+
+  function renderCapabilityNotices(container, notices) {
+    if (!Array.isArray(notices) || !notices.length) return;
+    const seen = new Set();
+    notices.forEach((notice) => {
+      if (!notice || typeof notice !== "object") return;
+      const code = String(notice.code || "").trim().toUpperCase();
+      const fallback = CAPABILITY_NOTICE_DEFAULTS[code];
+      if (!fallback || seen.has(code)) return;
+      seen.add(code);
+      // Do not render arbitrary upstream text here.  Capability notices use
+      // application-owned wording so a dependency name or billing detail can
+      // never leak through a successful chat envelope.
+      const section = document.createElement("section");
+      section.className = "answer-block warning-block capability-notice";
+      section.dataset.noticeCode = code;
+      const label = document.createElement("div");
+      label.className = "block-label";
+      label.textContent = fallback.label;
+      const text = document.createElement("div");
+      text.className = "block-text";
+      appendMarkdownContent(text, fallback.message);
+      section.append(label, text);
+      container.append(section);
+    });
   }
 
   function renderCompletedAnswer(placeholder, response) {
@@ -1472,6 +2024,11 @@
 
     const card = document.createElement("div");
     card.className = "answer-card dynamic-answer";
+
+    // Quota exhaustion is a capability state, not an empty-data result.  Keep
+    // any usable cached answer, but make the missing online capability
+    // impossible to overlook at the top of the answer card.
+    renderCapabilityNotices(card, response.notices);
 
     if (Array.isArray(response.corrections) && response.corrections.length) {
       response.corrections.forEach((correction) => {
@@ -1569,7 +2126,8 @@
   function updateStreamingText(run, text) {
     if (!run || !run.placeholder) return;
     run.partialText += text;
-    run.placeholder.bubble.textContent = run.partialText;
+    const projected = projectStreamingAnswer(run.partialText);
+    run.placeholder.bubble.textContent = projected || "正在整理回答…";
     scrollChat();
   }
 
@@ -1967,22 +2525,36 @@
         requireLogin("登录已失效，请重新登录。");
         return;
       }
-      // Auto-fallback is intentionally limited to transport failures.  A
-      // valid API error must remain visible so the user can retry it.
       if (error?.network !== false) {
-        // Stop sending subsequent questions into the same broken transport.
-        // A page reload/probe can re-enable the API, while the current session
-        // remains immediately usable through the deterministic fixture.
+        const allowFixtureFallback = fixtureTransportEnabled();
         state.apiAvailable = false;
         state.apiProbeComplete = true;
-        state.run = null;
-        placeholder.article.remove();
-        setComposerBusy(false);
-        setStreamStatus(false);
-        setTransportLabel(false);
-        setConnection("ready", "离线演示");
-        showToast("API 暂不可用，已切换到离线演示");
-        startDemoRun(message, { reuseUser: true, clientMessageId });
+        setTransportLabel(false, state.apiDataMode);
+        if (allowFixtureFallback) {
+          // Only an explicitly configured fixture profile may replace the
+          // failed request with the local deterministic snapshot.
+          state.run = null;
+          placeholder.article.remove();
+          setComposerBusy(false);
+          setStreamStatus(false);
+          setWelcomeForOfflineFixture();
+          setConnection("ready", "离线演示");
+          showToast("演示服务暂不可用，已使用显式启用的离线快照");
+          startDemoRun(message, { reuseUser: true, clientMessageId });
+          return;
+        }
+        setWelcomeForUnavailableTransport();
+        showToast("数据连接已中断，可点击重试");
+        finishRun({
+          request_id: run.requestId || makeId("request"),
+          session_id: state.sessionId,
+          status: "failed",
+          error: {
+            code: "NETWORK_UNAVAILABLE",
+            retryable: true,
+            message: "数据连接暂时中断，请检查网络后重试。",
+          },
+        });
         return;
       }
       finishRun(error.publicPayload || {
@@ -1995,22 +2567,66 @@
     return true;
   }
 
+  function startUnavailableRun(message, options = {}) {
+    const clientMessageId = options.clientMessageId || makeId("client");
+    const intelligenceMode = options.intelligenceMode || state.intelligenceMode;
+    if (!options.reuseUser) appendUserMessage(message);
+    const placeholder = createAssistantPlaceholder();
+    state.run = {
+      message,
+      clientMessageId,
+      requestId: null,
+      placeholder,
+      partialText: "",
+      timers: [],
+      started: false,
+      branch: null,
+      live: false,
+      abortController: null,
+      intelligenceMode,
+      selectedGameId: selectedGameIdForRequest(),
+    };
+    setWelcomeForUnavailableTransport();
+    setTransportLabel(false, state.apiDataMode);
+    finishRun({
+      request_id: makeId("request"),
+      session_id: state.sessionId,
+      status: "failed",
+      error: {
+        code: "NETWORK_UNAVAILABLE",
+        retryable: true,
+        message: "公开赛事数据服务暂时不可用，请检查网络后重试。",
+      },
+    });
+    return true;
+  }
+
   function startRequest(message, options = {}) {
     if (state.authEnabled && !state.authenticated) {
       requireLogin();
       return false;
     }
-    // An explicit game reference in the new question supersedes whichever
-    // highlights card was selected earlier.  Without this reconciliation the
-    // stale card ID is sent on every turn and can make a follow-up resolve to
-    // an unrelated game.
-    syncActiveGameToQuestion(message);
+    // A selected card is changed only by an explicit card click.  If the
+    // message names another game, the server parser handles that condition
+    // for this turn without changing the UI's drill-down scope.
     syncSelectedGameState();
-    if (!options.forceDemo && state.apiAvailable && window.CourtsideApi) {
+    const fixtureEnabled = fixtureTransportEnabled();
+    const apiConfigured = Boolean(window.CourtsideApi?.baseUrl);
+    if (options.forceDemo && fixtureEnabled) {
+      startDemoRun(message, options);
+      return true;
+    }
+    // In public/live mode, a failed health probe is not permission to use
+    // fixture facts.  Let the user retry the configured API directly: the
+    // chat endpoint may already be healthy even if the short probe failed.
+    if (apiConfigured && (state.apiAvailable || !fixtureEnabled)) {
       return startApiRun(message, options);
     }
-    startDemoRun(message, options);
-    return true;
+    if (fixtureEnabled) {
+      startDemoRun(message, options);
+      return true;
+    }
+    return startUnavailableRun(message, options);
   }
 
   function chunkText(text, size) {
@@ -2060,8 +2676,9 @@
     state.sessionId = makeId("session");
     state.lastRequest = null;
     state.contextRequest = null;
+    state.recommendationContext = null;
     state.retryCount = 0;
-    state.intelligenceMode = "hybrid";
+    state.intelligenceMode = state.defaultIntelligenceMode || "hybrid";
     // A new chat is also a new game-context boundary. Keep the reusable
     // highlights list visible, but remove its selected card so the next
     // request cannot silently seed the fresh server session with the prior
@@ -2071,7 +2688,8 @@
     state.activeGame = null;
     state.activePbp = null;
     state.selectedGameId = null;
-    if (el.intelligenceMode) el.intelligenceMode.checked = false;
+    setConversationScope(null);
+    if (el.intelligenceMode) el.intelligenceMode.checked = state.intelligenceMode === "full";
     try {
       window.sessionStorage.setItem(STORAGE_KEY, state.sessionId);
     } catch (_error) {
@@ -2112,11 +2730,139 @@
     });
   }
 
+  function setConversationScope(game = null) {
+    if (!el.conversationScope) return;
+    const drilldown = Boolean(game && game.game_id);
+    el.conversationScope.textContent = drilldown ? "赛事下钻" : "漫游模式";
+    el.conversationScope.title = drilldown
+      ? "已注入当前选中比赛上下文；点击此处退出赛事下钻"
+      : "未选择具体比赛；问题按 NBA 全局范围理解，可先问赛程、球员或新闻";
+    el.conversationScope.dataset.scope = drilldown ? "drilldown" : "roaming";
+    el.conversationScope.setAttribute("aria-pressed", drilldown ? "true" : "false");
+  }
+
+  function exitGameDrilldown() {
+    if (!state.activeGame && !state.selectedGameId) return;
+    clearSelectedGameContext();
+    showToast("已返回漫游模式，后续问题不再绑定具体比赛");
+  }
+
+  const REGULATION_PERIODS = ["Q1", "Q2", "Q3", "Q4"];
+  const REPLAY_PERIODS = [...REGULATION_PERIODS, "OT"];
+
+  function eventScore(event) {
+    if (event?.away == null || event?.home == null) return null;
+    const away = Number(event?.away);
+    const home = Number(event?.home);
+    if (!Number.isInteger(away) || away < 0 || !Number.isInteger(home) || home < 0) {
+      return null;
+    }
+    return { away, home };
+  }
+
+  function clockAtPeriodEnd(value) {
+    const normalized = String(value || "").trim();
+    const match = normalized.match(/^(?:(\d+):)?(\d+(?:\.\d+)?)$/);
+    if (!match) return false;
+    const minutes = Number(match[1] || 0);
+    const seconds = Number(match[2]);
+    return Number.isFinite(minutes) && Number.isFinite(seconds)
+      && minutes === 0 && seconds === 0;
+  }
+
+  function clockAtRegulationPeriodStart(value) {
+    const normalized = String(value || "").trim();
+    const match = normalized.match(/^(\d+):(\d+(?:\.\d+)?)$/);
+    if (!match) return false;
+    return Number(match[1]) === 12 && Number(match[2]) === 0;
+  }
+
+  function scoreMatchesFinal(score, game) {
+    return score
+      && Number.isInteger(game?.away_score)
+      && Number.isInteger(game?.home_score)
+      && score.away === Number(game.away_score)
+      && score.home === Number(game.home_score);
+  }
+
+  function periodEndScore(pbp, period, game) {
+    const events = Array.isArray(pbp?.[period]) ? pbp[period] : [];
+    const scoredEvents = events.filter((event) => eventScore(event));
+    const last = scoredEvents[scoredEvents.length - 1];
+    const score = eventScore(last);
+    if (!score) return null;
+
+    const endCopy = `${last?.player || ""} ${last?.action || ""} ${last?.detail || ""}`;
+    const explicitPeriodEnd = clockAtPeriodEnd(last?.clock)
+      || /(?:节|比赛|quarter|period|game).{0,8}(?:结束|终场|完毕|end)/i.test(endCopy)
+      || /(?:结束|终场|end).{0,8}(?:节|比赛|quarter|period|game)/i.test(endCopy);
+    if (explicitPeriodEnd) return score;
+
+    const periodIndex = REGULATION_PERIODS.indexOf(period);
+    if (periodIndex >= 0 && periodIndex < REGULATION_PERIODS.length - 1) {
+      const nextPeriod = REGULATION_PERIODS[periodIndex + 1];
+      const nextEvents = Array.isArray(pbp?.[nextPeriod]) ? pbp[nextPeriod] : [];
+      const nextFirst = nextEvents.find((event) => eventScore(event));
+      const nextScore = eventScore(nextFirst);
+      const startCopy = `${nextFirst?.player || ""} ${nextFirst?.action || ""} ${nextFirst?.detail || ""}`;
+      const explicitNextStart = /(?:节|quarter|period).{0,8}(?:开始|start)/i.test(startCopy)
+        || /(?:开始|start).{0,8}(?:节|quarter|period)/i.test(startCopy)
+        || clockAtRegulationPeriodStart(nextFirst?.clock);
+      // Hupu places the previous quarter's final cumulative score on the
+      // following quarter's 12:00 "开始" row.  Treat only that boundary row as
+      // an endpoint; an arbitrary early play in the next period is not safe.
+      if (nextScore && explicitNextStart) return nextScore;
+    }
+
+    // The final scoring play often occurs a few seconds before the horn and
+    // no separate 0:00 row is supplied.  The official final score makes that
+    // last Q4 cumulative score a trustworthy endpoint.
+    if (period === "Q4" && statusLabel(game?.status) === "FINAL" && scoreMatchesFinal(score, game)) {
+      return score;
+    }
+    return null;
+  }
+
+  function deriveRegulationQuarterScores(pbp, game) {
+    const cumulative = REGULATION_PERIODS.map((period) => periodEndScore(pbp, period, game));
+    // For a final game, reject the entire derived strip if the last cumulative
+    // score disagrees with the authoritative scoreboard.
+    if (statusLabel(game?.status) === "FINAL" && !scoreMatchesFinal(cumulative[3], game)) {
+      return {};
+    }
+
+    const output = {};
+    let previous = { away: 0, home: 0 };
+    for (let index = 0; index < REGULATION_PERIODS.length; index += 1) {
+      const score = cumulative[index];
+      if (!score || score.away < previous.away || score.home < previous.home) break;
+      output[REGULATION_PERIODS[index]] = `${score.away - previous.away}–${score.home - previous.home}`;
+      previous = score;
+    }
+    return output;
+  }
+
+  function isTerminalReplaySelection(events) {
+    if (statusLabel(state.activeGame?.status) !== "FINAL") return false;
+    if (!events.length || state.pbpIndex !== events.length - 1) return false;
+    const currentIndex = REPLAY_PERIODS.indexOf(state.currentPeriod);
+    if (currentIndex < 0) return false;
+    const pbp = currentPbp();
+    return !REPLAY_PERIODS.slice(currentIndex + 1).some((period) => {
+      return Array.isArray(pbp?.[period]) && pbp[period].length;
+    });
+  }
+
   function applyGameToHud(game) {
     const gameNumber = game.series_game_number ? `G${game.series_game_number}` : "GAME";
-    const pbp = pbpForGame(game.game_id);
+    const pbp = state.activePbp || pbpForGame(game.game_id);
     const fixture = allFixtureGames().find((item) => item.game_id === game.game_id);
-    const quarterScores = game.quarter_scores || fixture?.quarter_scores || {};
+    const derivedQuarterScores = deriveRegulationQuarterScores(pbp, game);
+    const quarterScores = {
+      ...derivedQuarterScores,
+      ...(fixture?.quarter_scores || {}),
+      ...(game.quarter_scores || {}),
+    };
     setTeamToken(el.hudAwayToken, game.away_abbreviation || "AWAY");
     setTeamToken(el.hudHomeToken, game.home_abbreviation || "HOME");
     if (el.hudAwayName) el.hudAwayName.textContent = game.away_name || "客队";
@@ -2179,7 +2925,7 @@
   function isDemoGame(game) {
     return String(game?.data_origin || "none").toLowerCase() === "demo_snapshot"
       || String(game?.game_id || "").startsWith("2026-demo-")
-      || state.apiDataMode === "fixture";
+      || state.apiDataMode === "demo";
   }
 
   function pbpForGame(gameId) {
@@ -2322,7 +3068,7 @@
     el.gameList.textContent = "";
     const resolvedLabel = listLabel || (state.highlightMode === "history"
       ? state.historyView === "range" ? "时间区间比赛" : "最近 5 场比赛"
-      : "当日比赛");
+      : "漫游模式");
     if (el.gamesSectionTitle) el.gamesSectionTitle.textContent = resolvedLabel;
     if (el.gameListCount) el.gameListCount.textContent = `${String(values.length).padStart(2, "0")} 场`;
     if (el.gamesSection) el.gamesSection.hidden = !values.length;
@@ -2400,7 +3146,7 @@
     if (!game || !el.featuredGame) return;
     const safeDate = dateValue || state.highlightDate || "";
     el.featuredGame.hidden = false;
-    el.featuredGame.setAttribute("aria-label", `查看${game.home_name || "主队"}与${game.away_name || "客队"}的比赛回放`);
+    el.featuredGame.setAttribute("aria-label", `进入${game.home_name || "主队"}与${game.away_name || "客队"}的赛事下钻`);
     setTeamToken(el.featuredHomeToken, game.home_abbreviation || "HOME");
     setTeamToken(el.featuredAwayToken, game.away_abbreviation || "AWAY");
     if (el.featuredHomeName) el.featuredHomeName.textContent = game.home_name || "主队";
@@ -2418,9 +3164,8 @@
     if (scores[0]) scores[0].textContent = game.home_score == null ? "—" : String(game.home_score);
     if (scores[1]) scores[1].textContent = game.away_score == null ? "—" : String(game.away_score);
     if (el.featuredGameFoot) {
-      const todayLabel = safeDate === beijingDateString() ? "今日赛事" : "演示赛事";
       const historyLabel = options.historyLabel || "精彩回顾";
-      el.featuredGameFoot.textContent = `${formatShortDate(safeDate)} · ${mode === "history" ? historyLabel : todayLabel}`;
+      el.featuredGameFoot.textContent = `${formatShortDate(safeDate)} · ${mode === "history" ? historyLabel : "赛事下钻"}`;
     }
   }
 
@@ -2430,6 +3175,7 @@
     if (!game) return false;
     state.activeGame = game;
     state.selectedGameId = targetId;
+    setConversationScope(game);
     state.activePbp = state.apiAvailable ? null : pbpForGame(targetId);
     updateGameListSelection();
     renderFeaturedGame(game, state.highlightMode, state.highlightDate);
@@ -2451,6 +3197,22 @@
       );
     }
     return true;
+  }
+
+  function clearSelectedGameContext() {
+    if (!state.activeGame && !state.selectedGameId) return;
+    state.detailRequest += 1;
+    state.detailLoadingGameId = null;
+    state.activeGame = null;
+    state.activePbp = null;
+    state.selectedGameId = null;
+    setConversationScope(null);
+    updateGameListSelection();
+    resetHud();
+    renderPbp("Q4");
+    if (el.recommendations && !el.recommendations.hidden) {
+      renderRecommendations({ follow_up: null });
+    }
   }
 
   function explicitGameForQuestion(text) {
@@ -2508,14 +3270,6 @@
     return includesAlias(homeAliases) && includesAlias(awayAliases);
   }
 
-  function syncActiveGameToQuestion(text) {
-    const game = explicitGameForQuestion(text);
-    if (!game || String(game.game_id) === String(state.activeGame?.game_id || "")) return;
-    // Use the same selection reducer as a card click, but avoid a toast that
-    // would interrupt the answer flow while the user is typing.
-    selectActiveGame(String(game.game_id));
-  }
-
   // The selected card ID is the request's source of truth.  Chat previously
   // read activeGame directly while the visual selection was driven by
   // selectedGameId; an async list/detail refresh could render one matchup
@@ -2537,6 +3291,8 @@
     const id = selectedGameIdForRequest();
     if (!id) {
       state.selectedGameId = null;
+      state.activeGame = null;
+      setConversationScope(null);
       return null;
     }
     state.selectedGameId = id;
@@ -2546,14 +3302,20 @@
     if (listed && String(state.activeGame?.game_id || "") !== id) {
       state.activeGame = listed;
     }
+    setConversationScope(state.activeGame);
     return id;
   }
 
   function renderHighlightProjection(games, mode, dateValue, options = {}) {
     cancelHighlightsLoading();
-    const values = normalizeHighlightGames(games);
-    const previousId = state.selectedGameId;
-    const game = values.find((item) => String(item.game_id) === String(previousId || "")) || values[0];
+    // Roaming is intentionally not a date projection.  Never paint a cached
+    // or fixture game in this mode: the user must opt into 赛事下钻 first.
+    const values = mode === "roaming" ? [] : normalizeHighlightGames(games);
+    // Showing the first card is useful for discovery, but it must not inject
+    // that game's context into chat.  Every new projection starts in roaming
+    // scope; only an explicit card click enters “赛事下钻”.
+    const selectedGame = null;
+    const featuredGame = selectedGame || values[0] || null;
     state.highlightGames = values;
     state.highlightMode = mode;
     if (mode === "history") {
@@ -2569,53 +3331,56 @@
     });
     setHistoryControls(mode, state.historyView);
     setHistoryStatus();
-    const todayButton = el.highlightModes.find((button) => button.dataset.highlightMode === "today");
-    const todayStatus = state.apiAvailable ? availabilityForDate(beijingDateString()) : "available";
-    if (todayButton) {
-      // Keep the mode switch reachable even on an off day: selecting “今日
-      // 赛事” should show the truthful empty state rather than trapping the
-      // user in history. Only individual calendar dates are non-selectable.
-      todayButton.disabled = false;
-      todayButton.classList.toggle("no-games", todayStatus === "empty");
-      todayButton.setAttribute("aria-disabled", "false");
-      if (todayStatus === "empty") todayButton.setAttribute("title", "今日没有比赛");
-      else if (["unknown", "loading", "error"].includes(todayStatus)) todayButton.setAttribute("title", "今日赛程尚未核验");
-      else todayButton.removeAttribute("title");
+    const roamingButton = el.highlightModes.find((button) => button.dataset.highlightMode === "roaming");
+    if (roamingButton) {
+      roamingButton.disabled = false;
+      roamingButton.classList.remove("no-games");
+      roamingButton.setAttribute("aria-disabled", "false");
+      roamingButton.removeAttribute("title");
     }
     const safeDate = dateValue || state.highlightDate || "";
     syncHighlightDatePicker(mode, safeDate);
     const historyTitle = options.historyTitle
       || (state.historyView === "range" && options.rangeFrom && options.rangeTo
         ? `精彩回顾 · ${formatShortDate(options.rangeFrom)}—${formatShortDate(options.rangeTo)}`
-        : "精彩回顾 · 最近 5 场");
+        : state.historyView === "date" && safeDate
+          ? `精彩回顾 · ${formatShortDate(safeDate)}`
+          : "精彩回顾 · 最近 5 场");
     const historyDivider = options.historyTitle || historyTitle;
     const listLabel = options.listLabel
-      || (mode === "history" ? (state.historyView === "range" ? "时间区间比赛" : "最近 5 场比赛") : "当日比赛");
+      || (mode === "history"
+        ? (state.historyView === "range" ? "时间区间比赛" : state.historyView === "date" ? "当天比赛" : "最近 5 场比赛")
+        : "漫游模式");
     if (el.highlightsTitle) {
-      el.highlightsTitle.textContent = mode === "history" ? historyTitle : "今日赛事";
+      el.highlightsTitle.textContent = mode === "history" ? historyTitle : "漫游模式";
+    }
+    if (el.highlightsBadgeLabel) {
+      el.highlightsBadgeLabel.textContent = mode === "history" ? "REPLAY" : "ROAM";
+      el.highlightsBadgeLabel.parentElement?.classList.toggle("roam-badge", mode !== "history");
     }
     if (el.dayDivider) {
       const dividerText = mode === "history"
         ? historyDivider
-        : (state.apiAvailable && safeDate === beijingDateString()
-          ? `今天 · ${formatShortDate(safeDate)}`
-          : `演示日期 · ${formatShortDate(safeDate)}`);
+        : "漫游模式 · 不绑定具体比赛";
       const label = $("span", el.dayDivider);
       if (label) label.textContent = dividerText;
     }
-    if (!game) {
+    if (!featuredGame) {
       state.activeGame = null;
       state.selectedGameId = null;
       state.activePbp = null;
+      setConversationScope(null);
       el.featuredGame.hidden = true;
       renderGameList([], listLabel);
       if (el.highlightsEmpty) {
         // Reset a transient validation message before rendering a normal
         // empty-date response.
-        el.highlightsEmpty.textContent = mode === "today" && safeDate === beijingDateString()
-          ? "今天没有 NBA 比赛；切换到“精彩回顾”查看已结束比赛。"
+        el.highlightsEmpty.textContent = mode === "roaming"
+          ? options.emptyMessage || "漫游模式不绑定具体比赛，可直接提问；进入“赛事下钻”后选择比赛查看详情。"
           : options.emptyMessage || (state.historyView === "range"
             ? "该时间范围暂无可用比赛记录。"
+            : state.historyView === "date"
+              ? `${formatShortDate(safeDate)} 暂无可用比赛记录。`
             : "最近暂无可用比赛记录。");
         el.highlightsEmpty.hidden = false;
         el.highlightsEmpty.classList.remove("is-loading");
@@ -2624,19 +3389,22 @@
       renderPbp("Q4");
       return;
     }
-    state.activeGame = game;
-    state.selectedGameId = String(game.game_id);
-    state.activePbp = state.apiAvailable ? null : pbpForGame(game.game_id);
+    state.activeGame = selectedGame;
+    state.selectedGameId = selectedGame ? String(selectedGame.game_id) : null;
+    state.activePbp = selectedGame && !state.apiAvailable ? pbpForGame(selectedGame.game_id) : null;
+    setConversationScope(selectedGame);
     renderGameList(values, listLabel);
-    renderFeaturedGame(game, mode, dateValue, {
+    renderFeaturedGame(featuredGame, mode, dateValue, {
       historyLabel: state.historyView === "range" ? "自定义时间" : "最近 5 场",
     });
     if (el.highlightsEmpty) el.highlightsEmpty.hidden = true;
-    applyGameToHud(game);
-    renderPbp(defaultPbpPeriod(state.activePbp));
-    loadGameDetail(game);
-    if (el.recommendations && !el.recommendations.hidden && String(previousId || "") !== String(game.game_id)) {
-      renderRecommendations({ follow_up: null });
+    if (selectedGame) {
+      applyGameToHud(selectedGame);
+      renderPbp(defaultPbpPeriod(state.activePbp));
+      loadGameDetail(selectedGame);
+    } else {
+      resetHud();
+      renderPbp("Q4");
     }
   }
 
@@ -2660,6 +3428,10 @@
     const requestNumber = ++state.highlightRequest;
     state.highlightMode = "history";
     state.historyView = "recent";
+    // Switching the visible projection is a context boundary. Clear the
+    // clicked game before the request returns so a quick follow-up cannot
+    // carry the previous list's selected_game_id.
+    clearSelectedGameContext();
     setHistoryControls("history", "recent");
     renderHighlightsLoading("正在拉取最近 5 场比赛…", requestNumber);
     if (state.apiAvailable && window.CourtsideApi?.highlightsRecent) {
@@ -2692,11 +3464,22 @@
           setHistoryStatus(`拉取失败：${message}`, true, "error");
           return;
         }
-        setTransportLabel(false);
+        if (!fixtureTransportEnabled()) {
+          handleHighlightTransportFailure(
+            error?.message || "历史比赛连接暂时不可用。",
+            "history",
+          );
+          return;
+        }
+        setTransportLabel(false, state.apiDataMode);
         state.apiAvailable = false;
       }
     }
     if (requestNumber !== state.highlightRequest) return;
+    if (!fixtureTransportEnabled()) {
+      handleHighlightTransportFailure("公开历史比赛服务暂时不可用。", "history");
+      return;
+    }
     const fallback = fixtureGamesInRange("1900-01-01", beijingDateString(), 5);
     const endDate = fallback[0]?.date || beijingDateString();
     renderHighlightProjection(fallback, "history", endDate, {
@@ -2704,7 +3487,7 @@
       historyTitle: "精彩回顾 · 最近 5 场",
       listLabel: "最近 5 场比赛",
     });
-    if (!state.apiProbeComplete || !state.apiAvailable) {
+    if (fixtureTransportEnabled() && (!state.apiProbeComplete || !state.apiAvailable)) {
       setConnection("ready", "离线演示");
       setHistoryStatus("已展示最近 5 场演示数据。", true, "offline");
     }
@@ -2732,6 +3515,7 @@
     state.historyView = "range";
     state.historyRangeFrom = fromDate;
     state.historyRangeTo = toDate;
+    clearSelectedGameContext();
     if (el.historyFrom) el.historyFrom.value = fromDate;
     if (el.historyTo) el.historyTo.value = toDate;
     setHistoryControls("history", "range");
@@ -2772,11 +3556,22 @@
           setHistoryStatus(`拉取失败：${message}`, true, "error");
           return;
         }
-        setTransportLabel(false);
+        if (!fixtureTransportEnabled()) {
+          handleHighlightTransportFailure(
+            error?.message || "历史比赛连接暂时不可用。",
+            "range",
+          );
+          return;
+        }
+        setTransportLabel(false, state.apiDataMode);
         state.apiAvailable = false;
       }
     }
     if (requestNumber !== state.highlightRequest) return;
+    if (!fixtureTransportEnabled()) {
+      handleHighlightTransportFailure("公开历史比赛服务暂时不可用。", "range");
+      return;
+    }
     const fallback = fixtureGamesInRange(fromDate, toDate);
     renderHighlightProjection(fallback, "history", toDate, {
       historyView: "range",
@@ -2785,34 +3580,40 @@
       historyTitle: `精彩回顾 · ${formatShortDate(fromDate)}—${formatShortDate(toDate)}`,
       listLabel: "时间区间比赛",
     });
-    if (!state.apiProbeComplete || !state.apiAvailable) {
+    if (fixtureTransportEnabled() && (!state.apiProbeComplete || !state.apiAvailable)) {
       setConnection("ready", "离线演示");
       setHistoryStatus("已展示区间内演示数据。", true, "offline");
     }
   }
 
   async function loadHighlights(mode, selectedDate) {
+    // The old day-only projection is no longer a standalone mode. Today can be located
+    // from the date picker after entering 赛事下钻; any legacy caller that
+    // still asks for the old mode is deliberately redirected to roaming and
+    // must not issue a date-scoped request or paint a stale snapshot.
+    if (mode === "today") {
+      setHighlightsMode("roaming");
+      return;
+    }
     const requestNumber = ++state.highlightRequest;
     const fallbackDate = selectedDate || "2026-06-12";
     // Record the requested mode synchronously so an API probe finishing later
     // cannot overwrite a user's in-flight history selection.
     state.highlightMode = mode;
+    if (mode === "today" || mode === "history") {
+      clearSelectedGameContext();
+    }
     if (mode === "history" && selectedDate) {
       state.highlightDate = selectedDate;
       state.historyDate = selectedDate;
     }
     if (state.apiAvailable && window.CourtsideApi) {
-      renderHighlightsLoading(
-        mode === "today" ? "正在拉取今日赛事…" : "正在拉取比赛…",
-        requestNumber,
-      );
+      renderHighlightsLoading("正在拉取比赛…", requestNumber);
       try {
         // In live/hybrid deployments send the browser's Beijing date
         // explicitly. Fixture mode intentionally keeps the unscoped request
         // so its reproducible demo day remains available offline.
-        const requestedDate = mode === "today" && state.apiDataMode !== "fixture"
-          ? (selectedDate || beijingDateString())
-          : mode === "today" ? null : selectedDate;
+        const requestedDate = selectedDate;
         const payload = await window.CourtsideApi.highlights(
           requestedDate,
           "Asia/Shanghai",
@@ -2851,21 +3652,14 @@
           }
           return;
         }
-        // A connected API that cannot answer today's projection must never
-        // silently fall back to the fixed interview snapshot: that would
-        // present an old game as if it were happening today. Keep the empty
-        // state explicit and let the user retry after the service recovers.
-        if (mode === "today") {
-          state.apiAvailable = false;
-          state.apiProbeComplete = true;
-          setTransportLabel(false);
-          clearHighlightProjection("今日赛事暂时无法获取，请稍后重试。\n历史比赛可切换到“精彩回顾”。");
-          setHistoryStatus("拉取失败：今日赛事暂时不可用，请稍后重试。", true, "error");
-          setConnection("error", "今日赛事暂不可用");
-          showToast("今日赛事暂时无法获取，请稍后重试");
+        if (!fixtureTransportEnabled()) {
+          handleHighlightTransportFailure(
+            publicError?.message || error?.message || "日期赛事连接暂时不可用。",
+            "date",
+          );
           return;
         }
-        setTransportLabel(false);
+        setTransportLabel(false, state.apiDataMode);
         state.apiAvailable = false;
         // Drop in-flight/verified API availability when falling back to the
         // deterministic preview. Otherwise a late live response could mix
@@ -2877,11 +3671,15 @@
         seedFixtureAvailability();
       }
     }
+    if (!fixtureTransportEnabled()) {
+      handleHighlightTransportFailure("公开日期赛事服务暂时不可用。", "date");
+      return;
+    }
     const fixtureGames = fixtureGamesForDate(fallbackDate);
-    recordHighlightAvailability(fallbackDate, Boolean(fixtureGames.length), "fixture");
+    recordHighlightAvailability(fallbackDate, Boolean(fixtureGames.length), "demo_snapshot");
     renderHighlightProjection(fixtureGames, mode, fallbackDate);
     if (!fixtureGames.length && mode === "history") showToast("该日期暂无比赛记录");
-    if (state.apiProbeComplete && !state.apiAvailable) {
+    if (fixtureTransportEnabled() && state.apiProbeComplete && !state.apiAvailable) {
       setConnection("ready", "离线演示");
     }
   }
@@ -2891,10 +3689,14 @@
       loadRecentHighlights();
       return;
     }
-    const selectedDate = mode === "today"
-      ? (state.apiAvailable ? beijingDateString() : "2026-06-12")
-      : "2026-06-12";
-    loadHighlights("today", selectedDate);
+    // Returning to roaming is a local state transition.  It deliberately
+    // performs no highlights request; today's games remain discoverable from
+    // the date picker inside 赛事下钻.
+    state.highlightRequest += 1;
+    clearSelectedGameContext();
+    renderHighlightProjection([], "roaming", state.highlightDate, {
+      emptyMessage: "漫游模式不绑定具体比赛，可直接提问；进入“赛事下钻”后选择比赛查看详情。",
+    });
   }
 
   function selectHighlightDate(value) {
@@ -2914,14 +3716,16 @@
       return;
     }
     const availability = availabilityForDate(value);
-    if (availability !== "available") {
+    if (["future", "loading", "unknown", "error"].includes(availability)) {
       showToast(availability === "unknown" || availability === "loading"
         ? "正在核对该日期是否有比赛，请稍候"
         : availability === "error"
           ? "该日期暂时无法核验，请稍后重试"
-          : "这一天没有比赛，暂不可选");
+        : "这一天暂时无法核验，请稍后重试");
       return;
     }
+    state.historyView = "date";
+    setHistoryControls("history", "date");
     loadHighlights("history", value);
   }
 
@@ -2931,10 +3735,17 @@
     state.activePbp = null;
     state.highlightGames = [];
     state.selectedGameId = null;
+    setConversationScope(null);
     if (el.featuredGame) el.featuredGame.hidden = true;
-    renderGameList([], state.historyView === "range" ? "时间区间比赛" : state.highlightMode === "history" ? "最近 5 场比赛" : "当日比赛");
+    renderGameList([], state.historyView === "range"
+      ? "时间区间比赛"
+      : state.historyView === "date"
+        ? "当天比赛"
+        : state.highlightMode === "history" ? "最近 5 场比赛" : "漫游模式");
     if (el.highlightsEmpty) {
-      el.highlightsEmpty.textContent = message;
+      el.highlightsEmpty.textContent = state.highlightMode === "roaming"
+        ? (message === "这一天暂无可用比赛记录。" ? "漫游模式不绑定具体比赛，可直接提问；进入“赛事下钻”后选择比赛查看详情。" : message)
+        : message;
       el.highlightsEmpty.hidden = false;
       el.highlightsEmpty.classList.remove("is-loading");
     }
@@ -3050,10 +3861,16 @@
     });
     el.pbpSlider.value = String(state.pbpIndex);
     el.replayPosition.textContent = `${String(state.pbpIndex + 1).padStart(2, "0")} / ${String(events.length).padStart(2, "0")}`;
-    el.selectedPlayText.textContent = `${event.player}：${event.action}。${event.detail}。`;
-    el.awayScore.textContent = event.away == null ? "—" : String(event.away);
-    el.homeScore.textContent = event.home == null ? "—" : String(event.home);
-    el.scoreClock.textContent = `${event.clock} · ${state.currentPeriod}`;
+    el.selectedPlayText.textContent = `${event.clock} · ${state.currentPeriod}｜${event.player}：${event.action}。${event.detail}。`;
+    const terminal = isTerminalReplaySelection(events);
+    const game = state.activeGame;
+    el.awayScore.textContent = terminal && game?.away_score != null
+      ? String(game.away_score)
+      : event.away == null ? "—" : String(event.away);
+    el.homeScore.textContent = terminal && game?.home_score != null
+      ? String(game.home_score)
+      : event.home == null ? "—" : String(event.home);
+    el.scoreClock.textContent = terminal ? "00:00 · FINAL" : `${event.clock} · ${state.currentPeriod}`;
     if (shouldScroll) {
       const active = $(".pbp-event.active", el.pbpList);
       active?.scrollIntoView({ block: "nearest", behavior: "smooth" });
@@ -3150,9 +3967,14 @@
     const available = Boolean(health);
     state.apiAvailable = available;
     state.apiProbeComplete = true;
-    state.apiDataMode = String(health?.mode || "fixture").toLowerCase();
+    if (available) {
+      state.apiDataMode = String(health?.experience || "unknown").toLowerCase();
+    } else if (!EXPLICIT_FIXTURE_MODE) {
+      state.apiDataMode = "unknown";
+    }
     setIntelligenceCapability(
-      health?.capabilities?.full_intelligence !== false
+      health?.capabilities?.intelligent_analysis !== false,
+      health?.capabilities?.default_intelligent_analysis ? "full" : "hybrid",
     );
     setTransportLabel(available, state.apiDataMode);
     if (available) setWelcomeForTransport(state.apiDataMode);
@@ -3168,27 +3990,27 @@
       state.calendarScanRequests.clear();
       state.calendarScanToken += 1;
       setConnection("ready", "API 就绪");
-      // Replace the offline preview with the server's real local-day
-      // projection as soon as the probe succeeds.  The fixture remains visible
-      // while the probe is pending, but a connected “今日赛事” rail must not
-      // silently show an old demo date.
-      // The probe is asynchronous; do not reset a history view selected while
-      // it was in flight.  ``loadHighlights`` records mode synchronously for
-      // the same race window.
-      if (state.highlightMode === "today") {
-        loadHighlights("today", beijingDateString());
-      } else {
+      // Roaming is the default projection and has no date-scoped request.
+      // Only an explicit click on 赛事下钻 may load recent/history games;
+      // probing API health must never make an old fixture appear as today's
+      // slate or silently inject a game context.
+      if (state.highlightMode === "history") {
         loadRecentHighlights();
+      } else {
+        renderHighlightProjection([], "roaming", state.highlightDate);
       }
-    } else if (state.highlightMode === "today" && state.historyLoading) {
-      // A static page can briefly render before its API probe completes. Do
-      // not leave the loading placeholder hanging when the service is absent;
-      // switch to the explicitly labelled offline snapshot instead. This is
-      // the only branch allowed to show the fixed fixture date as “today”.
-      state.apiAvailable = false;
-      renderHighlightProjection(fixtureGamesForDate("2026-06-12"), "today", "2026-06-12");
-      setWelcomeForOfflineFixture();
-      setConnection("ready", "离线演示");
+    } else if (state.highlightMode === "roaming") {
+      // The left rail remains unbound on transport failure.  A fixed replay
+      // may be shown only when the runtime explicitly opted into fixture
+      // mode; public/live deployments keep an honest unavailable state.
+      renderHighlightProjection([], "roaming", state.highlightDate);
+      if (fixtureTransportEnabled()) {
+        setWelcomeForOfflineFixture();
+        setConnection("ready", "离线演示");
+      } else {
+        setWelcomeForUnavailableTransport();
+        setConnection("error", "连接异常");
+      }
     }
   }
 
@@ -3242,11 +4064,12 @@
           : "已切回混合模式（本会话）"
       );
     });
+    el.conversationScope?.addEventListener("click", exitGameDrilldown);
     el.newSession.addEventListener("click", newSession);
     el.highlightModes.forEach((button) => {
       button.addEventListener("click", () => {
         if (button.disabled) return;
-        setHighlightsMode(button.dataset.highlightMode || "today");
+        setHighlightsMode(button.dataset.highlightMode || "roaming");
       });
     });
     el.historyRecent?.addEventListener("click", () => loadRecentHighlights());
@@ -3285,14 +4108,18 @@
       ensureCalendarAvailability(state.calendarMonth);
     });
     el.featuredGame.addEventListener("click", () => {
-      if (!state.activeGame) return;
+      // The featured card is a discovery entry in roaming mode.  It is not
+      // selected merely because it is shown; clicking it explicitly enters
+      // the event-drill scope.
+      const target = state.activeGame || state.highlightGames[0];
+      if (!target) return;
       // The featured card is also a selectable replay entry.  Make the
       // selection explicit before opening the HUD so the next “这场比赛”
       // question is scoped to the card the user just clicked.
-      selectActiveGame(String(state.activeGame.game_id));
+      selectActiveGame(String(target.game_id));
       renderPbp("Q4");
       document.querySelector(".pbp-card")?.scrollIntoView({ behavior: "smooth", block: "center" });
-      const gameNumber = state.activeGame.series_game_number ? `G${state.activeGame.series_game_number}` : "该场";
+      const gameNumber = target.series_game_number ? `G${target.series_game_number}` : "该场";
       showToast(state.activePbp ? `已定位到 ${gameNumber} 第四节文字回放` : `${gameNumber} 暂无可用文字回放`);
     });
 
@@ -3371,31 +4198,27 @@
       el.historyTo.max = today;
       el.historyTo.value = state.historyRangeTo;
     }
-    seedFixtureAvailability();
+    if (fixtureTransportEnabled()) seedFixtureAvailability();
     state.calendarMonth = monthKeyForDate(el.highlightDate?.value || state.highlightDate);
     renderPbp("Q4");
     if (el.intelligenceMode) el.intelligenceMode.checked = false;
     setIntelligenceCapability(true);
     setTransportLabel(false);
-    if (window.CourtsideApi?.baseUrl) {
-      // Same-origin/public deployments must resolve the real Beijing date
-      // before painting any cards. The fixed fixture is only rendered after a
-      // failed API probe, never as a transient “today” answer.
-      state.highlightMode = "today";
-      setWelcomeLoading(today);
-      renderHighlightsLoading(
-        `正在拉取今日赛事（${formatShortDate(today)}）…`,
-        state.highlightRequest,
-      );
-    } else {
-      renderHighlightProjection(fixtureGamesForDate("2026-06-12"), "today", "2026-06-12");
-      setWelcomeForOfflineFixture();
+    // Start in roaming mode for both connected and offline deployments.  No
+    // highlights endpoint is touched until the user explicitly chooses
+    // 赛事下钻; this keeps the default view independent of today's schedule.
+    state.highlightMode = "roaming";
+    renderHighlightProjection([], "roaming", state.highlightDate);
+    if (!window.CourtsideApi?.baseUrl) {
+      if (fixtureTransportEnabled()) setWelcomeForOfflineFixture();
+      else setWelcomeForUnavailableTransport();
     }
     initSseParserDemo();
     bindEvents();
-    // Authenticate before probing highlights/chat. If uvicorn is not running,
-    // the page remains a usable offline interaction demo; if a password is
-    // configured, the gate blocks all data requests until login succeeds.
+    // Authenticate before probing highlights/chat. A standalone fixture must
+    // be enabled explicitly; a public transport failure remains visible as a
+    // retryable unavailable state. If a password is configured, the gate
+    // blocks all data requests until login succeeds.
     bootstrapAuth();
   }
 

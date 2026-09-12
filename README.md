@@ -16,11 +16,18 @@ ESPN、受控 DuckDuckGo 搜索与官方 Hermes Agent 均为可替换适配器�
 进行中比赛只接受短 TTL 的 fresh 数据。详情写入会拒绝低完整度或终场比分冲突，最近列表
 最多后台预热 5 场详情。缓存只保存公开响应投影，不保存用户会话、问题、提示词或密钥。
 
+聊天检索使用独立的可查询赛事索引，而不是拿自然语言去匹配上述响应缓存键。球队、赛季、
+日期、比赛状态和系列赛场次先经过实体归一化并走关系字段过滤；新闻、战报和战术资料进入
+SQLite FTS5，由 canonical 球队/球员/赛季 token 约束后使用 BM25 排序。结构化记录未命中时
+才调用受控在线检索。网页摘要始终保持部分核验，不能写成已核验比分、统计或逐回合事实；
+固定演示快照也不能进入公开赛事索引。当前数据规模无需额外向量服务，后续只有在黄金题集
+证明 BM25 语义召回不足时才增加向量召回并与结构化过滤合并。
+
 > **SiliconFlow BYOK 状态**：默认仍是完全离线的 `template`/`mock` 模式（不会读取或发送
 > 模型请求）。live profile 使用锁定的 `hermes-agent==0.19.0` 和
 > `HERMES_LITE_MODE=embedded_agent`；页面开启“全智能分析”后，请求会在 SafetyGuard 与会话
 > 上下文之后、规则 Parser 之前进入官方 `run_agent.AIAgent`。Agent 只能调用
-> `nba_query`、`nba_schedule`、`nba_news` 三个服务端 NBA 工具，不能使用 shell、文件系统、
+> `nba_query`、`nba_schedule`、`nba_news`、`nba_search` 四个服务端 NBA 工具，不能使用 shell、文件系统、
 > 浏览器、通用搜索、MCP、memory、skills 或子代理。默认模型为
 > `deepseek-ai/DeepSeek-V4-Flash`（[API 文档](https://api-docs.siliconflow.cn/docs/api/chat-completions-post)）。
 > 这是当前 API 进程内的受控面试演示形态，不是已部署的独立 Hermes sidecar；生产环境
@@ -72,6 +79,28 @@ python3 -m pytest -q
 SQLite 默认写入 `/app/data/highlights.sqlite3`，Compose 使用具名卷 `highlights_data`。
 普通容器重建不会删除它；只有明确执行带 `-v` 的卷删除操作才会清空缓存。前端对历史请求
 采用 250ms 感知阈值，快速命中不闪 loading，慢请求保留原内容并只显示一处加载提示。
+
+预热可检索赛事索引（重复执行幂等）：
+
+```bash
+python3 scripts/warm-game-index.py \
+  --season 2025-26 \
+  --teams all \
+  --from 2025-09-01 \
+  --to 2026-07-01
+
+# 需要完整球员统计、场馆、上座、比赛时长和文字逐回合时显式补详情
+python3 scripts/warm-game-index.py \
+  --season 2025-26 \
+  --teams knicks,spurs \
+  --from 2026-06-01 \
+  --to 2026-06-30 \
+  --details
+```
+
+索引文件沿用 `GAME_INDEX_DB`，应放在持久卷内。赛程按球队抓取后以公开比赛 ID 去重；详情
+只补已结束比赛。若某来源不可用，应用会继续使用已有索引或原公开数据链路，不会让索引
+故障拖垮聊天。
 
 浏览器验收（Node.js 20+，首次运行需下载 Chromium）：
 

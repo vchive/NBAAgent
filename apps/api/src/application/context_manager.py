@@ -90,18 +90,104 @@ class ContextManager:
         def build_candidate(base: ConversationContext) -> ConversationContext:
             """Merge this turn onto *base* without crossing session boundaries."""
 
-            active_game = next(
+            explicit_game = next(
                 (item for item in intent.entities if item.kind is EntityKind.GAME),
-                base.active_game,
+                None,
             )
+            explicit_teams = list(
+                {
+                    item.canonical_id: item
+                    for item in intent.entities
+                    if item.kind is EntityKind.TEAM
+                }.values()
+            )
+            # A bare, explicit two-team matchup starts a new series/topic
+            # scope.  Keeping an old active game or player here makes the next
+            # pronoun (``这场``/``他``) jump back across the topic switch.  A
+            # numbered or explicit game is handled below and a recommendation
+            # intent carries its verified selected game explicitly.
+            starts_matchup_scope = bool(
+                intent.matchup
+                and len(explicit_teams) >= 2
+                and explicit_game is None
+                and intent.game_number is None
+            )
+            metric_names = {
+                str(getattr(metric, "name", "")).casefold()
+                for metric in intent.metrics
+            }
+            # A scoped ``G2`` lookup is resolved by matchup + season rather
+            # than by the global fixture alias.  Once verification returns a
+            # unique game subject, persist that canonical id as the new active
+            # game so the following “那场” cannot jump back to a previously
+            # recommended G4.  Recommendation/comparison turns intentionally
+            # retain the chosen game even when they mention G2 as a foil.
+            fact_game_refs: dict[str, Any] = {}
+            if facts is not None:
+                for fact in facts.facts:
+                    subject = getattr(fact, "subject", None)
+                    verification = str(
+                        getattr(
+                            getattr(fact, "verification", None),
+                            "value",
+                            getattr(fact, "verification", ""),
+                        )
+                    ).upper()
+                    if (
+                        subject is not None
+                        and subject.kind is EntityKind.GAME
+                        and verification in {"VERIFIED", "PARTIAL"}
+                    ):
+                        fact_game_refs[subject.canonical_id] = subject
+            verified_game = (
+                next(iter(fact_game_refs.values()))
+                if len(fact_game_refs) == 1
+                else None
+            )
+            if (
+                verified_game is not None
+                and intent.game_number is not None
+                and "series_game_recommendation" not in metric_names
+            ):
+                season_label = getattr(intent.season, "label", None)
+                verified_game = verified_game.model_copy(
+                    update={
+                        "display_name": (
+                            f"{season_label} 系列赛 G{intent.game_number}"
+                            if season_label
+                            else f"系列赛 G{intent.game_number}"
+                        ),
+                        "aliases": [f"G{intent.game_number}"],
+                    }
+                )
+            if explicit_game is not None:
+                active_game = explicit_game
+            elif (
+                intent.game_number is not None
+                and "series_game_recommendation" not in metric_names
+            ):
+                # Even a no-data result must invalidate the stale active game:
+                # the user explicitly changed the target and did not ask a
+                # comparison against the recommendation.
+                active_game = verified_game
+            elif starts_matchup_scope:
+                active_game = None
+            else:
+                active_game = base.active_game
             active_team = next(
                 (item for item in intent.entities if item.kind is EntityKind.TEAM),
                 base.active_team,
             )
-            active_player = next(
+            explicit_player = next(
                 (item for item in intent.entities if item.kind is EntityKind.PLAYER),
-                base.active_player,
+                None,
             )
+            if explicit_player is not None:
+                active_player = explicit_player
+            elif starts_matchup_scope:
+                active_player = None
+            else:
+                active_player = base.active_player
             turn = TurnSummary(
                 turn_index=base.completed_user_turn_count + 1,
                 user_intent=intent.intent_name.value,

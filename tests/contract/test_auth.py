@@ -31,7 +31,8 @@ async def test_protected_routes_require_login_but_health_stays_public() -> None:
     assert highlights.status_code == 401
     assert health.status_code == 200
     assert ready.status_code == 200
-    assert health.json()["dependencies"]["auth"] == "ok"
+    assert "auth" not in health.text.lower()
+    assert "dependencies" not in health.text.lower()
 
 
 @pytest.mark.asyncio
@@ -81,7 +82,8 @@ async def test_missing_required_password_fails_closed() -> None:
     assert login.status_code == 503
     assert protected.status_code == 503
     assert ready.status_code == 503
-    assert ready.json()["dependencies"]["auth"] == "degraded"
+    assert ready.json()["status"] == "not_ready"
+    assert "auth" not in ready.text.lower()
 
 
 @pytest.mark.asyncio

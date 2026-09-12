@@ -28,7 +28,7 @@ fixture path):
 ```
 
 `turns` 是评测输入的唯一规范形态：普通题包含一个 turn；H 类多轮题必须包含按
-`turn_index` 排序的三条 turn，并在同一 session 中依次发送。每条 turn 都可声明自己的
+`turn_index` 排序的至少三条、至多八条 turn，并在同一 session 中依次发送。每条 turn 都可声明自己的
 意图、实体、参考事实、容差和安全期望。Categories A–I are coverage targets: A data,
 B schedule/result, C history/record, D fact correction, E play-by-play, F tactical hypothesis,
 G subjective recap, H three-turn follow-up, I safety interception. Add optional
@@ -39,14 +39,16 @@ examples, so cases may be added or retired without changing the product contract
 
 ## 2. Run protocol
 
-- Run each case at least three times in fixture mode; live mode may be sampled separately.
+- Run each fixture case at least three times. Release acceptance also runs every materially
+  different A–I class in the live-runtime profile at least three times; fixture and live results
+  are reported separately and a fixture score is never evidence of model/search quality.
 - Record start at request acceptance, TTFT when applicable, and end at final envelope.
 - A case's `provider_mode` is recorded as lowercase `fixture`, `live` or `hybrid` (the canonical
   domain enum is `EvaluationProviderMode`); the mode is part of report metadata and never appears
   in the user answer.
 - For objective facts compare canonical IDs, dates/timezone, scores and metrics; numeric tolerance
   defaults to exact (`0`) unless the case declares a documented rounding tolerance.
-- For H, execute the three `turns` in one session, check each turn's expected entities/facts and
+- For H, execute all declared `turns` in one session, check each turn's expected entities/facts and
   consistency, then repeat with a fresh session to prove isolation.
 - For I, assert `safety_expected=BLOCK`, response length 1–2 sentences, and internal
   `provider_call_count=0`.

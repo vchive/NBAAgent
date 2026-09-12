@@ -23,6 +23,7 @@ get_team_stats(StatsQuery) -> ProviderResult[StatLine[]]
 get_standings(SeasonLabel) -> ProviderResult[Standing[]]
 get_history(HistoryQuery) -> ProviderResult[HistoryRecord[]]
 search_news(NewsQuery) -> ProviderResult[NewsItem[]]
+search_web(NewsQuery) -> ProviderResult[NewsItem[]]
 ```
 
 `GameFilters` contains a canonical half-open `DateRange`, season, team IDs and status;
@@ -78,25 +79,42 @@ terms, robots and rate limits. Date queries should be split into bounded daily r
 responses may be too large for a single request.
 
 场馆映射读取 competition 级 venue 的名称及 city/state/country；任一地址分量缺失时保持
-`null`，venue 名称本身缺失时整个 `Game.venue` 为 `null`。fixture evidence 必须保持
+`null`，venue 名称本身缺失时整个 `Game.venue` 为 `null`。教练映射优先读取
+competition/competitor 级 `coaches`/ `coach` 字段，仅在能按主客队唯一关联时写入
+`home_coach`/`away_coach`，否则保持 `null`。fixture evidence 必须保持
 `source_class=FIXTURE`，不得在 fallback 后伪装为实时公开来源。
 
 ### Controlled web-search augmentation
 
-An optional DuckDuckGo adapter may implement only `search_news(NewsQuery)`. It uses the fixed
-`https://api.duckduckgo.com/` Instant Answer endpoint, accepts no URL from a request, returns at
-most five cleaned candidates, and enforces a three-second timeout plus a bounded response body.
-HTML/script/control characters, links and prompt-injection instructions are removed at the adapter
-boundary. Its evidence uses `source_class=SEARCH`, medium/low trust and unknown freshness; the
-result remains partial and cannot be the sole evidence for scores, standings, player statistics,
-series arithmetic or PBP. A search error must not replace an otherwise valid NBA provider result.
+A Qianfan-first adapter may implement `search_news(NewsQuery)` and the dedicated
+`search_web(NewsQuery)` operation (the latter is the path used by `nba_search`). It uses the fixed
+`https://qianfan.baidubce.com/v2/ai_search/web_search` endpoint and a server-side API key,
+accepts no URL from a request, returns at most five cleaned
+candidates, and enforces a bounded timeout and response body. HTML/script/control characters,
+links and prompt-injection instructions are removed at the adapter boundary. If Baidu is challenged,
+rate-limited or unavailable, an optional second fixed HTTPS adapter may be tried; this is implemented
+with the server HTTP client (equivalent to a bounded curl request), never by exposing Shell to the
+Agent. Evidence uses `source_class=SEARCH`, medium trust and unknown freshness; results remain
+partial and cannot be the sole evidence for scores, standings, player statistics, series arithmetic
+or PBP. A search error must not replace an otherwise valid NBA provider result. `ProviderResult`
+may carry request-scoped `capability_issues` separately from `data`, `evidence`, and `error`.
+When a secondary search succeeds after the preferred search reports quota, authentication, or a
+temporary availability failure, the successful data is returned and the original capability issue
+is retained for this request. Capability issues are not evidence, do not change verified/partial
+status, and MUST be removed before any shared cache write so a later request is not warned about an
+old failure.
 
 ## 5. Reliability policy
 
 - Retry only idempotent GET requests; at most two exponential-backoff retries by default.
 - Do not retry 400, 401, 403 or schema errors. Open a circuit after repeated timeout/5xx failures.
-- A 429 returns `RATE_LIMITED` with a retry-after hint internally; the user sees a generic retry
-  message.
+- A transient 429/QPS throttle returns `RATE_LIMITED,retryable=true` with a retry-after hint when
+  available. A 402 or explicit billing, balance, expired-trial, or exhausted-quota response returns
+  `QUOTA_EXHAUSTED,retryable=false`. A generic `quota_exceeded` carried by an ordinary 429 remains
+  transient unless the response also contains explicit billing/balance/exhaustion semantics.
+- Authentication, quota, rate-limit, and timeout kinds survive an empty or failed fallback. A
+  fallback that returns actual usable data may satisfy the query but does not erase the current
+  request's capability issue.
 - Primary and fallback sources are selected by capability, trust tier and freshness. Conflicting
   high-risk facts become `PARTIAL/UNVERIFIED`, never an arbitrary winner.
 - Fixtures must represent success, empty, partial, timeout, 429, invalid JSON and conflicting data.

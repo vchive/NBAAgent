@@ -8,6 +8,16 @@ services:
   nba-agent:
     environment:
       PUBLIC_DATA_MODE: hybrid
+      GAME_INDEX_ENABLED: "true"
+      GAME_INDEX_DB: /app/data/highlights.sqlite3
+      GAME_INDEX_MAX_DOCUMENTS: 10000
+      GAME_INDEX_MAX_DOCUMENT_BYTES: 8192
+      HUPU_ENRICHMENT_ENABLED: "true"
+      HUPU_TIMEOUT_SECONDS: 8
+      HUPU_MAX_RESPONSE_BYTES: 2000000
+      # Prefer the ESPN web API hostname in container/cloud environments;
+      # the site.api hostname can reject otherwise valid requests with 403.
+      ESPN_BASE_URL: https://site.web.api.espn.com/apis/site/v2/sports/basketball/nba
       # SiliconFlow profile should query the current Beijing date.  The base
       # fixture profile pins 2026-06-12 for offline demos; override it here so
       # the public/live deployment never presents that stale snapshot as
@@ -17,35 +27,63 @@ services:
       RUNTIME_PROFILE: hybrid
       HERMES_LITE_MODE: embedded_agent
       FULL_INTELLIGENCE_ENABLED: "true"
-      DEFAULT_INTELLIGENCE_MODE: hybrid
+      # The public interview profile is intentionally Agent-first. Users can
+      # still turn the switch off for the deterministic low-latency path.
+      DEFAULT_INTELLIGENCE_MODE: full
+      # Managed search is the first-choice online source. Qianfan, Baidu HTML
+      # and DuckDuckGo remain bounded fallbacks when it fails or has no useful
+      # candidates. Provider names never cross the public response boundary.
+      ALIYUN_IQS_SEARCH_ENABLED: "true"
+      ALIYUN_IQS_API_KEY_FILE: /run/secrets/aliyun_iqs_api_key
+      ALIYUN_IQS_TIMEOUT_SECONDS: 5.5
+      ALIYUN_IQS_MAX_RESULTS: 5
+      ALIYUN_IQS_MAX_RESPONSE_BYTES: 800000
+      BAIDU_SEARCH_ENABLED: "true"
+      QIANFAN_SEARCH_ENABLED: "true"
+      QIANFAN_SEARCH_API_KEY_FILE: /run/secrets/qianfan_search_api_key
+      QIANFAN_SEARCH_TIMEOUT_SECONDS: 8
+      QIANFAN_SEARCH_MAX_RESULTS: 5
+      QIANFAN_SEARCH_MAX_RESPONSE_BYTES: 800000
+      # Keep fixed HTTPS fallbacks enabled so a transient Qianfan/Baidu
+      # failure does not remove the Agent's online-search capability.
+      DDG_SEARCH_ENABLED: "true"
       # The live model gets a longer wall-clock budget than the local mock;
       # the request deadline still caps the effective timeout per call.
-      # A tool-grounded turn normally needs one model call to plan, one NBA
-      # tool call, and a second model call to compose. Keep the loop bounded
-      # at two iterations while allowing both model calls to finish.
+      # A tool-grounded turn may need a structured lookup, a Baidu background
+      # search, and a final composition pass. Keep the loop bounded while
+      # allowing the Agent to recover from an incomplete structured result.
       HERMES_LITE_TIMEOUT_MS: 60000
       LLM_TIMEOUT_SECONDS: 20
       REQUEST_DEADLINE_MS: 65000
-      AGENT_MAX_ITERATIONS: 2
+      AGENT_MAX_ITERATIONS: 4
       AGENT_MAX_TOOL_CALLS: 4
       AGENT_TOOL_TIMEOUT_MS: 12000
       AGENT_MAX_TOOL_RESULT_BYTES: 16384
       AGENT_MAX_OUTPUT_BYTES: 20000
       AGENT_PACKAGE_VERSION: 0.19.0
-      # Three bounded NBA tools do not need a long hidden reasoning pass.
+      # Keep hidden reasoning disabled for predictable interactive latency;
+      # the explicit tool policy carries the evidence workflow.
       AGENT_REASONING_EFFORT: none
       # Official Hermes may initialise small process-local metadata. The base
       # image is read-only, so keep it in the bounded /tmp tmpfs.
       HERMES_HOME: /tmp/hermes
       # Analysis is appended to deterministic facts, so keep the generation
       # budget focused on a concise 2–4 point explanation.
-      SILICONFLOW_MAX_TOKENS: 480
+      # Leave enough room for a short synthesis after tool-grounded facts;
+      # 480 often truncated the final bullet list and encouraged retries.
+      SILICONFLOW_MAX_TOKENS: 640
       SILICONFLOW_API_KEY_FILE: /run/secrets/siliconflow_api_key
       SILICONFLOW_BASE_URL: https://api.siliconflow.cn/v1
       SILICONFLOW_MODEL: deepseek-ai/DeepSeek-V4-Flash
     secrets:
       - siliconflow_api_key
+      - aliyun_iqs_api_key
+      - qianfan_search_api_key
 
 secrets:
   siliconflow_api_key:
     file: ./secrets/siliconflow_api_key
+  aliyun_iqs_api_key:
+    file: ./secrets/aliyun_iqs_api_key
+  qianfan_search_api_key:
+    file: ./secrets/qianfan_search_api_key

@@ -11,13 +11,13 @@ pre-retrieval SafetyGuard return `ALLOW`. It uses the official locked Hermes Age
 question understanding and bounded function calling. It does not own NBA facts, Provider
 credentials, cache access, safety decisions or deterministic arithmetic.
 
-The runtime-visible tool set MUST equal exactly:
+The runtime-visible tool set MUST equal exactly the bounded NBA set:
 
 ```json
-["nba_news", "nba_query", "nba_schedule"]
+["nba_news", "nba_query", "nba_schedule", "nba_search"]
 ```
 
-Shell, filesystem, browser, generic web, MCP, memory, skills, delegation, code execution and
+Shell, filesystem, browser, arbitrary URL fetching, MCP, memory, skills, delegation, code execution and
 arbitrary URL capabilities are absent. A capability mismatch disables full mode and routes the
 request through the deterministic/hybrid path.
 
@@ -41,8 +41,11 @@ AgentTurnResult
   status: OK|TIMEOUT|UNAVAILABLE|UNSAFE
   answer_markdown: string?
   evidence_state: VERIFIED|PARTIAL|NONE
-  tool_calls: AgentToolCallRecord[]
+  tool_calls: AgentToolCallRecord[]  # includes internal error_code/retryable when a tool fails
+  observations: object[]
   finish_reason: string? (internal only)
+  error_code: ErrorCode? (internal stable vocabulary)
+  retryable: bool
   usage: {input_tokens: int, output_tokens: int}?
   latency_ms: int
 ```
@@ -111,8 +114,21 @@ Input:
 ```
 
 `subject` is 1–160 characters and must not contain a URL, control text or tool instruction. The
-handler routes through typed `search_news`; controlled DuckDuckGo candidates remain `PARTIAL` and
+handler routes through typed `search_news`; controlled search candidates remain `PARTIAL` and
 cannot authorize score, ranking, player-statistic, series-arithmetic or PBP numbers.
+
+### `nba_search`
+
+Input:
+
+```json
+{"query":"如果要限制库里，该怎么布置防守？"}
+```
+
+The server adds NBA context, removes URLs/control text, and sends the bounded query through the
+dedicated `search_web` provider operation to the Baidu-first search adapter. A secondary fixed HTTPS adapter may be attempted on challenge,
+rate-limit or timeout. Returned titles/summaries are background candidates only; they are never
+treated as structured game facts.
 
 All tool outputs have this public-to-agent shape:
 
@@ -161,7 +177,9 @@ facts.
 Objective NBA, metadata and PBP output is grounded before the final guard: the final factual markdown
 is the server-owned deterministic observation, not the Agent paraphrase. This prevents relation-level
 hallucinations that numeric membership alone cannot detect (winner/team-score inversion, free throw
-described as a field goal, or a terminal marker described as a shot). Analytical wording may remain
+described as a field goal, or a terminal marker described as a shot). Game metadata includes venue,
+elapsed duration and optional home/away coach fields; a coach question with absent fields returns an
+explicit unavailable message and never a generic score summary. Analytical wording may remain
 Agent-authored, but must not mention tool names/counts, claim inability to connect, or introduce
 unsupported facts. Public-reverification observations are always authoritative, including no-match.
 
@@ -180,3 +198,19 @@ guard rejection falls back to deterministic/hybrid processing:
 
 Detailed finish reasons and tool arguments remain internal telemetry. Red-line safety outcomes have
 zero Agent and tool calls and never use fallback to answer substantively.
+
+Runtime failure classification is preserved across this boundary. Model billing/balance/trial or
+explicit quota exhaustion is represented internally as `COMPOSER_UNAVAILABLE` with
+`finish_reason=quota_exhausted,retryable=false`; a transient 429/QPS throttle uses
+`finish_reason=rate_limited,retryable=true`; authentication is non-retryable and timeout is
+retryable. Raw exception text and account/provider details never enter an observation or public
+response.
+
+Each failed `AgentToolCallRecord` may carry only a stable internal `error_code` and `retryable`
+flag beside the sanitized observation. A usable observation remains eligible for deterministic
+recovery even if later model composition fails. The response then completes with the recovered
+evidence plus a provider-neutral capability notice. If neither the Agent nor the deterministic
+path has usable facts or observations, the turn is a technical failure rather than `no_data` or
+clarification. A search capability issue retained beside successful fallback data is scoped to
+the current request: it may produce a notice for this turn, but is not evidence and is never
+persisted in a shared result cache.

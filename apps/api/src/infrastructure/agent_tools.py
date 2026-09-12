@@ -25,11 +25,17 @@ from zoneinfo import ZoneInfo
 
 from apps.api.src.application.ports import CancelToken
 from apps.api.src.domain.models import DateRange
+from apps.api.src.domain.safety import neutralize_external_internal_names
 
-NBA_TOOL_NAMES = ("nba_news", "nba_query", "nba_schedule")
+NBA_TOOL_NAMES = ("nba_news", "nba_query", "nba_schedule", "nba_search")
 NBA_TOOLSET = "nba"
 
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+# Newlines are meaningful in Markdown evidence and are safe once the value is
+# JSON-encoded.  Keep them in the Agent observation while still removing all
+# other C0 controls (including tabs/carriage returns).
+_OUTPUT_CONTROL_RE = re.compile(r"[\x00-\x09\x0b\x0c\x0e-\x1f\x7f]")
+_RESOLVED_GAME_ID_RE = re.compile(r"[A-Za-z0-9._:-]{1,128}")
 _UNSAFE_ARGUMENT_RE = re.compile(
     r"(?:https?|ftp|file)://|www\.|(?:system|developer)\s*(?:prompt|message)|"
     r"(?:ignore|disregard|override|bypass)\s+(?:all\s+)?(?:previous|system)?\s*instructions?|"
@@ -45,8 +51,8 @@ _FORBIDDEN_OUTPUT_KEY_RE = re.compile(
 TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "nba_query": {
         "description": (
-            "查询 NBA 比赛、球队、球员、统计、历史或逐回合事实。"
-            "事实问题必须使用本工具。"
+            "查询 NBA 比赛、球队、球员、统计、历史或逐回合的结构化记录。"
+            "比分、胜负、具体统计、场馆、教练和逐回合等硬事实优先使用本工具。"
         ),
         "parameters": {
             "type": "object",
@@ -93,12 +99,67 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "additionalProperties": False,
         },
     },
+    "nba_search": {
+        "description": (
+            "在受控的公开网页索引中检索 NBA 长尾问题、战术背景、比赛复盘材料和新闻线索。"
+            "query 完全由你根据用户原问题构造，工具不会自动改写或追加搜索。"
+            "用户询问明确比赛的过程或胜因，而结构化事实没有覆盖过程时，必须在最终回答前调用本工具。"
+            "结果是不完全的搜索候选，不能单独证明比分、排名、统计或逐回合数字。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "简短的 NBA 搜索语句，不得包含 URL、指令或凭据。",
+                    "maxLength": 80,
+                }
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+    },
 }
 
 _ARGUMENT_RULES: dict[str, dict[str, tuple[int, bool]]] = {
     "nba_query": {"question": (500, True)},
     "nba_schedule": {"date_expression": (80, True), "team": (80, False)},
     "nba_news": {"subject": (160, True), "date_expression": (80, False)},
+    "nba_search": {"query": (80, True)},
+}
+
+_CAPABILITY_ISSUE_CODES = {
+    "QUOTA_EXHAUSTED": "SEARCH_QUOTA_EXHAUSTED",
+    "RATE_LIMITED": "UPSTREAM_RATE_LIMITED",
+    "AUTH": "UPSTREAM_AUTH",
+    "TIMEOUT": "UPSTREAM_TIMEOUT",
+    "INVALID_JSON": "INVALID_UPSTREAM_DATA",
+    "SCHEMA_MISMATCH": "INVALID_UPSTREAM_DATA",
+    "HTTP": "COMPOSER_UNAVAILABLE",
+}
+_CAPABILITY_ISSUE_PRIORITY = {
+    "QUOTA_EXHAUSTED": 7,
+    "AUTH": 6,
+    "RATE_LIMITED": 5,
+    "TIMEOUT": 4,
+    "INVALID_JSON": 3,
+    "SCHEMA_MISMATCH": 3,
+    "HTTP": 2,
+}
+# A nested, deterministic ``nba_query`` can complete with usable facts while
+# its provider reports a request-local capability notice (for example, an
+# optional online lookup exhausted its quota before a local index answered).
+# The notice must remain invisible to the model, but the outer application
+# still needs its stable code after the Agent turn finishes.  Keep this list
+# deliberately closed: arbitrary nested response fields must never become
+# Agent error codes or public diagnostics.
+_PUBLIC_NOTICE_PRIORITY = {
+    "SEARCH_QUOTA_EXHAUSTED": 7,
+    "SEARCH_AUTH_UNAVAILABLE": 6,
+    "SEARCH_TEMPORARILY_UNAVAILABLE": 5,
+    "INTELLIGENCE_QUOTA_EXHAUSTED": 4,
+    "INTELLIGENCE_AUTH_UNAVAILABLE": 3,
+    "INTELLIGENCE_TEMPORARILY_UNAVAILABLE": 2,
 }
 
 
@@ -109,6 +170,8 @@ class AgentToolCall:
     status: str
     latency_ms: int
     evidence_state: str = "none"
+    error_code: str | None = None
+    retryable: bool = False
 
 
 @dataclass(slots=True)
@@ -198,10 +261,22 @@ def sanitise_observation(value: Mapping[str, Any], *, max_bytes: int) -> dict[st
             item = scope.get(key)
             if isinstance(item, str) and item and not _CONTROL_RE.search(item):
                 safe_scope[key] = item[:64]
+        # The current recommendation is server-owned series state and is
+        # useful to the model when answering a premise challenge such as
+        # “为什么不是 G2”.  Keep only the bounded NBA playoff ordinal; IDs
+        # and the rest of the raw query scope remain outside model context.
+        active_game_number = scope.get("active_game_number")
+        if (
+            isinstance(active_game_number, int)
+            and not isinstance(active_game_number, bool)
+            and 1 <= active_game_number <= 7
+        ):
+            safe_scope["active_game_number"] = active_game_number
         if not safe_scope:
             safe_scope = None
     answer = str(value.get("answer_markdown", "")).strip()
-    answer = _CONTROL_RE.sub(" ", answer)[:12_000]
+    answer = answer.replace("\r\n", "\n").replace("\r", "\n")
+    answer = neutralize_external_internal_names(_OUTPUT_CONTROL_RE.sub(" ", answer))[:12_000]
     data_origin = str(value.get("data_origin", "none")).lower()
     if data_origin not in {"public", "demo_snapshot", "mixed", "none"}:
         data_origin = "none"
@@ -219,6 +294,15 @@ def sanitise_observation(value: Mapping[str, Any], *, max_bytes: int) -> dict[st
         ),
         "data_origin": data_origin,
     }
+    coverage = str(value.get("coverage", "complete")).lower()
+    if coverage in {
+        "complete",
+        "requested_detail_missing",
+        "series_candidates_ready",
+        "server_typed_game_grounding",
+        "server_typed_pbp_grounding",
+    }:
+        observation["coverage"] = coverage
     encoded = json.dumps(observation, ensure_ascii=False, separators=(",", ":")).encode()
     if len(encoded) > max_bytes:
         observation["blocks"] = []
@@ -330,16 +414,75 @@ class AgentTaskBridge:
             raw = future.result(timeout=timeout)
             if not isinstance(raw, Mapping):
                 raise TypeError("tool runner returned an invalid result")
+            internal_error_code = raw.get("_error_code")
+            if internal_error_code is not None:
+                internal_error_code = str(internal_error_code)[:120]
+            internal_retryable = bool(raw.get("_retryable", False))
+            if internal_error_code is None:
+                raw_issues = raw.get("_capability_issues")
+                if isinstance(raw_issues, list):
+                    selected_issue: Mapping[str, Any] | None = None
+                    selected_priority = -1
+                    for issue in raw_issues[:8]:
+                        if not isinstance(issue, Mapping):
+                            continue
+                        kind = str(issue.get("kind") or "").upper()
+                        priority = _CAPABILITY_ISSUE_PRIORITY.get(kind, -1)
+                        if priority > selected_priority:
+                            selected_issue = issue
+                            selected_priority = priority
+                    if selected_issue is not None:
+                        kind = str(selected_issue.get("kind") or "").upper()
+                        internal_error_code = _CAPABILITY_ISSUE_CODES.get(kind)
+                        internal_retryable = bool(
+                            selected_issue.get("retryable", False)
+                        )
+            if internal_error_code is None:
+                raw_notices = raw.get("_public_notices")
+                if isinstance(raw_notices, list):
+                    selected_notice: Mapping[str, Any] | None = None
+                    selected_priority = -1
+                    for notice in raw_notices[:8]:
+                        if not isinstance(notice, Mapping):
+                            continue
+                        code = str(notice.get("code") or "").upper()
+                        priority = _PUBLIC_NOTICE_PRIORITY.get(code, -1)
+                        if priority > selected_priority:
+                            selected_notice = notice
+                            selected_priority = priority
+                    if selected_notice is not None:
+                        internal_error_code = str(
+                            selected_notice.get("code") or ""
+                        ).upper()
+                        internal_retryable = bool(
+                            selected_notice.get("retryable", False)
+                        )
+            # A canonical game id is useful to the application after the
+            # turn, but it is not model input.  Capture it separately before
+            # sanitising the visible observation, validate the narrow ID
+            # alphabet, and attach it only to the server-side audit copy.
+            resolved_game_id: str | None = None
+            raw_scope = raw.get("query_scope")
+            if isinstance(raw_scope, Mapping):
+                candidate_game_id = raw_scope.get("game_id")
+                if isinstance(candidate_game_id, str) and _RESOLVED_GAME_ID_RE.fullmatch(
+                    candidate_game_id
+                ):
+                    resolved_game_id = candidate_game_id
             observation = sanitise_observation(raw, max_bytes=max_result_bytes)
             status = observation["status"]
         except concurrent.futures.TimeoutError:
             future.cancel()
             observation = None
             status = "cancelled"
+            internal_error_code = "UPSTREAM_TIMEOUT"
+            internal_retryable = True
         except Exception:
             future.cancel()
             observation = None
             status = "failed"
+            internal_error_code = "COMPOSER_UNAVAILABLE"
+            internal_retryable = True
         latency_ms = max(0, int((time.monotonic() - started) * 1000))
         with self._lock:
             current = self._states.get(task_id)
@@ -347,10 +490,24 @@ class AgentTaskBridge:
                 return _safe_error("cancelled", "request is no longer active")
             evidence = str((observation or {}).get("evidence_state", "none"))
             current.calls.append(
-                AgentToolCall(tool_name, fingerprint, status, latency_ms, evidence)
+                AgentToolCall(
+                    tool_name,
+                    fingerprint,
+                    status,
+                    latency_ms,
+                    evidence,
+                    internal_error_code,
+                    internal_retryable,
+                )
             )
             if observation is not None:
-                current.observations.append(observation)
+                stored_observation = observation
+                if resolved_game_id is not None:
+                    stored_observation = {
+                        **observation,
+                        "_resolved_game_id": resolved_game_id,
+                    }
+                current.observations.append(stored_observation)
         if observation is None:
             return _safe_error(status, "tool execution did not complete")
         return json.dumps(observation, ensure_ascii=False, separators=(",", ":"))
@@ -373,7 +530,7 @@ def _handler(tool_name: str):
 
 
 def register_official_nba_tools(registry: Any | None = None) -> Any:
-    """Register exactly the three server-owned schemas in Hermes' registry."""
+    """Register the bounded server-owned NBA schemas in the model registry."""
 
     if registry is None:
         from tools.registry import registry as official_registry

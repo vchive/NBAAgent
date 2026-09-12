@@ -45,8 +45,8 @@ set -a; . ./.env; set +a    # Settings 读取进程环境变量，不会自动�
 > `FULL_INTELLIGENCE_ENABLED=true`；模型默认是
 > `deepseek-ai/DeepSeek-V4-Flash`，接口为 SiliconFlow 的 OpenAI-compatible Chat
 > Completions（参见 [SiliconFlow Chat Completions API 文档](https://api-docs.siliconflow.cn/docs/api/chat-completions-post)）。当前实现加载锁定的
-> `hermes-agent==0.19.0` 和官方 `run_agent.AIAgent`，只注册 `nba_query`、`nba_schedule`、
-> `nba_news` 三个工具；shell、文件系统、浏览器、通用搜索、MCP、memory、skills 和子代理
+> 锁定的官方 Agent 运行时和 `run_agent.AIAgent`，只注册受控的 NBA 数据、赛程、新闻和网页
+> 搜索工具；shell、文件系统、浏览器、任意 URL、MCP、memory、skills 和子代理
 > 全部关闭。它运行在 API 进程内，并非正式隔离 Hermes sidecar；生产应迁移到 sidecar。
 > Key 可用 `SILICONFLOW_API_KEY`（本地临时）或
 > `SILICONFLOW_API_KEY_FILE`（Docker/Kubernetes secret 文件）注入。不要把 Key 写入
@@ -87,7 +87,7 @@ API 提供：
 
 全智能分析是会话级开关：前端勾选后会在每个请求中发送 `intelligence_mode=full`。服务端在
 `FULL_INTELLIGENCE_ENABLED=true` 且请求通过 SafetyGuard/上下文加载后、规则 Parser 之前
-进入官方 Hermes Agent。Agent 可自行选择三个 NBA 工具理解错别字、解析日期并组织回答；
+进入官方 Hermes Agent。Agent 可自行选择四个受控 NBA 工具理解错别字、解析日期并组织回答；
 工具内部仍由确定性 Provider/Verifier/Derivation 负责事实、算术和 PBP。模型失败、超时、
 重复调用、超预算或输出不合规时自动回到确定性通道。
 
@@ -102,7 +102,8 @@ python3 -m http.server 4173 --directory apps/web-demo
 浏览器访问 <http://127.0.0.1:4173>。页面会在加载时短暂探测 `http://127.0.0.1:8000`：
 
 - API 探测成功：聊天和 highlights 使用真实 FastAPI；
-- API 不可达：自动回退内置 fixture，仍可演示流式状态、错误/重试、会话隔离和 PBP 回放。
+- API 不可达：公开/混合模式显示带“重试”的错误状态，不会静默替换固定 fixture；离线演示
+  只有在页面显式设置 fixture 运行时后才使用内置数据，仍可演示流式状态、会话隔离和 PBP 回放。
 
 部署到其他 API 地址时，可在页面加载 `api-client.js` 前设置
 `window.COURTSIDE_API_BASE`；服务端的 `ALLOWED_ORIGINS` 必须包含静态页面来源。
@@ -176,11 +177,11 @@ message.completed`；澄清、安全短路和技术错误分别使用对应的�
 | Follow-up | 同一 session 连续问“那场/最后那个球” | 上下文可解析；新 session 不串线 |
 | Safety | 提交博彩、隐私、犯罪/假球等红线 | 1–2 句礼貌拒答，检索与缓存计数为 0 |
 | Failure | 模拟 timeout/429/空/无效 JSON | 明确可重试或暂无数据，不展示旧/虚构数字 |
-| Highlights | 切换“今日赛事/精彩回顾”、最近 5 场或自定义区间 | 加载中明确提示；区间内展示全部比赛；空/未来/逆序/超长范围清除旧卡片并提示 |
+| Highlights | 默认漫游；进入“赛事下钻”后查看最近 5 场、今天或自定义区间 | 默认不请求今日；下钻加载中明确提示；区间内展示全部比赛；空/未来/逆序/超长范围清除旧卡片并提示 |
 | UI | 断网、断流、窄屏、键盘操作 | 加载/错误/重试清晰，PBP 明确标注“非视频” |
 
-左栏的“今日赛事 / 精彩回顾”是 scoreboard/highlights 的日期投影，不是聊天中的
-`HISTORY` intent。精彩回顾默认拉取最近 5 场，也可提交最多 93 天的自定义时间区间；加载期间
+左栏默认的“漫游模式”不绑定日期或比赛，也不是聊天中的 `HISTORY` intent。进入“赛事下钻”后，
+默认拉取最近 5 场，日历可定位到今天或其他已核验日期，也可提交最多 93 天的自定义时间区间；加载期间
 页面会明确展示“正在拉取”。API 模式按服务端时钟解析今天；离线 Demo 固定展示 `2026-06-12` fixture，
 该日期有比赛。项目没有已
 授权的直播源或视频切片，右侧回放仅定位文字 PBP；未来的媒体卡片必须先通过版权和来源审核。
@@ -225,23 +226,29 @@ export HERMES_LITE_MODE=off
 uvicorn apps.api.src.main:app --host 0.0.0.0 --port 8000
 ```
 
-### 9.1 Controlled DuckDuckGo search
+### 9.1 Controlled Qianfan-first search
 
 新闻、背景和长尾问题可在 live/hybrid profile 中显式开启受控搜索：
 
 ```bash
+export BAIDU_SEARCH_ENABLED=true
+export BAIDU_TIMEOUT_SECONDS=4
+export BAIDU_MAX_RESULTS=5
 export DDG_SEARCH_ENABLED=true
 export DDG_TIMEOUT_SECONDS=3
 export DDG_MAX_RESULTS=5
 ```
 
-系统只访问固定的 `https://api.duckduckgo.com/` Instant Answer 端点，不接受用户 URL，
-并限制查询、结果数、响应大小和超时。返回内容会移除 HTML、脚本、控制字符和提示注入，
-以 `SEARCH`/部分核验证据参与新闻回答；它不能单独证明比分、排名、统计或逐回合事实。
-搜索失败会保留 NBA 结构化数据回答或给出暂无数据，不会阻塞核心问答。
+系统优先访问固定的 `https://qianfan.baidubce.com/v2/ai_search/web_search` 搜索端点，不接受用户 URL，并限制查询、
+结果数、响应大小和超时。返回内容会移除 HTML、脚本、控制字符和提示注入，以
+`SEARCH`/部分核验证据参与新闻、背景和长尾回答；它不能单独证明比分、排名、统计或逐回合
+事实。百度验证页、限流或超时后可使用 DDG 作为第二个固定 HTTPS 适配器。实现使用服务端
+HTTP 客户端（等价于受控 curl），不向 Agent 暴露 Shell；搜索失败会保留 NBA 结构化数据回答
+或给出暂无数据，不会阻塞核心问答。
 
-开发期也可用 `PUBLIC_DATA_MODE=hybrid`：先尝试公开源，发生有类型的上游错误后才使用本地
-fixture fallback；权威空结果不会被旧 fixture 覆盖。
+开发期也可用 `PUBLIC_DATA_MODE=hybrid`：公开源不可用时可继续使用已持久化且仍有效的公开
+记录；没有可用公开记录时返回有类型的可重试错误。固定 fixture 只属于显式 fixture profile，
+不会补到 live/hybrid 查询中；权威空结果也不会被旧演示数据覆盖。
 
 full 模式使用官方 `HermesAgentRuntime`，在规则解析之前执行有界 Agent loop；旧
 `HermesRuntimeAdapter` 只保留给 hybrid 战术/复盘的单轮 composer。`embedded_agent` 适合
@@ -261,6 +268,8 @@ export LLM_MODE=live
 export RUNTIME_PROFILE=hybrid
 export HERMES_LITE_MODE=embedded_agent
 export FULL_INTELLIGENCE_ENABLED=true
+export DEFAULT_INTELLIGENCE_MODE=full
+export BAIDU_SEARCH_ENABLED=true
 export HERMES_LITE_TIMEOUT_MS=40000
 export LLM_TIMEOUT_SECONDS=20
 export AGENT_REASONING_EFFORT=none
@@ -284,8 +293,8 @@ Dockerfile 默认使用清华 PyPI 镜像，并将依赖安装层与源码层分
 该 override 默认不切换 `PUBLIC_DATA_MODE`；如需公开 ESPN 数据，必须另行设置 `live`/`hybrid`
 并审核条款。未配置认证时不要把 live profile 直接暴露给公网用户。
 
-公开交付使用 `docker-compose.public.yml`：服务先请求 allow-list 的公开数据源，发生有类型的
-上游失败时才回退到 fixture；不会把固定演示日期当作当天。先配置访问密码：
+公开交付使用 `docker-compose.public.yml`：服务请求 allow-list 的公开数据源；发生上游失败时
+返回可重试错误，不会回退到固定 fixture，也不会把固定演示日期当作当天。先配置访问密码：
 
 ```bash
 make configure-app-password
@@ -306,7 +315,7 @@ make deploy-status
 - `/readyz` 显示 `mode=hybrid`、`full_intelligence=true`、`web_search=true`、
   `hermes=ok`、`auth=ok`。
 - 容器内官方包为 `hermes-agent==0.19.0`；capability self-test 通过，工具集合精确为
-  `nba_news`、`nba_query`、`nba_schedule`。
+  `nba_news`、`nba_query`、`nba_schedule`、`nba_search`。
 - 公网登录成功后，以下请求均显式携带 `intelligence_mode=full`：
 
 | Request | Result | Composition | Acceptance evidence |
@@ -327,11 +336,11 @@ make deploy-status
 | `我第三个问题问的啥` | `completed` | `deterministic/not_requested` | 按 `turn_index` 复述仍在有界摘要中的第三问 |
 | `1+1等于几` | `no_data` | `deterministic/not_requested` | NBA 范围引导；Provider/cache/Agent 调用均为 0 |
 
-最终自动化门禁：pytest `441 passed`，Ruff/JS/git diff 检查通过，Playwright `17 passed`，
-黄金题评测 `63 runs / 100.00`、安全否决 `0`。回归还验证了公开搜索组合下的日期可用性置灰和
-休赛期最近 5 场补足：无比赛日期返回 `empty`，最近 5 场接口返回 5 场已结束比赛并标记
-`partial`（使用有界历史快照补足）。持久投影 schema 已升级至 v4，旧 v3 缓存不会丢失逐场
-`public/demo_snapshot` 来源；混合列表的每张卡保持自己的来源。
+最终自动化门禁：pytest `868 passed`，Ruff/JS/git diff 检查通过，Playwright `30 passed`，
+黄金题评测 `75 runs / 100.00`、安全否决 `0`。回归还验证了公开搜索组合下的日期可用性置灰和
+休赛期最近 5 场补足：无比赛日期返回 `empty`；最近接口先查询持久化公开赛事索引，再按需联网
+补足，并返回 5 场已结束比赛。持久投影 schema 已升级至 v5，旧 v4 记录按 miss 重新投影，逐场
+`public/demo_snapshot` 来源不会丢失；混合列表的每张卡保持自己的来源。
 
 ## 10. Delivery checklist
 

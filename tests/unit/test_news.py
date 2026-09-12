@@ -131,3 +131,36 @@ def test_template_renders_news_title_and_summary_as_public_blocks() -> None:
     )
     assert "evidence_id" not in guarded.markdown
     assert all("fixture:news" not in str(block.model_dump()) for block in guarded.blocks)
+
+
+def test_template_neutralizes_provider_names_in_external_news_text() -> None:
+    """A source headline must remain useful without leaking implementation names."""
+
+    subject = EntityRef(kind=EntityKind.TEAM, canonical_id="bos", display_name="凯尔特人")
+    fact = FactAssertion(
+        fact_id="news:external-1",
+        subject=subject,
+        predicate="news",
+        value={
+            "title": "ESPN：凯尔特人赛后动态",
+            "summary": "Sportsradar provider 记录了末节防守轮转。",
+        },
+        evidence_ids=["external:news:1"],
+        verification=VerificationState.PARTIAL,
+    )
+    facts = FactBundle(facts=[fact], evidence_state=EvidenceState.PARTIAL)
+    intent = QueryIntent(
+        category=Category.A,
+        intent_name=IntentName.DATA,
+        mode=QueryMode.OBJECTIVE,
+        confidence=1,
+        entities=[subject],
+        metrics=[MetricRef(name="news", scope=StatScope.GAME)],
+        operation=Operation.LOOKUP,
+    )
+
+    draft = TemplateComposer().compose(intent, facts)
+    guarded = OutputGuard.validate(draft, facts)
+    assert "ESPN" not in guarded.markdown
+    assert "Sportsradar" not in guarded.markdown
+    assert "公开资料" in guarded.markdown

@@ -45,9 +45,34 @@ class QueryPlanner:
         game = next((item for item in entities if item.kind is EntityKind.GAME), None)
         team = next((item for item in entities if item.kind is EntityKind.TEAM), None)
         player = next((item for item in entities if item.kind is EntityKind.PLAYER), None)
+        teams = [item for item in entities if item.kind is EntityKind.TEAM]
+        matchup = bool(getattr(intent, "matchup", False)) and len(
+            {item.canonical_id for item in teams}
+        ) >= 2
         metric_names = {str(getattr(metric, "name", "")).casefold() for metric in intent.metrics}
+        # Coach metadata is game-scoped.  Never reinterpret a two-team coach
+        # question as a team career-stat lookup when no concrete game/context
+        # was resolved; callers should ask for the specific game instead.
+        if "coaches" in metric_names and game is None and not matchup:
+            return None
         if intent.intent_name in {IntentName.PLAY_BY_PLAY}:
             if game is None:
+                if matchup:
+                    filters = GameFilters(
+                        date_range=intent.date_range,
+                        season=intent.season,
+                        team_ids=list(dict.fromkeys(item.canonical_id for item in teams)),
+                        series_game_number=intent.game_number,
+                    )
+                    return QueryPlan(
+                        "search_matchup",
+                        (filters,),
+                        kwargs={
+                            "fallback_on_empty": intent.season is not None,
+                            "summary_if_match": True,
+                        },
+                        description="查找两队交手记录并读取逐回合",
+                    )
                 if getattr(intent, "recent_game", False):
                     return QueryPlan(
                         "get_recent_play_by_play", description="查找最近一场比赛并读取逐回合"
@@ -65,6 +90,24 @@ class QueryPlanner:
                 for metric in intent.metrics
             ):
                 return None
+            if matchup and game is None:
+                filters = GameFilters(
+                    date_range=intent.date_range,
+                    season=intent.season,
+                    team_ids=list(dict.fromkeys(item.canonical_id for item in teams)),
+                    series_game_number=intent.game_number,
+                )
+                return QueryPlan(
+                    "search_matchup",
+                    (filters,),
+                    kwargs={
+                        "fallback_on_empty": intent.season is not None,
+                        "summary_if_match": (
+                            "series_game_recommendation" not in metric_names
+                        ),
+                    },
+                    description="查找两队交手记录",
+                )
             # Event-level fact checks (for example “最后一攻是不是某人投的”) need
             # the complete PBP bundle, not just a box-score summary.  The
             # parser keeps the claim predicates typed so this route remains
@@ -102,6 +145,35 @@ class QueryPlanner:
                     description="查找相关比赛",
                 )
             return QueryPlan("get_game_summary", (game.canonical_id,), description="读取比赛摘要")
+        # A two-team query must never fall through to ``get_team_stats`` for
+        # the first mentioned team. Resolve the matchup against the typed
+        # scoreboard first; for a DATA/metadata question the call-plan layer
+        # upgrades a unique match to its full summary (box score, venue,
+        # coaches and PBP), while a bare matchup remains a normal schedule
+        # list. ``team_ids`` is interpreted as an all-teams constraint by the
+        # built-in adapters.
+        if matchup and game is None and intent.intent_name in {
+            IntentName.DATA,
+            IntentName.SCHEDULE_RESULT,
+            IntentName.FOLLOW_UP,
+        }:
+            filters = GameFilters(
+                date_range=intent.date_range,
+                season=intent.season,
+                team_ids=list(dict.fromkeys(item.canonical_id for item in teams)),
+                series_game_number=intent.game_number,
+            )
+            return QueryPlan(
+                "search_matchup",
+                (filters,),
+                kwargs={
+                    "fallback_on_empty": intent.season is not None,
+                    "summary_if_match": (
+                        intent.intent_name is IntentName.DATA or player is not None
+                    ),
+                },
+                description="查找两队交手记录",
+            )
         # ``news`` is represented as a metric marker rather than a new intent
         # enum so the public category mapping remains backwards compatible.
         # Route it before the ordinary DATA/SCHEDULE/HISTORY branches: phrases
@@ -211,7 +283,10 @@ class QueryPlanner:
                 "search_games",
                 (
                     GameFilters(
-                        date_range=intent.date_range, season=intent.season, team_ids=team_ids
+                        date_range=intent.date_range,
+                        season=intent.season,
+                        team_ids=team_ids,
+                        series_game_number=intent.game_number,
                     ),
                 ),
                 kwargs=fallback_kwargs,

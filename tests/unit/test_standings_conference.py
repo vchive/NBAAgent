@@ -64,8 +64,8 @@ async def test_http_standings_does_not_leak_the_other_conference() -> None:
 
 
 @pytest.mark.asyncio
-async def test_hybrid_historical_standings_uses_the_bounded_snapshot_when_live_is_empty() -> None:
-    """An empty live archive must not degrade a historical ranking to a schedule no-data answer."""
+async def test_hybrid_historical_standings_does_not_use_demo_snapshot() -> None:
+    """A public ranking miss must not be filled with fixed demo standings."""
 
     primary = FixtureProvider(scenario="empty")
     fallback = FixtureProvider()
@@ -77,7 +77,9 @@ async def test_hybrid_historical_standings_uses_the_bounded_snapshot_when_live_i
 
     result = await usecase.handle({"message": "2025-26 赛季东部排名第一的球队是谁？"})
 
-    assert result.status == "completed"
-    assert result.evidence_state == "partial"
-    assert "凯尔特人" in result.answer_markdown
-    assert "60" in result.answer_markdown
+    assert result.status == "no_data"
+    assert result.evidence_state == "none"
+    assert result.data_origin == "none"
+    assert "凯尔特人" not in result.answer_markdown
+    assert "60" not in result.answer_markdown
+    assert fallback.calls == 0

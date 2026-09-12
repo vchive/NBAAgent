@@ -11,17 +11,20 @@ from apps.api.src.domain.models import (
     FactAssertion,
     FactBundle,
     Game,
+    GameBundle,
     GameStatus,
     PlayByPlayBundle,
     PlayEvent,
     PlayEventType,
     SeasonLabel,
     ShotType,
+    StatLine,
+    StatScope,
     TimeWindow,
     TimeWindowScope,
     VerificationState,
 )
-from apps.api.src.domain.verifier import verify_premise
+from apps.api.src.domain.verifier import verify_bundle, verify_premise
 
 
 def _team(identifier: str) -> EntityRef:
@@ -135,3 +138,30 @@ def test_premise_correction_distinguishes_wrong_and_unverified_claims() -> None:
     unknown = verify_premise([Claim(subject=game, predicate="rebounds", claimed_value=9)], facts)
     assert wrong[0].status.value == "CORRECTED" and wrong[0].verified_value == 108
     assert unknown[0].status.value == "UNVERIFIED" and unknown[0].verified_value is None
+
+
+def test_complete_box_score_deduplicates_leaders_without_overflow() -> None:
+    game = _game("g5", "sas", "nyk", 90, 94, 5)
+    metrics = {f"metric_{number}": number for number in range(17)}
+    lines = [
+        StatLine(
+            subject=EntityRef(
+                kind=EntityKind.PLAYER,
+                canonical_id=f"player-{number}",
+                display_name=f"Player {number}",
+            ),
+            game_id=game.game_id,
+            scope=StatScope.GAME,
+            metrics=metrics,
+            evidence_ids=["boxscore"],
+        )
+        for number in range(30)
+    ]
+
+    result = verify_bundle(
+        GameBundle(game=game, stat_lines=lines, leaders=lines),
+        ["boxscore"],
+    )
+
+    stat_facts = [fact for fact in result.facts.facts if fact.fact_id.startswith("stat:")]
+    assert len(stat_facts) == 30 * 17

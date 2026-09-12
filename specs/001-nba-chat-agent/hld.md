@@ -1,10 +1,10 @@
 # NBA Chat Agent — High-Level Design (HLD)
 
 **Feature**: [001-nba-chat-agent](spec.md)
-**Status**: 官方 Agent、语义 grounding、公开复核、逐场来源与会话能力已实现
+**Status**: Agent-first 路由、Baidu-first 长尾检索、语义 grounding、公开复核、逐场来源与会话能力已实现
 **Date**: 2026-09-01
 **Audience**: 面试评审、实现人员和部署维护人员
-**Revision**: v0.6 — 语义 grounding、公开复核与逐场来源
+**Revision**: v0.7 — Agent-first 长尾检索与公开能力脱敏
 
 ## 1. Design goals
 
@@ -36,9 +36,15 @@
 - 公开来源实时查询、字段归一化、事实核验、确定性聚合及友好证据状态。
 - 当前会话的多轮上下文（至少支持围绕一场比赛连续三轮追问）。
 - Web 聊天、普通 HTTP 与 SSE 流式两种入口。
-- 左栏赛事焦点/精彩回顾投影；默认读取最近 5 场，自定义时间读取有界日期范围 scoreboard。
-  选中的比赛 ID 通过结构化请求字段传给聊天服务，并在服务端以已核验的 Game 建立当前
+- 全智能默认链路：通过安全门后，所有允许的 NBA 问题先进入 Agent 理解/规划；结构化数据
+  无覆盖时可调用 Qianfan-first 的受控网页搜索，再由模型组织带证据边界的答案。
+- 左栏默认是“漫游模式”，不请求今日赛事；用户进入“赛事下钻”后才读取最近 5 场，并可
+  通过日历定位今天或其他日期、自定义时间读取有界日期范围 scoreboard。选中的比赛 ID
+  通过结构化请求字段传给聊天服务，并在服务端以已核验的 Game 建立当前
   会话上下文；不信任浏览器提交的比分、球队或球员字段。
+- 聊天上下文分为“漫游模式”和“赛事下钻模式”。漫游模式只展示赛事卡，不选中任何比赛；
+  卡片点击由服务端解析为可信 `selected_game_id` 后才进入下钻并注入比赛上下文。赛事列表
+  的首项不得隐式成为活动比赛，避免用户提出全局问题时被旧比赛污染。
 
 ### Non-goals
 
@@ -76,6 +82,18 @@ flowchart LR
 外部参与者只有用户和公开数据源。系统不把供应商的响应格式、接口细节或模型提示词
 暴露给用户；这些信息只在内部证据和脱敏日志中使用。
 
+### Agent-first retrieval boundary
+
+全智能模式不是“模板回答后再润色”：安全检查通过后，Agent 先决定是否调用结构化 NBA
+查询、赛程、新闻或网页搜索工具。网页搜索固定到百度 HTTPS 搜索入口，清洗 HTML、限制
+结果数/响应体/时延，并将候选降级为 `partial` 背景证据；百度被验证页、限流或超时后，
+可使用第二个固定 HTTPS 搜索适配器（实现上采用服务端 HTTP 客户端，等价于受控 curl，
+不把 Shell 能力交给模型）。搜索候选在观察边界再次投影为最多 3 条去重标题/短摘要，仅作为
+Hermes 的内部 grounding；不得把搜索候选当作比分、胜者或 PBP 的确定事实。面向用户的正文
+由 Hermes 综合生成，不原样展示标题、摘要、文章列表、供应商/工具名称或内部流程话术；证据
+等级通过响应 metadata/UI 展示。硬事实仍必须由 NBA 结构化源核验。公开健康接口只返回泛化的
+`assistant_runtime` 能力状态，不返回底层框架名称。
+
 ## 5. Container and component architecture
 
 ```mermaid
@@ -103,7 +121,7 @@ flowchart TB
     end
     subgraph Infra[共享基础设施]
       PG[Provider Gateway + Adapters]
-      SEARCH[Web Search Gateway\nDuckDuckGo adapter]
+      SEARCH[Web Search Gateway\nQianfan-first adapter]
       CACHE[Freshness Cache\n仅 Gateway 内部可读写]
       STORE[Session Store]
       OBS[Logs/Metrics/Trace]
@@ -158,7 +176,8 @@ Provider/cache，也不调用 Hermes。
 
 全智能模式集成锁定版本的 NousResearch Hermes Agent，而不是把普通模型客户端命名为
 Hermes。安全门之后存在两条通道：默认 `hybrid` 保留低延迟确定性流水线；`full` 由 Hermes
-先理解问题并执行有界 tool-calling loop。Hermes 不能直接接触 Provider、缓存或任意网络，
+先理解问题并执行有界 tool-calling loop。公开演示 profile 默认开启 full；本地 fixture profile
+仍可用 hybrid/template 复现。Hermes 不能直接接触 Provider、缓存或任意网络，
 只能调用 API 进程注册的任务级 NBA 工具；工具内部复用现有 Parser、Provider Gateway、
 Verifier、Derivation 和模板，因此 Agent 获得规划能力而事实所有权不变。
 
@@ -172,9 +191,11 @@ flowchart LR
     H -->|nba_query| TQ[NBA Query Tool]
     H -->|nba_schedule| TS[NBA Schedule Tool]
     H -->|nba_news| TN[NBA News Tool]
+    H -->|nba_search| TSX[NBA Search Tool]
     TQ --> D
     TS --> D
     TN --> D
+    TSX --> D
     D --> O[Sanitized tool observation]
     O --> H
     H --> G[Agent Output Guard]
@@ -187,7 +208,7 @@ Hermes 的能力边界固定如下；任何未列出的能力默认关闭：
 | 能力 | v1 策略 | 归属/约束 |
 |---|---|---|
 | 问题理解、容错、turn/tool loop | 允许 | `hermes-agent==0.19.0`，每请求最多 4 iterations/4 tool calls |
-| `nba_query`、`nba_schedule`、`nba_news` | 允许 | 任务级 bridge；只返回清洗后的状态、时间范围、答案块和证据等级 |
+| `nba_query`、`nba_schedule`、`nba_news`、`nba_search` | 允许 | 任务级 bridge；只返回清洗后的状态、时间范围、答案块和证据等级 |
 | 直接 Provider/搜索/缓存访问 | **禁止** | 只能由 NBA 工具内部的既有应用用例执行 |
 | 安全分类、拒答决策 | **禁止** | 本地 `SafetyGuard` 在 Agent 之前决定，Hermes 不得覆盖 |
 | 算术、系列赛累计、PBP 事件选择 | **禁止** | 只能由 `Derivation` 产生结构化事实 |
@@ -205,9 +226,11 @@ SafetyGuard 和会话加载后、规则解析之前进入 Hermes。问候可零�
 
 客观、比赛元数据和 PBP 回答增加 `Semantic Grounding`：Agent 仍决定理解与工具选择，但
 最终用户事实文本直接采用服务器生成的 observation。这样即使模型复用了所有正确数字，也
-不能交换球队—比分—胜者关系，不能把罚球或终场标记改写成运动战投篮。战术/原因类回答仍
+不能交换球队—比分—胜者关系，不能把罚球或终场标记改写成运动战投篮；PBP 中按主队、客队
+字段保存的比分必须在 observation 中重新附上两支球队，不能向用户输出方向不明的裸比分。战术/原因类回答仍
 可由 Agent 组织分析，但输出守卫拒绝内部工具名称、工具数量、“无法联网”等能力措辞和观察外
-事实；失败后使用同一份核验事实安全回退。
+事实；失败后使用同一份核验事实安全回退。搜索恢复答案保留 Markdown 换行，由客户端按列表
+渲染；搜索正文不得以单段原文或任意字符截断的方式直出。
 
 当用户明确要求联网重新核验选中的比赛时，NBA 工具进入 `Public Re-verification` 子流程：
 
@@ -222,7 +245,7 @@ selected server game → Beijing local date + exact matchup
 零匹配、多匹配、主源错误或详情缺失都不会回落演示快照，也不会被描述为服务没有联网能力；
 应用只说明本次未找到可升级的公开匹配。
 
-面试演示的三工具规划默认使用 `AGENT_REASONING_EFFORT=none`，同时在 SiliconFlow 请求中
+面试演示的四工具规划默认使用 `AGENT_REASONING_EFFORT=none`，同时在 SiliconFlow 请求中
 显式关闭隐藏思考，并用 `LLM_TIMEOUT_SECONDS` 约束每次模型调用；这不会放宽工具、事实或
 输出守卫边界。若更换模型后确需增加推理深度，必须先重跑 live 时延、超时和事实回归。
 
@@ -255,13 +278,15 @@ Agent 原生磁盘 memory、session database、context files 和 trajectory 全�
 取消和安全拦截不计入且不保存敏感原文。“刚才那个球是谁”“你刚才说谁得了 32 分”等事实
 指代明确排除在元问题分类器之外，继续进入 Agent/确定性工具链做本轮核验。
 
-#### 5.1.3 受控 DuckDuckGo 搜索
+#### 5.1.3 受控 Qianfan-first 搜索
 
-DuckDuckGo 只作为新闻、背景和长尾问题的候选检索源，不作为 NBA 比分、排名、统计或 PBP
+百度千帆 AI Search 作为中文新闻、背景和长尾问题的首选候选检索源，不作为 NBA 比分、排名、统计或 PBP
 的唯一事实来源。`WebSearchGateway` 固定 HTTPS 端点和查询策略，限制结果数、响应大小、
-超时、缓存和每会话频率；适配器剥离 HTML/脚本、截断摘要并把正文标记为不可信数据。搜索
-结果中的链接、指令、提示注入不会执行，也不会原样发送给模型。只有经过领域 Provider 或
-多来源核对的字段才能进入 `VERIFIED` FactBundle，否则保持 `PARTIAL/UNKNOWN`。
+超时、缓存和每会话频率；适配器剥离 HTML/脚本、截断摘要并把正文标记为不可信数据。百度
+验证页、限流或超时后可切换第二个固定 HTTPS 适配器（服务端 HTTP 客户端等价于受控 curl，
+不向模型暴露 Shell）。搜索结果中的链接、指令、提示注入不会执行，也不会原样发送给模型。
+只有经过领域 Provider 或多来源核对的字段才能进入 `VERIFIED` FactBundle，否则保持
+`PARTIAL/UNKNOWN`。
 
 面试演示的 `embedded_agent` 在 API 进程内加载官方 Hermes 包，模型 egress 固定为
 SiliconFlow OpenAI-compatible endpoint，默认模型为 `deepseek-ai/DeepSeek-V4-Flash`。
@@ -397,15 +422,18 @@ SSE 断开会传播取消信号，已持久化的会话事实不回滚，也不�
 
 - 请求超时、429/5xx 重试和熔断；
 - 原始响应校验及缺字段保留 `null`；
-- `Game` 保留可选场馆名称及 city/state/country，名称缺失时 venue 整体保持 `null`；
+- `Game` 保留可选场馆名称及 city/state/country，以及可选的主客队主教练字段；名称或教练
+  字段缺失时分别保持 `null`；
 - 统一 `Evidence`（内部来源标识、URL、获取时间、数据截至时间、可信度）；
 - 可用 fixture，便于无网测试和面试演示；
 - 同一查询优先使用单一 source snapshot；fallback、冲突和 freshness 变化写入内部记录，
   高风险 PBP/纠偏/冠军事实不得无标注混用不同来源；
+- 模型或搜索的 quota/auth/timeout 状态以 request-scoped capability issue 独立于事实证据传播；
+  后备能力取得数据时保留本轮提示，但 Gateway 写共享缓存前剥离该状态，避免后续请求继承旧故障；
 - 公开响应仅投影 `public/demo_snapshot/mixed/none`；演示快照不使用当前公开数据时间戳，
   Web UI 明确标记为固定演示数据；
 - 列表级来源可为 `mixed`，但每个 `HighlightGame` 必须单独保留 `public/demo_snapshot/none`；
-  服务端选卡 registry 与 SQLite v4 投影一并保存该来源，缓存恢复和 Web 渲染不得用 aggregate
+  服务端选卡 registry 与 SQLite v5 投影一并保存该来源，缓存恢复和 Web 渲染不得用 aggregate
   `mixed` 覆盖所有卡片；
 - 遵守服务条款、robots 和访问频率，禁止绕过访问控制。
 
@@ -570,10 +598,10 @@ P50/P90/P95、超时/错误率、SSE 断开率、准入拒绝率和 fallback 率
 | HTTP 校验/准入 | 不重试；客户端/IP 限流可用 429，队列/容量满返回本地 `SERVICE_BUSY` | 400/429/503，说明稍后重试或补充条件 | 不进入 Safety 之后的下游链路 |
 | SafetyGuard | 规则命中直接完成拒答 | `blocked`，1–2 句引导 | 不检索、不读写 Provider cache、不调用 Hermes |
 | SessionStore | 新会话可创建；已有会话故障不静默降级 | 明确服务暂不可用 | 不把“那场”等省略问题当新问题猜测 |
-| Provider timeout/429/5xx | 仅 GET 有界退避+jitter；熔断 | 可重试错误或部分结果 | 不用 stale 数字冒充当前 |
-| Provider schema/auth | 不重试，按能力切 fallback | `no_data` 或服务不可用 | 不把原始 JSON 交给用户/模型 |
+| Provider timeout/429/5xx | 仅 GET 有界退避+jitter；普通 429/QPS 保持可重试；熔断 | 可重试错误；有可用 fallback 时完成并附当前请求提示 | 不用 stale 数字冒充当前，不让空 fallback 吞掉首错 |
+| Provider quota/auth/schema | 明确余额/账单/试用结束/额度耗尽为不可立即重试；认证与 schema 不重试；按能力切 fallback | 有可用证据时完成并附供应商无关提示；无可用证据时技术失败 | 不降格为 `no_data`，不把原始 JSON 或账号详情交给用户/模型 |
 | Verifier/Derivation | 缺证据或冲突标记 partial/unverified | 部分核验/暂无数据 | 不让 LLM 补值或算术 |
-| Hermes timeout/kill/unsafe | 取消调用；客观题模板回退，分析题只给已核实事实摘要 | 完成或 `COMPOSER_UNAVAILABLE` | 不重新让模型检索或猜数字 |
+| Hermes timeout/kill/quota/auth/unsafe | 保留类型与可重试性；取消调用；客观题模板回退，分析题只给已核实事实摘要 | 有事实则完成并附智能能力提示；无事实则 `COMPOSER_UNAVAILABLE` 等技术失败 | 不伪装 `no_data`，不重新让模型检索或猜数字 |
 | OutputGuard | 最多一次确定性模板重试；仍失败则安全错误 | `OUTPUT_BLOCKED` | 不透传草稿、提示词或内部字段 |
 | 客户端断开 | 传播 cancel，释放 semaphore，记录 orphan=0 | 客户端可用幂等键重连 | 不提交半成品会话事实 |
 
@@ -590,8 +618,8 @@ P50/P90/P95、超时/错误率、SSE 断开率、准入拒绝率和 fallback 率
 | 交付链接不可访问 | 无法评审 | 发布前探活、部署清单和本地 fixture 演示 |
 | Hermes 通用能力越权或版本漂移 | 绕过安全/事实链，升级后行为变化 | 空工具清单、能力自检、锁定 commit、Hermes 不可用时模板降级 |
 | 模型/Provider 端点数据出境 | 隐私或合规风险 | egress allow-list、最小化输入、配置审计和脱敏日志 |
-| DuckDuckGo 摘要过期或含提示注入 | 模型采纳错误背景或越权指令 | 搜索结果仅作不可信候选，固定端点/限额/清洗，多源核验后才进入事实包 |
-| 全智能模式成本和延迟上升 | 公网额度消耗、体验变慢 | 默认 hybrid、认证开关、Hermes 并发/预算上限、失败自动回退模板 |
+| 百度/备用搜索摘要过期或含提示注入 | 模型采纳错误背景或越权指令 | 搜索结果仅作不可信候选，固定端点/限额/清洗，多源核验后才进入事实包 |
+| 全智能模式成本和延迟上升 | 公网额度消耗、体验变慢 | 认证开关、Agent 并发/预算上限、失败自动回退模板 |
 
 ## 12. HLD-to-requirement traceability
 
@@ -604,9 +632,21 @@ P50/P90/P95、超时/错误率、SSE 断开率、准入拒绝率和 fallback 率
 | FR-022–023 | Resilience、Observability、Session Store | 错误契约、超时/429/隔离测试 |
 | FR-024–026 | Evaluation Runner、报告和方案文档 | `contracts/evaluation.md`、黄金题回放 |
 | FR-027 | Highlights API、最近 5 场/日期范围投影、加载反馈、文字 PBP 投影 | `contracts/http-api.md`、最近赛事/区间/空状态 UI 验收 |
-| FR-029 | Web Search Gateway、DuckDuckGo adapter、搜索证据分级与注入隔离 | `tests/contract/test_web_search.py`, `tests/integration/test_web_search.py` |
+| FR-028 | Public demo access control、共享密码 Cookie 与 Compose secret | `tests/contract/test_auth.py`、公开部署验收 |
+| FR-029 | Web Search Gateway、Qianfan-first adapter、搜索证据分级与注入隔离 | `tests/contract/test_qianfan_search.py`, `tests/contract/test_web_search.py` |
 | FR-030–031 | Full-intelligence Agent 路由、稳定逻辑会话、每轮受控工具核验、模型回退与状态展示 | `tests/contract/test_hermes_agent_runtime.py`, `tests/integration/test_full_intelligence.py`, `tests/e2e/test_chat.spec.ts` |
+| FR-032 | 问候、能力介绍和轻微错别字的自然承接 | `tests/integration/test_full_intelligence.py` |
+| FR-033 | 空工具观察保留查询范围并由 Agent 自然解释 | `tests/integration/test_full_intelligence.py`, `tests/evaluation/test_agent_cases.py` |
+| FR-034 | Agent/工具/模型失败的有界回退与公开 composition 状态 | `tests/unit/test_gateway.py`, `tests/integration/test_full_intelligence.py` |
+| FR-035 | Agent 前安全短路和不可信工具/网页内容隔离 | `tests/integration/test_agent_safety.py`, `tests/unit/test_safety.py` |
 | FR-036 | Safety 后的 Session Meta Resolver、准确计数与有界摘要分离、事实指代重新核验 | `tests/unit/test_session_meta.py`, `tests/integration/test_session_meta.py` |
+| FR-037 | Full-intelligence 默认路由、会话开关与 Agent-first 工具循环 | `tests/contract/test_intelligence_mode.py`, `tests/integration/test_full_intelligence.py`, `tests/e2e/test_chat.spec.ts` |
+| FR-038 | Qianfan-first 受控网页搜索、固定端点、清洗和限额 | `tests/contract/test_qianfan_search.py`, `tests/contract/test_baidu_search.py`, `tests/contract/test_web_search.py` |
+| FR-039 | 结构化空结果后的长尾搜索桥接与安全解释 | `tests/integration/test_full_intelligence.py`, `tests/unit/test_agent_tools.py` |
+| FR-040 | 公开部署全智能默认配置和可关闭模式 | `tests/contract/test_provider_mode.py`, `tests/e2e/test_chat.spec.ts` |
+| FR-041 | Public output/health 脱敏及底层 Agent、工具、供应商和凭据隔离 | `tests/unit/test_safety.py`, `tests/contract/test_http_chat.py`, `tests/unit/test_agent_tools.py` |
+| FR-042 | 搜索观察/恢复答案去重、句子边界限长、冲突标记和前端列表可读性 | `tests/unit/test_agent_tools.py`, `tests/integration/test_full_intelligence.py`, `tests/e2e/test_chat.spec.ts` |
+| FR-043 | 明确年份+双方对阵的结构化空结果搜索恢复与系列赛线索排序 | `tests/integration/test_full_intelligence.py` |
 | ARCH-HERMES-001 | Official Hermes Agent boundary/capability self-test | `tests/contract/test_hermes_agent_runtime.py`, `tests/integration/test_agent_safety.py` |
 | ARCH-CAPACITY-001 | Admission budget、bounded queue、backpressure | `CAP-ADMISSION-001`, `E2E-SSE-001` |
 | ARCH-FAILURE-001 | Failure/degradation matrix and cancellation | `CHAOS-UPSTREAM-001`, `INT-CANCEL-001` |
@@ -615,9 +655,9 @@ P50/P90/P95、超时/错误率、SSE 断开率、准入拒绝率和 fallback 率
 
 ## 13. Decisions and deferred items
 
-已确定的首版工程决策是：保留 Python/FastAPI 领域核心，采用 `hybrid` runtime profile，
-hybrid 的旧 composer 仍通过 `AgentRuntimePort` 提供可选表达能力；full 通过官方
-`AgentOrchestratorPort` 和三个任务级 NBA 工具提供问题理解/规划能力。客观事实、安全门、
+已确定的首版工程决策是：保留 Python/FastAPI 领域核心，公开 profile 默认 Agent-first，
+hybrid 仍可由用户关闭全智能开关后使用；full 通过官方
+`AgentOrchestratorPort` 和四个任务级 NBA 工具提供问题理解/规划能力。客观事实、安全门、
 Provider、Verifier 和 Derivation 不迁移到 Hermes。这样可获得 Hermes 的开发速度，同时保持
 PDF 与现有契约的可验证性。
 

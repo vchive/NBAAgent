@@ -9,7 +9,12 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
-from apps.api.src.application.ports import ProviderPort, ProviderResult, RequestBudget
+from apps.api.src.application.ports import (
+    ProviderPort,
+    ProviderResult,
+    RequestBudget,
+    merge_capability_issues,
+)
 from apps.api.src.domain.errors import ProviderErrorKind
 from apps.api.src.domain.models import Standing, canonical_conference
 from apps.api.src.infrastructure.cache import InMemoryTTLCache
@@ -118,7 +123,9 @@ class ProviderGateway:
             cached = self.cache.get(key)
             self.cache_hit_count = self.cache.hit_count
             if isinstance(cached, ProviderResult):
-                return cached
+                # Capability issues describe a failed attempt in one request;
+                # they must never reappear on a later cache hit.
+                return cached.model_copy(update={"capability_issues": []})
         method: Callable[..., Awaitable[ProviderResult[Any]]] = getattr(self.provider, operation)
         last: ProviderResult[Any] | None = None
         attempts = 0
@@ -265,8 +272,19 @@ class ProviderGateway:
                 except Exception:
                     fallback_result = None
                 if isinstance(fallback_result, ProviderResult) and fallback_result.error is None:
+                    primary_issues = merge_capability_issues(
+                        last.capability_issues,
+                        [last.error],
+                    )
                     last = fallback_result.model_copy(
-                        update={"used_fallback": True, "partial": True}
+                        update={
+                            "used_fallback": True,
+                            "partial": True,
+                            "capability_issues": merge_capability_issues(
+                                fallback_result.capability_issues,
+                                primary_issues,
+                            ),
+                        }
                     )
                     used_fallback = True
         if (
@@ -276,9 +294,10 @@ class ProviderGateway:
             and not used_fallback
         ):
             self.cache_write_count += 1
+            cached_result = last.model_copy(update={"capability_issues": []})
             self.cache.set(
                 key,
-                last,
+                cached_result,
                 ttl_seconds if ttl_seconds is not None else self.default_ttl_seconds,
             )
         return last
@@ -329,14 +348,50 @@ class ProviderGateway:
             force_refresh=force_refresh,
         )
 
-    async def get_play_by_play(self, game_id: str, budget: RequestBudget) -> ProviderResult[Any]:
-        return await self._invoke("get_play_by_play", game_id, budget=budget, ttl_seconds=45)
+    async def get_play_by_play(
+        self,
+        game_id: str,
+        budget: RequestBudget,
+        *,
+        allow_fallback: bool = True,
+    ) -> ProviderResult[Any]:
+        return await self._invoke(
+            "get_play_by_play",
+            game_id,
+            budget=budget,
+            ttl_seconds=45,
+            allow_fallback=allow_fallback,
+        )
 
-    async def get_player_stats(self, query: Any, budget: RequestBudget) -> ProviderResult[Any]:
-        return await self._invoke("get_player_stats", query, budget=budget, ttl_seconds=300)
+    async def get_player_stats(
+        self,
+        query: Any,
+        budget: RequestBudget,
+        *,
+        allow_fallback: bool = True,
+    ) -> ProviderResult[Any]:
+        return await self._invoke(
+            "get_player_stats",
+            query,
+            budget=budget,
+            ttl_seconds=300,
+            allow_fallback=allow_fallback,
+        )
 
-    async def get_team_stats(self, query: Any, budget: RequestBudget) -> ProviderResult[Any]:
-        return await self._invoke("get_team_stats", query, budget=budget, ttl_seconds=300)
+    async def get_team_stats(
+        self,
+        query: Any,
+        budget: RequestBudget,
+        *,
+        allow_fallback: bool = True,
+    ) -> ProviderResult[Any]:
+        return await self._invoke(
+            "get_team_stats",
+            query,
+            budget=budget,
+            ttl_seconds=300,
+            allow_fallback=allow_fallback,
+        )
 
     async def get_standings(
         self,
@@ -345,6 +400,7 @@ class ProviderGateway:
         *,
         conference: str | None = None,
         fallback_on_empty: bool = False,
+        allow_fallback: bool = True,
     ) -> ProviderResult[Any]:
         """Read standings and apply an optional conference projection.
 
@@ -362,6 +418,7 @@ class ProviderGateway:
             budget=budget,
             ttl_seconds=300,
             fallback_on_empty=fallback_on_empty,
+            allow_fallback=allow_fallback,
         )
         target = canonical_conference(conference)
         if target is None or result.error is not None:
@@ -380,6 +437,7 @@ class ProviderGateway:
         budget: RequestBudget,
         *,
         fallback_on_empty: bool = False,
+        allow_fallback: bool = True,
     ) -> ProviderResult[Any]:
         """Read structured history with an optional bounded-snapshot policy."""
 
@@ -389,6 +447,7 @@ class ProviderGateway:
             budget=budget,
             ttl_seconds=86_400,
             fallback_on_empty=fallback_on_empty,
+            allow_fallback=allow_fallback,
         )
 
     async def search_news(
@@ -397,6 +456,7 @@ class ProviderGateway:
         budget: RequestBudget,
         *,
         fallback_on_empty: bool = False,
+        allow_fallback: bool = True,
     ) -> ProviderResult[Any]:
         return await self._invoke(
             "search_news",
@@ -404,6 +464,35 @@ class ProviderGateway:
             budget=budget,
             ttl_seconds=self.news_ttl_seconds,
             fallback_on_empty=fallback_on_empty,
+            allow_fallback=allow_fallback,
+        )
+
+    async def search_web(
+        self,
+        query: Any,
+        budget: RequestBudget,
+        *,
+        fallback_on_empty: bool = False,
+        allow_fallback: bool = True,
+        force_refresh: bool = False,
+    ) -> ProviderResult[Any]:
+        """Run the dedicated web-search path.
+
+        ``search_web`` is intentionally separate from ``search_news``.  A
+        long-tail Agent lookup should go straight to the configured search
+        adapter (or its bounded search fallbacks), rather than first spending
+        an operation on the structured sports-news endpoint.  The same gateway
+        cache/retry/deadline boundary applies to both operations.
+        """
+
+        return await self._invoke(
+            "search_web",
+            query,
+            budget=budget,
+            ttl_seconds=self.news_ttl_seconds,
+            fallback_on_empty=fallback_on_empty,
+            allow_fallback=allow_fallback,
+            force_refresh=force_refresh,
         )
 
     def counters(self) -> dict[str, int]:

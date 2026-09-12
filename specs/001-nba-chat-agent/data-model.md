@@ -250,6 +250,8 @@ Game
   start_utc: Instant
   home: EntityRef (kind=TEAM)
   away: EntityRef (kind=TEAM)
+  home_coach: string?
+  away_coach: string?
   status: SCHEDULED|LIVE|FINAL|POSTPONED|UNKNOWN
   home_score: int?
   away_score: int?
@@ -264,8 +266,9 @@ Venue
   country: string?
 ```
 
-唯一性由 `game_id` 保证；比分只有在 `FINAL` 或来源明确标记时才可用于最终赛果。场馆为
-可选公开元数据，适配器缺失时整体为 `null`，不得从主队名称猜测球馆。
+唯一性由 `game_id` 保证；比分只有在 `FINAL` 或来源明确标记时才可用于最终赛果。场馆和
+主客队主教练均为可选公开元数据，适配器缺失时保持 `null`，不得从主队名称、当前球队名单
+或模型记忆猜测。教练问答只渲染该字段；字段不完整时不得附加比分、分差或得分王来替代。
 
 ### Statistics and standings
 
@@ -321,6 +324,8 @@ PlayEvent
   home_score_after: int?
   away_score_after: int?
   wallclock_utc: Instant?
+  action_text: string? (source-supplied plain text, <=500 characters; HTML/control
+    characters are rejected and missing detail remains null)
   raw_text_hash: string?
 
 PlayByPlayBundle
@@ -496,7 +501,7 @@ NBA 工具核验。
 后计数变为 N+1。
 
 `EvaluationCase.turns` 是评测输入的唯一规范形态：单轮题包含一个 turn，H 类题包含按
-`turn_index` 排序的三轮消息并在同一 `session_id` 中执行。`expected_entities`、
+`turn_index` 排序的至少三轮消息并在同一 `session_id` 中执行。`expected_entities`、
 `reference_facts` 和 `tolerance` 可按轮定义，避免把三轮追问压缩成一个字符串；
 `source_snapshot` 只标识版本化 fixture，不进入用户响应。公开响应只投影泛化的
 `data_origin=demo_snapshot`/“演示快照”，不暴露 fixture 版本、Provider 名或内部来源标识；
@@ -504,8 +509,8 @@ NBA 工具核验。
 
 `HighlightsEnvelope.data_origin=mixed` 不能下沉覆盖单场。每个 `HighlightGameProjection` 的
 来源由产生该比赛记录的检索结果确定，并与服务器 `game_id → Game` registry 的并行
-`game_id → data_origin` registry 一起更新。SQLite projection schema v4 持久化该字段并按实际
-返回行推导 envelope；v3
+`game_id → data_origin` registry 一起更新。SQLite projection schema v5 持久化该字段并按实际
+返回行推导 envelope；v4
 记录强制 miss 后重新拉取，防止混合列表在重启后把所有卡误标为同一来源。
 
 ## 5. Relationships and lifecycle
@@ -561,7 +566,7 @@ VERIFIED/UNVERIFIED → DERIVED（如需要）→ COMPOSED → OUTPUT_GUARDED`�
   Hermes；该分支使用 `SERVICE_BUSY` 或等价的本地过载错误，不能伪装成上游限流。
 - `hermes_mode=OFF` 时不得产生 Hermes 调用；`hermes_status` 和 `fallback_reason` 只用于
   内部 telemetry，不进入用户响应。
-- `agent_tool_names` 只能是 `nba_query`、`nba_schedule`、`nba_news`；BLOCK/OUT_OF_SCOPE
+- `agent_tool_names` 只能是 `nba_query`、`nba_schedule`、`nba_news`、`nba_search`；BLOCK/OUT_OF_SCOPE
   时 `agent_iteration_count=agent_tool_call_count=0`。单请求 tool call 不得超过配置上限 4。
 - `AgentToolObservation` 不包含 Provider URL、raw JSON、凭据、canonical/evidence ID 或工具
   指令；`NO_DATA` 必须尽可能保留确定性解析出的北京时间查询范围。

@@ -47,6 +47,16 @@ def _scoreboard() -> dict:
                                 "country": "USA",
                             },
                         },
+                        "coaches": [
+                            {
+                                "team": {"id": "2", "abbreviation": "BOS"},
+                                "coach": {"displayName": "Joe Mazzulla"},
+                            },
+                            {
+                                "team": {"id": "25", "abbreviation": "OKC"},
+                                "coach": {"displayName": "Mark Daigneault"},
+                            },
+                        ],
                         "competitors": [
                             {
                                 "homeAway": "home",
@@ -153,6 +163,8 @@ async def test_scoreboard_and_summary_are_normalized() -> None:
         assert game.venue.city == "Boston"
         assert game.venue.state == "MA"
         assert game.venue.country == "USA"
+        assert game.home_coach == "Joe Mazzulla"
+        assert game.away_coach == "Mark Daigneault"
         assert result.evidence[0].source_class.value == "ESTABLISHED_SPORTS"
 
         summary = await adapter.get_game_summary("401-test", _budget())
@@ -161,6 +173,8 @@ async def test_scoreboard_and_summary_are_normalized() -> None:
         assert summary.data.game.status.value == "FINAL"
         assert summary.data.game.venue is not None
         assert summary.data.game.venue.name == "TD Garden"
+        assert summary.data.game.home_coach == "Joe Mazzulla"
+        assert summary.data.game.away_coach == "Mark Daigneault"
         assert summary.data.leaders[0].metrics["points"] == 32
         assert summary.data.plays is not None
         assert summary.data.plays.events[0].event_type is PlayEventType.FREE_THROW
