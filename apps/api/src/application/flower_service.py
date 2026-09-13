@@ -307,6 +307,14 @@ def _render_symptom(
         possibilities.extend(["短时缺水", "根系受损导致吸水困难", "午后高温蒸腾过强"])
     if any(item in observation_text for item in ("虫子", "蚜虫", "红蜘蛛", "介壳虫")):
         possibilities.extend(["蚜虫/介壳虫等可见害虫", "红蜘蛛等需要观察叶背的微小害虫"])
+    if any(item in observation_text for item in ("掉花苞", "花苞掉", "花苞脱落")):
+        possibilities.extend(
+            ["温度、光照或搬动造成的环境变化", "盆土过干或过湿", "蓟马等害虫及花苞损伤"]
+        )
+    if any(item in observation_text for item in ("根发黑", "根黑", "发黑发软", "烂根", "根腐")):
+        possibilities.extend(
+            ["长期积水导致根系缺氧或腐烂", "介质过细、排水不畅", "低温湿根或伤口感染"]
+        )
     if any(item in observation_text for item in ("黑斑", "白粉", "叶斑", "霉")):
         possibilities.extend(["通风差、叶面长期潮湿相关的病害", "日灼、药害等非传染性损伤"])
     if not possibilities:
@@ -314,7 +322,7 @@ def _render_symptom(
     # Preserve order while de-duplicating and keep a manageable differential.
     possibilities = list(dict.fromkeys(possibilities))[:4]
     lines = [
-        f"**观察**：这盆{profile.canonical_name}出现了“{observation_text}”。仅凭文字不能确定病因。",
+        f"**观察**：这盆{profile.canonical_name}出现了“{observation_text}”（状态异常）。仅凭文字不能确定病因。",
         "",
         "**优先排查的可能原因**：",
         *[f"{index}. {item}" for index, item in enumerate(possibilities, start=1)],
@@ -322,6 +330,7 @@ def _render_symptom(
         "**先做的低风险处理**：",
         "- 暂停施肥和喷药，检查盆底是否积水、根颈是否发软或有异味。",
         "- 把植株放在通风、符合其光照需求的位置；严重病叶先隔离观察。",
+        "- 若是根系发黑发软，先停止浇水并轻轻检查排水；不要在未确认原因前大幅修根或换药。",
         "- 拍下整株、叶片正反面和盆土近照，连续 2–3 天记录干湿与变化。",
         "",
         "**还需要确认**：最近一次浇水时间、盆土是否一直湿、光照时长，以及叶背有没有虫或蛛网。",

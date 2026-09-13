@@ -899,26 +899,95 @@ class FlowerChatUseCase:
                     "retryable": True,
                 }
             ]
-        if getattr(result, "error_code", None) is not None:
-            notices.append(_notice_for_error(result.error_code, intelligence=True))
-        else:
-            observed_status = getattr(result, "status", None)
-            observed_status_value = str(
-                getattr(observed_status, "value", observed_status or "")
+        # A tool-level search failure can be carried in ``tool_calls`` even
+        # when Hermes still produces a useful answer (or normalises the outer
+        # error to ``COMPOSER_UNAVAILABLE``). Inspect both layers and expose
+        # only the closed, provider-neutral notice vocabulary. In particular,
+        # do not relabel search quota exhaustion as an intelligence failure.
+        seen_notice_codes: set[str] = set()
+
+        def add_notice(error: Any, *, intelligence: bool) -> None:
+            notice = _notice_for_error(error, intelligence=intelligence)
+            code = str(notice.get("code") or "").upper()
+            if code and code not in seen_notice_codes:
+                seen_notice_codes.add(code)
+                notices.append(notice)
+
+        result_error = getattr(result, "error_code", None)
+        if result_error is not None:
+            result_error_text = str(
+                getattr(result_error, "value", result_error) or ""
             ).upper()
-            if observed_status_value not in {"", RuntimeStatus.OK.value}:
-                notices.append(
-                    _notice_for_error(
-                        SimpleNamespace(
-                            kind=(
-                                "TIMEOUT"
-                                if "TIME" in observed_status_value
-                                else "HTTP"
-                            )
-                        ),
-                        intelligence=True,
+            add_notice(
+                result_error,
+                intelligence=not result_error_text.startswith("SEARCH_"),
+            )
+
+        observed_status = getattr(result, "status", None)
+        observed_status_value = str(
+            getattr(observed_status, "value", observed_status or "")
+        ).upper()
+        if observed_status_value not in {"", RuntimeStatus.OK.value}:
+            add_notice(
+                SimpleNamespace(
+                    kind=(
+                        "TIMEOUT"
+                        if "TIME" in observed_status_value
+                        else "HTTP"
                     )
+                ),
+                intelligence=True,
+            )
+
+        for tool_call in list(getattr(result, "tool_calls", []) or []):
+            raw_code = getattr(tool_call, "error_code", None)
+            if raw_code is None and isinstance(tool_call, Mapping):
+                raw_code = tool_call.get("error_code")
+            if raw_code is None:
+                continue
+            code_text = str(getattr(raw_code, "value", raw_code) or "").upper()
+            if not code_text:
+                continue
+            tool_name = str(
+                getattr(tool_call, "tool_name", None)
+                or (
+                    tool_call.get("tool_name")
+                    if isinstance(tool_call, Mapping)
+                    else ""
                 )
+            ).casefold()
+            is_search_failure = tool_name == "flower_search" or code_text.startswith(
+                "SEARCH_"
+            )
+            # Unknown tool error strings are intentionally ignored; the
+            # runtime has already mapped them to a generic notice, and copying
+            # arbitrary text would widen the public boundary.
+            if code_text in {
+                "SEARCH_QUOTA_EXHAUSTED",
+                "SEARCH_AUTH_UNAVAILABLE",
+                "SEARCH_TEMPORARILY_UNAVAILABLE",
+                "UPSTREAM_TIMEOUT",
+                "UPSTREAM_RATE_LIMITED",
+                "UPSTREAM_AUTH",
+                "COMPOSER_UNAVAILABLE",
+                "INVALID_UPSTREAM_DATA",
+            }:
+                add_notice(raw_code, intelligence=not is_search_failure)
+        if (
+            getattr(result, "answer_markdown", None)
+            and observed_status_value == RuntimeStatus.OK.value
+            and any(code.startswith("SEARCH_") for code in seen_notice_codes)
+        ):
+            # The runtime may normalise a failed search tool call to the broad
+            # COMPOSER_UNAVAILABLE code even though the model completed a
+            # useful response.  In that case the actionable condition is the
+            # search capability, not an intelligence outage.
+            notices = [
+                notice
+                for notice in notices
+                if notice.get("code") != "INTELLIGENCE_TEMPORARILY_UNAVAILABLE"
+            ]
+            seen_notice_codes.discard("INTELLIGENCE_TEMPORARILY_UNAVAILABLE")
         if (
             not getattr(result, "answer_markdown", None)
             and not notices
@@ -962,6 +1031,79 @@ class FlowerChatUseCase:
         else:
             await self._emit(sink, "message.completed", result.to_dict())
 
+    @staticmethod
+    def _garden_context_projection(
+        context: GardenContext | None,
+    ) -> dict[str, Any] | None:
+        """Project only coarse, user-useful garden state to the wire envelope.
+
+        ``GardenContext`` is server-owned and also contains bounded transcript
+        fields used for session metadata.  Returning a hand-written allow-list
+        here prevents those fields (and a manually injected precise address)
+        from reaching HTTP/SSE clients or being copied into UI state.
+        """
+
+        if not isinstance(context, GardenContext):
+            return None
+
+        def text(value: Any, limit: int) -> str | None:
+            if value is None:
+                return None
+            candidate = " ".join(str(value).replace("\r", " ").replace("\n", " ").split())
+            if not candidate or _URL_RE.search(candidate):
+                candidate = _URL_RE.sub("", candidate).strip()
+            return candidate[:limit] or None
+
+        location = text(context.location, 80)
+        if location and re.search(r"\d|(?:路|街|大道|弄|巷|号|栋|单元|室)", location):
+            # Keep a known city when one is embedded in a more precise address;
+            # otherwise omit the location rather than echoing street details.
+            location = next(
+                (
+                    city
+                    for city in (
+                        "北京",
+                        "上海",
+                        "广州",
+                        "深圳",
+                        "杭州",
+                        "南京",
+                        "苏州",
+                        "成都",
+                        "重庆",
+                        "武汉",
+                        "西安",
+                        "天津",
+                        "青岛",
+                        "厦门",
+                        "昆明",
+                        "香港",
+                        "澳门",
+                        "台北",
+                    )
+                    if city in location
+                ),
+                None,
+            )
+        light = context.light.value if hasattr(context.light, "value") else context.light
+        container = (
+            context.container.type.value
+            if hasattr(context.container, "type")
+            and hasattr(context.container.type, "value")
+            else context.container
+        )
+        projection: dict[str, Any] = {
+            "plant_name": text(context.plant_name, 100),
+            "location": location,
+            "climate": text(context.climate, 80),
+            "light": text(light, 80),
+            "container": text(container, 80),
+            "season": text(context.season, 40),
+        }
+        # Keep the shape stable but avoid emitting an empty object for a fresh
+        # session, which is less useful to clients than ``null``.
+        return projection if any(value is not None for value in projection.values()) else None
+
     def _result(
         self,
         request_id: UUID,
@@ -991,6 +1133,7 @@ class FlowerChatUseCase:
             follow_up=follow_up,
             latency_ms=max(0, int((time.monotonic() - started) * 1000)),
             notices=notices or [],
+            garden_context=self._garden_context_projection(context),
             composition=composition
             or {"mode": "deterministic", "status": "not_requested", "latency_ms": 0},
         )

@@ -109,7 +109,13 @@
   // recovery path for a public/live page.  It can be enabled either by the
   // server reporting `mode: fixture` or by setting this runtime value before
   // app.js loads in a standalone static demo.
-  const EXPLICIT_RUNTIME_MODE = String(window.COURTSIDE_RUNTIME_MODE || "").trim().toLowerCase();
+  // `FLOWER_*` is the canonical public configuration namespace.  Keep the
+  // historical `COURTSIDE_*` value as a migration fallback for an already
+  // deployed static page, but never require the old namespace in the flower
+  // experience.
+  const EXPLICIT_RUNTIME_MODE = String(
+    window.FLOWER_RUNTIME_MODE || window.COURTSIDE_RUNTIME_MODE || "",
+  ).trim().toLowerCase();
   const EXPLICIT_FIXTURE_MODE = ["demo", "fixture"].includes(EXPLICIT_RUNTIME_MODE);
   const STAGE_COPY = {
     understanding: "正在理解问题",
@@ -1372,10 +1378,23 @@
   // in the browser bundle.  The client still blocks accidental server/model
   // disclosure, while users inspecting public assets do not see the brand.
   const PRIVATE_RUNTIME_TOKEN = String.fromCharCode(104, 101, 114, 109, 101, 115);
+  // Provider/runtime names can arrive from an untrusted model response with
+  // spaces, punctuation or zero-width characters inserted between letters.
+  // Detection therefore uses a compact, Unicode-normalised representation in
+  // addition to the readable regular expression below.  The names are kept in
+  // this private browser-side guard only; they are never rendered.
+  const PRIVATE_PROVIDER_TOKENS = Object.freeze([
+    "baidu", "qianfan", "aliyun", "dashscope", "siliconflow", "openai",
+    "anthropic", "deepseek", "provider", "endpoint", "runtime", "prompt",
+    "toolcall", "toolname", "apikey", "accesstoken", "stacktrace",
+    "requestid", "sessionid", "searchadapter",
+  ]);
+  const INVISIBLE_CHAR_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/gu;
   const FORBIDDEN_INTERNAL_IDENTIFIER_RE = new RegExp(
     `(?:^|[^A-Za-z0-9_])(?:${PRIVATE_RUNTIME_TOKEN}|provider)(?=$|[^A-Za-z0-9_])`,
     "iu",
   );
+  const PUBLIC_INTERNAL_PHRASE_RE = /(?:内部(?:实现|框架|运行时|链路|服务|字段|标识)|供应商|提供商|服务商|系统提示词|提示词|工具(?:调用|名称|参数)|搜索(?:适配器|工具)|接口(?:端点|地址)|API\s*(?:密钥|键)|访问令牌|请求\s*ID|追踪\s*ID|调用栈|堆栈|模型(?:名称|名字|标识|版本))/iu;
   const SEARCH_PROCESS_LEAD_RE = /^(?:(?:我|我们|助手|系统|服务)\s*)?(?:进行(?:了)?\s*)?(?:在线|网页|公开资料)?\s*(?:搜索|检索|查询)(?:了)?[^，,:：。！？!?\n]{0,24}?(?:后|之后)?(?:发现|显示|表明|得知|可见)\s*[，,:：]\s*/u;
   const STRUCTURED_MISSING_LINE_RE = /^(?:(?:我|我们|助手|系统|服务)\s*)?(?:查询|检索|检查|读取)(?:了)?\s*(?:当前)?结构化(?:比赛)?(?:记录|数据)\s*[，,]?\s*(?:但|不过|然而)?\s*(?:没有|未能|未|缺少)\s*(?:找到|提供|包含|返回)?\s*([^。！？!?；;\n]{1,120})[。！？!?]?$/u;
   const MODEL_WORKFLOW_META_LINE_RE = /^(?:(?=[^\n]{0,520}(?:搜索|检索|来源|核验))(?=[^\n]{0,520}(?:我只使用|谨慎综合|存在不一致|说法不同|未经核验))[^\n]{1,520}|先给结论[^\n]{0,240}(?:明确标注|确认事实|过程细节)[^\n]{0,240})$/u;
@@ -1389,7 +1408,10 @@
     "补充资料显示", "缓存", "数据库", "索引", "结构化比赛记录", "结构化比赛数据",
     "我查询了结构化比赛", "我检索了结构化比赛", "我查询了结构化记录",
     "本轮已调用工具", "已调用工具", "我们搜索", "我们检索", "我们查询",
-    "命中缓存", PRIVATE_RUNTIME_TOKEN, "provider",
+    "命中缓存", PRIVATE_RUNTIME_TOKEN, "provider", "runtime", "endpoint",
+    "prompt", "toolcall", "toolname", "apikey", "accesstoken", "requestid",
+    "sessionid", "stacktrace", "qianfan", "baidu", "aliyun", "dashscope",
+    "siliconflow", "openai", "anthropic", "deepseek",
   ]);
 
   function normalizeSupplementalLine(line) {
@@ -1406,6 +1428,80 @@
       .trim();
   }
 
+  function compactInternalDetectionValue(value) {
+    return String(value ?? "")
+      .normalize("NFKC")
+      .replace(INVISIBLE_CHAR_RE, "")
+      .toLocaleLowerCase("en-US")
+      // Keep letters/numbers (including CJK) and discard separators.  This
+      // catches obfuscated values such as ``H e-r-m-e-s`` or ``p\u200br\u200bompt``
+      // without changing the text that is eventually shown to the user.
+      .replace(/[^\p{L}\p{N}]+/gu, "");
+  }
+
+  function containsForbiddenInternalText(value) {
+    const readable = String(value ?? "").normalize("NFKC").replace(INVISIBLE_CHAR_RE, "");
+    if (!readable.trim()) return false;
+    if (FORBIDDEN_INTERNAL_IDENTIFIER_RE.test(readable) || PUBLIC_INTERNAL_PHRASE_RE.test(readable)) {
+      return true;
+    }
+    const compact = compactInternalDetectionValue(readable);
+    if (!compact) return false;
+    return PRIVATE_PROVIDER_TOKENS.some((token) => compact.includes(token));
+  }
+
+  // URLs, markdown links and credential-shaped fragments are never useful in
+  // the public answer.  Keep a link's human-readable label where possible so
+  // sanitising a well-formed answer does not make it look truncated.
+  const MARKDOWN_LINK_RE = /\[([^\]]{0,240})\]\(\s*(?:https?|wss?):\/\/[^)]{0,2000}\)/giu;
+  const PUBLIC_URL_RE = /(?:https?|wss?):\/\/[^\s<>「」【】（）()]+/giu;
+  const CREDENTIAL_FRAGMENT_RE = /\b(?:bearer\s+|basic\s+)?(?:api[_ -]?key|access[_ -]?token|auth(?:entication)?[_ -]?token|secret)\s*[:=]\s*[^\s,，;；。！？!?]+/giu;
+
+  function sanitisePublicText(value) {
+    let text = String(value ?? "")
+      .replace(INVISIBLE_CHAR_RE, "")
+      .replace(MARKDOWN_LINK_RE, "$1")
+      .replace(CREDENTIAL_FRAGMENT_RE, "")
+      .replace(PUBLIC_URL_RE, "")
+      // The renderer uses textContent, nevertheless remove stray tags so a
+      // model cannot make an answer look like an embedded document.
+      .replace(/<\/?[A-Za-z][^>]{0,200}>/g, "");
+
+    if (!text.trim()) return "";
+
+    // Drop only the sentence that contains implementation material.  A whole
+    // line used to be discarded, which could hide a useful answer when a
+    // provider appended a diagnostic sentence after it.  Sentence-level
+    // projection keeps the safe portion while guaranteeing no internal token
+    // reaches the DOM.  Work line-by-line so Markdown bullets and paragraph
+    // breaks survive the projection.
+    const safeLines = text.split("\n").map((line) => {
+      const pieces = line.match(/[^。！？!?；;]+(?:[。！？!?；;]+|$)/gu) || [line];
+      const safe = pieces.filter((piece) => !containsForbiddenInternalText(piece));
+      return safe.join("").replace(/[ \t]{2,}/g, " ").trimEnd();
+    });
+    return safeLines.join("\n").trim();
+  }
+
+  function looksLikeRawSearchLine(line) {
+    const value = normalizeSupplementalLine(line);
+    if (!value) return false;
+    if (PUBLIC_URL_RE.test(value)) {
+      PUBLIC_URL_RE.lastIndex = 0;
+      return true;
+    }
+    PUBLIC_URL_RE.lastIndex = 0;
+    if (/^(?:[-*+]|\d+[.)])\s+/.test(value)) return true;
+    if (/^\|/.test(value)) return true;
+    if (/^(?:标题|摘要|来源|链接|网页|搜索结果|检索结果|相关报道|报道|原文|发布时间|作者)\s*[：:]/u.test(value)) return true;
+    if (/(?:新闻标题|新闻摘要|报道摘要|网页标题|网页摘要|原始摘要|搜索片段|检索片段)/u.test(value)) return true;
+    if (/(?:搜索摘要|搜索结果|检索结果).*(?:不应|不作为|仅作|待核验|未核验)/u.test(value)) return true;
+    // Common search adapters return a quoted article title followed by an
+    // excerpt.  This marker is specific enough not to swallow normal prose.
+    if (/^(?:【[^】]{1,160}】|《[^》]{1,160}》)\s*(?:[：:—–-]|$)/u.test(value)) return true;
+    return false;
+  }
+
   function isSupplementalHeading(line) {
     return SUPPLEMENTAL_HEADING_RE.test(normalizeSupplementalLine(line));
   }
@@ -1414,6 +1510,7 @@
     const lines = String(markdown ?? "").replace(/\r\n?/g, "\n").split("\n");
     const output = [];
     let hiding = false;
+    let hiddenLines = 0;
 
     lines.forEach((rawLine) => {
       let line = String(rawLine || "");
@@ -1438,6 +1535,7 @@
       // here would let the second section's bullets leak into the public chat.
       if (isSupplementalHeading(trimmed)) {
         hiding = true;
+        hiddenLines = 0;
         return;
       }
       const inlineSupplemental = normalized.match(INLINE_SUPPLEMENTAL_RE);
@@ -1447,29 +1545,52 @@
           .replace(/[，,；;：:\s]+$/u, "");
         if (prefix) output.push(prefix);
         hiding = true;
+        hiddenLines = 0;
         return;
       }
       if (hiding) {
-        if (!trimmed) return;
-        if (SUPPLEMENTAL_CAVEAT_RE.test(normalized)) {
+        // A blank line conventionally terminates a search excerpt block.  Do
+        // not keep hiding the answer forever when the model omits a formal
+        // “综合结论” heading.
+        if (!trimmed) {
           hiding = false;
+          hiddenLines = 0;
           return;
         }
-        // Search responses are not consistently formatted as Markdown lists.
-        // Keep plain titles and multi-line excerpts hidden as well, and resume
-        // only when the answer declares a new composed section explicitly.
-        if (!COMPOSED_ANSWER_BOUNDARY_RE.test(normalized)) return;
-        hiding = false;
+        if (SUPPLEMENTAL_CAVEAT_RE.test(normalized)) {
+          hiding = false;
+          hiddenLines = 0;
+          return;
+        }
+        if (COMPOSED_ANSWER_BOUNDARY_RE.test(normalized)) {
+          hiding = false;
+          hiddenLines = 0;
+        } else if (looksLikeRawSearchLine(trimmed)) {
+          // Drop explicit list/metadata/excerpt lines, but keep looking for
+          // the first ordinary prose paragraph that follows them.
+          hiddenLines += 1;
+          return;
+        } else {
+          // The previous implementation required a fixed composed-answer
+          // heading here and consequently truncated perfectly valid answers.
+          // An ordinary sentence is a safe boundary by itself.
+          hiding = false;
+          hiddenLines = 0;
+        }
       }
       if (SUPPLEMENTAL_CAVEAT_RE.test(normalized)) return;
       if (INTERNAL_RETRIEVAL_RE.test(normalized)) return;
-      if (FORBIDDEN_INTERNAL_IDENTIFIER_RE.test(normalized)) return;
       if (MODEL_WORKFLOW_META_LINE_RE.test(normalized)) return;
       if (INTERNAL_PROCESS_LINE_RE.test(normalized)) return;
+      // Apply the sentence-level public projection here rather than dropping
+      // an entire line when an otherwise useful answer is followed by a
+      // diagnostic token (for example “……。provider=…”).
+      line = sanitisePublicText(line);
+      if (!line.trim()) return;
       output.push(line);
     });
 
-    return output
+    const cleaned = output
       .join("\n")
       .replace(/^\s*(?:(?:根据|据|基于|结合)(?:本次|当前|现有)?(?:公开)?(?:网页)?(?:搜索|检索)(?:结果|资料|信息)?|搜索结果(?:显示|表明)|相关报道(?:还)?提到|补充资料(?:显示|表明))\s*[，,:：]\s*/gmu, "")
       .replace(/^(?:基于|结合)[^。！？!?\n]{0,160}(?:交叉检索|检索材料|已核验事实|比赛记录)[^。！？!?\n]{0,100}(?:回答)?\s*[：:]\s*/u, "")
@@ -1489,13 +1610,15 @@
       .replace(/(?:在\s*)?(?:本场(?:比赛)?|这场(?:比赛)?|该场(?:比赛)?|单场|G\s*\d+)(?:中)?\s*(?:当选|获选|获评|获得|荣膺|拿下)(?:了)?\s*(?:本届)?\s*((?:(?:总决赛|系列赛)\s*(?:的)?\s*(?:MVP|最有价值球员))|FMVP)/giu, (_match, award) => `最终当选${String(award).includes("系列赛") ? "系列赛" : "总决赛"} MVP`)
       .replace(/\n{3,}/g, "\n\n")
       .trim();
+
+    return sanitisePublicText(cleaned);
   }
 
   function containsInternalImplementationText(value) {
     const normalized = normalizeSupplementalLine(String(value ?? ""));
     if (!normalized) return false;
     return INTERNAL_SCALAR_RE.test(normalized)
-      || FORBIDDEN_INTERNAL_IDENTIFIER_RE.test(normalized)
+      || containsForbiddenInternalText(normalized)
       || INTERNAL_PROCESS_LINE_RE.test(normalized)
       || isSupplementalHeading(normalized);
   }
@@ -1516,11 +1639,14 @@
     }
     const unsafeSuffix = trailingLine.slice(suffixStart).trim();
     const normalized = normalizeSupplementalLine(unsafeSuffix);
-    const folded = normalized.toLocaleLowerCase("en-US");
-    const potentialInternal = Boolean(normalized) && INTERNAL_STREAM_STARTS.some((label) => {
-      const foldedLabel = label.toLocaleLowerCase("en-US");
-      return foldedLabel.startsWith(folded) || folded.startsWith(foldedLabel);
-    });
+    const folded = compactInternalDetectionValue(normalized);
+    const potentialInternal = Boolean(normalized) && (
+      containsForbiddenInternalText(normalized)
+      || INTERNAL_STREAM_STARTS.some((label) => {
+        const foldedLabel = compactInternalDetectionValue(label);
+        return foldedLabel.startsWith(folded) || folded.startsWith(foldedLabel);
+      })
+    );
     if (!potentialInternal || !projected) return projected;
     if (projected.endsWith(unsafeSuffix)) {
       projected = projected.slice(0, -unsafeSuffix.length).trimEnd();
@@ -1907,21 +2033,76 @@
 
   // Error envelopes can originate at an upstream adapter.  Keep the public
   // surface useful while preventing provider names, URLs, billing text or
-  // implementation details from leaking into the conversation.
-  const INTERNAL_ERROR_RE = /(https?:\/\/|wss?:\/\/|api[_ -]?key|token|billing|quota\s+at|provider|endpoint|model[_ -]?name|stack trace)/iu;
+  // implementation details from leaking into the conversation.  Codes are a
+  // server-owned contract; arbitrary upstream messages are never trusted as
+  // the primary copy.
+  const PUBLIC_ERROR_MESSAGES = Object.freeze({
+    INTELLIGENCE_QUOTA_EXHAUSTED: "智能回答额度已用完；基础花卉建议仍可使用，请稍后重试。",
+    SEARCH_QUOTA_EXHAUSTED: "在线资料额度已用完；基础花卉建议仍可使用，最新信息可能暂时不完整。",
+    SEARCH_CAPACITY_LIMITED: "在线资料额度暂受限；本轮仍可提供基础花卉建议，最新信息可能不完整。",
+    INTELLIGENCE_AUTH_UNAVAILABLE: "智能回答当前不可用；基础花卉建议仍可使用，请稍后重试。",
+    SEARCH_AUTH_UNAVAILABLE: "在线资料当前不可用；基础花卉建议仍可使用，请稍后重试。",
+    INTELLIGENCE_TEMPORARILY_UNAVAILABLE: "智能回答暂时不可用；基础花卉建议仍可使用，请稍后重试。",
+    SEARCH_TEMPORARILY_UNAVAILABLE: "在线资料暂时不可用；基础花卉建议仍可使用，请稍后重试。",
+    UPSTREAM_TIMEOUT: "服务响应超时，请稍后重试。",
+    SERVICE_BUSY: "种花服务当前较忙，请稍后重试。",
+    RATE_LIMITED: "请求较多，请稍后重试。",
+    TOO_MANY_REQUESTS: "请求较多，请稍后重试。",
+    AUTH_REQUIRED: "登录已失效，请重新登录。",
+    NETWORK_UNAVAILABLE: "园艺资料服务暂时不可用，请检查网络后重试。",
+    COMPOSER_UNAVAILABLE: "智能回答暂时不可用；请稍后重试。",
+    INVALID_PAYLOAD: "请求格式暂时无法处理，请稍后重试。",
+    CANCELLED: "本次回答已停止，可继续提问。",
+  });
+  const PUBLIC_ERROR_STATUS_MESSAGES = Object.freeze({
+    408: "服务响应超时，请稍后重试。",
+    401: "登录已失效，请重新登录。",
+    429: "请求较多，请稍后重试。",
+    502: "园艺资料服务暂时不可用，请稍后重试。",
+    503: "种花服务当前较忙，请稍后重试。",
+    504: "服务响应超时，请稍后重试。",
+  });
+  const PUBLIC_ERROR_COPY_RE = /^(?:服务|种花|园艺|在线资料|智能回答|请求|登录|当前|该请求|操作|网络|连接|数据|资料)[^\n]{0,180}(?:暂时|目前|无法|不可用|失败|超时|重试|维护|繁忙|较忙|不正确|无效|停止|失效|需要)[^\n]{0,120}[。.!！?？]?$/u;
+
+  function errorCodeAndStatus(responseOrError) {
+    const payload = responseOrError?.publicPayload || responseOrError;
+    const code = String(
+      payload?.error?.code
+      || payload?.code
+      || responseOrError?.error?.code
+      || "",
+    ).trim().toUpperCase().replace(/[-\s]+/g, "_");
+    const status = Number(responseOrError?.status || payload?.status || 0);
+    return { code, status };
+  }
+
   function safePublicErrorMessage(responseOrError, fallback = "种花服务暂时不可用，请稍后重试。") {
+    const { code, status } = errorCodeAndStatus(responseOrError);
+    if (PUBLIC_ERROR_MESSAGES[code]) return PUBLIC_ERROR_MESSAGES[code];
+    if (code.includes("SEARCH") && code.includes("QUOTA")) return PUBLIC_ERROR_MESSAGES.SEARCH_QUOTA_EXHAUSTED;
+    if (code.includes("INTELLIGENCE") && code.includes("QUOTA")) return PUBLIC_ERROR_MESSAGES.INTELLIGENCE_QUOTA_EXHAUSTED;
+    if (code.includes("TIMEOUT")) return PUBLIC_ERROR_MESSAGES.UPSTREAM_TIMEOUT;
+    if (code.includes("AUTH")) return PUBLIC_ERROR_MESSAGES.AUTH_REQUIRED;
+    if (code.includes("RATE") || code.includes("TOO_MANY")) return PUBLIC_ERROR_MESSAGES.RATE_LIMITED;
+    if (PUBLIC_ERROR_STATUS_MESSAGES[status]) return PUBLIC_ERROR_STATUS_MESSAGES[status];
+
     const candidate = typeof responseOrError === "string"
       ? responseOrError
-      : responseOrError?.error?.message || responseOrError?.message || "";
-    const value = String(candidate || "").trim();
-    if (!value || INTERNAL_ERROR_RE.test(value)) {
-      const code = String(responseOrError?.error?.code || responseOrError?.code || "").toUpperCase();
-      if (code.includes("QUOTA")) return "当前服务额度已用完，请稍后重试或联系管理员。";
-      if (code.includes("TIMEOUT")) return "服务响应超时，请稍后重试。";
-      if (code.includes("AUTH")) return "服务认证暂时不可用，请稍后重试。";
-      return fallback;
+      : responseOrError?.error?.message
+        || responseOrError?.message
+        || responseOrError?.publicPayload?.error?.message
+        || "";
+    const value = sanitisePublicText(candidate);
+    // Preserve a short, clearly user-facing Chinese message from our own
+    // transport (for example “服务正在维护，请稍后重试”), but reject arbitrary
+    // English/diagnostic text and anything that still contains implementation
+    // material.  The supplied fallback is application-owned and wins when in
+    // doubt.
+    if (value && value.length <= 240 && PUBLIC_ERROR_COPY_RE.test(value)
+      && !containsForbiddenInternalText(value)) {
+      return value;
     }
-    return value.replace(/https?:\/\/\S+/giu, "").trim() || fallback;
+    return fallback;
   }
 
   function renderError(container, response, retryable) {
@@ -1949,10 +2130,6 @@
       retry.addEventListener("click", () => retryLastRequest());
       actions.append(retry);
     }
-    const ref = document.createElement("span");
-    ref.className = "request-reference";
-    ref.textContent = response?.request_id ? `请求 ${String(response.request_id).slice(0, 8)}` : "";
-    actions.append(ref);
     card.append(actions);
     container.append(card);
   }
@@ -1985,6 +2162,34 @@
     SEARCH_AUTH_UNAVAILABLE: {
       label: "在线搜索提醒",
       message: "在线资料当前不可用，暂时无法补充最新网页信息；基础养护建议仍可提供。",
+    },
+    UPSTREAM_TIMEOUT: {
+      label: "服务提醒",
+      message: "服务响应超时；可以稍后重试，已显示的本地养护建议仍然有效。",
+    },
+    SERVICE_BUSY: {
+      label: "服务提醒",
+      message: "当前请求较多；请稍后重试。",
+    },
+    RATE_LIMITED: {
+      label: "服务提醒",
+      message: "请求较多；请稍后重试。",
+    },
+    AUTH_REQUIRED: {
+      label: "登录提醒",
+      message: "登录状态已失效，请重新登录后继续。",
+    },
+    NETWORK_UNAVAILABLE: {
+      label: "连接提醒",
+      message: "暂时无法连接园艺资料服务；请检查网络后重试。",
+    },
+    INTELLIGENCE_RATE_LIMITED: {
+      label: "智能分析提醒",
+      message: "智能回答请求较多；基础花卉建议仍可使用，请稍后重试。",
+    },
+    SEARCH_RATE_LIMITED: {
+      label: "在线搜索提醒",
+      message: "在线资料请求较多；基础花卉建议仍可使用，请稍后重试。",
     },
   });
 
@@ -2057,6 +2262,7 @@
       });
     }
 
+    const answerChildrenBefore = card.childElementCount;
     if (response.status === "blocked") {
       appendBlock(card, { type: "warning", label: "安全提示", content: response.answer_markdown }, 0);
     } else if (response.status === "needs_clarification") {
@@ -2069,13 +2275,34 @@
       renderSimpleMarkdown(card, response.answer_markdown);
     }
 
-    if (response.follow_up) {
+    // A response may contain only raw search blocks or implementation-shaped
+    // diagnostics.  Do not leave an apparently empty assistant bubble and do
+    // not let the presence of a filtered `blocks` array hide a safe markdown
+    // answer.  The fallback is projected through the same public guard.
+    const publicAnswerBlocks = Array.from(card.children).filter((child) => {
+      return !child.classList.contains("capability-notice") && child.classList.contains("answer-block");
+    });
+    if (!publicAnswerBlocks.length && card.childElementCount === answerChildrenBefore) {
+      renderSimpleMarkdown(card, response.answer_markdown);
+    }
+    if (!Array.from(card.children).some((child) => {
+      return !child.classList.contains("capability-notice") && child.classList.contains("answer-block");
+    })) {
+      appendBlock(card, {
+        type: "no_data",
+        label: "暂无可展示内容",
+        content: "暂时没有可展示的安全内容；请换一种问法或稍后重试。",
+      }, 0);
+    }
+
+    const safeFollowUp = sanitisePublicText(response.follow_up || "");
+    if (safeFollowUp) {
       const follow = document.createElement("button");
       follow.type = "button";
       follow.className = "follow-up-button";
-      follow.textContent = `继续追问：${response.follow_up}`;
+      follow.textContent = `继续追问：${safeFollowUp}`;
       follow.addEventListener("click", () => {
-        el.input.value = response.follow_up;
+        el.input.value = safeFollowUp;
         updateCharCount();
         autoGrowInput();
         el.input.focus();
@@ -2094,14 +2321,21 @@
     chip.className = `evidence-chip ${evidence.className}`;
     chip.append(document.createTextNode(`${evidence.icon} ${evidence.text}`));
     const asOf = document.createElement("span");
+    const rawAsOf = String(response.as_of_beijing || "").trim();
+    // Only render the documented Beijing timestamp shape.  Arbitrary
+    // envelope text could otherwise smuggle a URL or internal identifier into
+    // the provenance footer.
+    const safeAsOf = /^(?:\d{4}-\d{2}-\d{2})(?:[ T]\d{2}:\d{2}(?::\d{2})?)?(?:\s*(?:UTC|CST|Asia\/Shanghai))?$/iu.test(rawAsOf)
+      ? rawAsOf
+      : "";
     asOf.textContent = demoSnapshot
       ? "本地知识快照 · 仅作一般养护参考"
       : mixedSnapshot
-        ? response.as_of_beijing
-          ? `本地知识 + 在线资料 · 更新于 ${response.as_of_beijing}`
+        ? safeAsOf
+          ? `本地知识 + 在线资料 · 更新于 ${safeAsOf}`
           : "本地知识 + 在线资料 · 以现场观察为准"
-      : response.as_of_beijing
-      ? `园艺资料 · 更新于 ${response.as_of_beijing}`
+      : safeAsOf
+      ? `园艺资料 · 更新于 ${safeAsOf}`
       : response.status === "completed" && String(response.evidence_state || "none").toLowerCase() === "none"
         ? "本轮回答 · 无需展示时间"
         : "园艺资料 · 当前没有可用的时间口径";
@@ -2674,6 +2908,10 @@
     state.activeGame = null;
     state.activePbp = null;
     state.selectedGameId = null;
+    // A new chat always starts in the domain-neutral flower roaming scope.
+    // Reset the projection as well as the server session so a prior explicit
+    // drill-down cannot leak into the first turn of the new conversation.
+    state.highlightMode = "roaming";
     setConversationScope(null);
     if (el.intelligenceMode) el.intelligenceMode.checked = state.intelligenceMode === "full";
     try {
@@ -2687,6 +2925,7 @@
     updateGameListSelection();
     resetHud();
     renderPbp("Q4");
+    renderHighlightProjection([], "roaming", state.highlightDate);
     showToast("已开始新对话，会话上下文已隔离");
     el.input.value = "";
     updateCharCount();

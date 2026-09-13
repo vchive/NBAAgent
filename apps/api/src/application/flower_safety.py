@@ -42,6 +42,12 @@ _PET_RE = (
 _HUMAN_RE = (
     r"(?:人|孩子|小孩|宝宝|孕妇|我).{0,24}(?:误食|吃了|吸入|吸到|溅到|进眼|中毒|接触)",
     r"(?:误食|吸入|进眼|溅到|中毒).{0,24}(?:人|孩子|小孩|宝宝|我)",
+    # Exposure descriptions often omit the subject entirely (for example
+    # “眼睛沾到杀虫剂” or “皮肤接触农药”).  These are still urgent human
+    # exposure requests and must be stopped before any lookup/search path.
+    r"(?:眼睛|眼部|皮肤|手上|脸上|口鼻|鼻子|喉咙).{0,24}(?:沾到|溅到|进入|进了|接触|碰到|喷到).{0,24}(?:农药|杀虫剂|杀菌剂|除草剂|药液|化学品)",
+    r"(?:农药|杀虫剂|杀菌剂|除草剂|药液|化学品).{0,24}(?:入眼|进眼|溅到眼|接触皮肤|沾到皮肤|吸入|吸到|喷到脸)",
+    r"(?:吸入|吸到|闻到).{0,24}(?:农药|杀虫剂|杀菌剂|除草剂|药液|化学品)",
     r"(?:child|human|i).{0,24}(?:ingested|inhaled|eye|poison|exposure)",
 )
 _CHEMICAL_RE = (

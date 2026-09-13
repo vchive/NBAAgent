@@ -36,17 +36,26 @@ _SELECTION_RE = re.compile(
     r"(?:花卉|植物|品种)(?:推荐|怎么选)|选什么|哪种花|哪类植物|"
     r"适宜(?:种植|养)|适合我的|买什么(?:花|植物)?|想养(?:什么|哪)|"
     r"新手(?:养什么|适合养)|耐阴(?:植物|花卉)?(?:推荐)?|"
-    r"室内(?:植物|花卉)?(?:推荐)?|阳台(?:植物|花卉)?(?:推荐)?)",
+    # “室内/阳台” by itself is a location slot, not a recommendation
+    # request.  Require an explicit selection cue so a sentence such as
+    # “我在阳台养绣球，多久浇水” remains a watering question.
+    r"(?:室内|阳台)[^，。！？?]{0,12}(?:适合|推荐|选什么|怎么选)|"
+    r"耐阴(?:植物|花卉)?(?:推荐|适合|选什么|怎么选)?|"
+    r"花卉(?:推荐|怎么选)|植物(?:推荐|怎么选))",
     re.IGNORECASE,
 )
 _WATER_RE = re.compile(r"(?:浇水|浇几次|多久浇|干湿|缺水|补水|水量|浇透)", re.IGNORECASE)
 _LIGHT_RE = re.compile(r"(?:光照|日照|晒|阳台朝|阴凉|遮阴|暴晒|散射光|直射光)", re.IGNORECASE)
 _SOIL_RE = re.compile(r"(?:土壤|基质|配土|换盆|盆土|排水|透气|酸碱|pH)", re.IGNORECASE)
 _FEED_RE = re.compile(r"(?:施肥|肥料|营养液|追肥|底肥|氮肥|磷肥|钾肥)", re.IGNORECASE)
-_PRUNE_RE = re.compile(r"(?:修剪|剪枝|打顶|摘心|残花|整形)", re.IGNORECASE)
+_PRUNE_RE = re.compile(
+    r"(?:修剪|剪枝|打顶|摘心|残花|整形|怎么剪|如何剪|花后剪|开花后剪)",
+    re.IGNORECASE,
+)
 _PROPAGATE_RE = re.compile(r"(?:扦插|繁殖|分株|播种|压条|嫁接|育苗)", re.IGNORECASE)
 _PEST_RE = re.compile(
-    r"(?:病虫|虫害|杀虫|白粉|黑斑|叶斑|霉|烂根|黄叶|叶子发黄|萎蔫|掉叶|花苞掉|虫子|蚜虫|红蜘蛛|介壳)",
+    r"(?:病虫|虫害|杀虫|白粉|黑斑|叶斑|霉|烂根|根腐|根发黑|根黑|发黑发软|"
+    r"黄叶|叶子发黄|萎蔫|掉叶|掉花苞|花苞掉|花苞脱落|不开花|虫子|蚜虫|红蜘蛛|介壳)",
     re.IGNORECASE,
 )
 _SEASON_RE = re.compile(
@@ -104,6 +113,8 @@ _OBSERVATION_TERMS = (
     "根腐",
     "徒长",
     "花苞掉",
+    "掉花苞",
+    "花苞脱落",
     "不开花",
     "虫子",
     "蚜虫",
@@ -111,6 +122,9 @@ _OBSERVATION_TERMS = (
     "介壳虫",
     "叶片卷曲",
     "晒伤",
+    "根发黑",
+    "根黑",
+    "发黑发软",
 )
 
 
