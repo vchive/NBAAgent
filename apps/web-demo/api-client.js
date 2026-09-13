@@ -1,5 +1,5 @@
 /*
- * COURTSIDE API transport.
+ * 种花 Agent API transport.
  *
  * The visual demo can be enabled explicitly for fixture development.  In a
  * public deployment this tiny client keeps transport failures on the real
@@ -15,6 +15,7 @@
   }
 
   function defaultBase() {
+    if (window.FLOWER_API_BASE) return trimBase(window.FLOWER_API_BASE);
     if (window.COURTSIDE_API_BASE) return trimBase(window.COURTSIDE_API_BASE);
     // A same-origin API is convenient for a mounted deployment.  The local
     // static demo is normally served on 4173 while uvicorn runs on 8000; any
@@ -36,8 +37,8 @@
   // Live model generation can take 10–20 seconds on a cold request.
   // Keep the client deadline above the server's 20s model budget so a valid
   // model answer is not discarded just as it completes.
-  // A bounded Agent turn can include two model iterations plus one NBA tool
-  // lookup. Keep the browser slightly above the server's 65s deadline so the
+  // A bounded Agent turn can include model iterations plus one knowledge/search
+  // lookup. Keep the browser slightly above the server's deadline so the
   // terminal fallback/answer is not aborted just before it arrives.
   const STREAM_TIMEOUT_MS = 75_000;
 
@@ -224,7 +225,7 @@
         } catch (_error) {
           // Keep the public error generic; the UI must not display raw response text.
         }
-        const error = new Error(payload?.error?.message || "服务暂时不可用，请稍后重试。");
+        const error = new Error(payload?.error?.message || "种花服务暂时不可用，请稍后重试。");
         error.publicPayload = payload || {
           status: "failed",
           error: { code: "SERVICE_BUSY", retryable: true, message: error.message },
@@ -275,7 +276,7 @@
       parser.flush();
     } catch (error) {
       if (timedOut && !signal?.aborted) {
-        const timeoutError = new Error("流式响应超时，请稍后重试。", { cause: error });
+        const timeoutError = new Error("种花服务响应超时，请稍后重试。", { cause: error });
         timeoutError.network = true;
         throw timeoutError;
       }
@@ -287,7 +288,7 @@
       // Fetch transport errors do not have a stable browser-facing message.
       // Normalize them here and let the UI decide whether an explicitly
       // configured fixture profile may recover locally.
-      const networkError = new Error("数据连接暂时中断，请检查网络后重试。", { cause: error });
+      const networkError = new Error("种花服务连接暂时中断，请检查网络后重试。", { cause: error });
       networkError.network = true;
       throw networkError;
     } finally {
@@ -312,13 +313,13 @@
         },
       ));
     } catch (cause) {
-      const error = new Error("日期赛事连接暂时不可用。", { cause });
+      const error = new Error("园艺资料连接暂时不可用。", { cause });
       error.network = true;
       throw error;
     }
     const payload = await response.json().catch(() => null);
     if (!response.ok) {
-      const error = new Error(payload?.error?.message || "日期赛事暂时不可用。");
+      const error = new Error(payload?.error?.message || "园艺资料暂时不可用。");
       error.publicPayload = payload;
       error.status = response.status;
       error.network = false;
@@ -346,13 +347,13 @@
         },
       ));
     } catch (cause) {
-      const error = new Error("历史比赛连接暂时不可用。", { cause });
+      const error = new Error("园艺资料连接暂时不可用。", { cause });
       error.network = true;
       throw error;
     }
     const payload = await response.json().catch(() => null);
     if (!response.ok) {
-      const error = new Error(payload?.error?.message || "历史比赛暂时不可用。");
+      const error = new Error(payload?.error?.message || "园艺资料暂时不可用。");
       error.publicPayload = payload;
       error.status = response.status;
       error.network = false;
@@ -381,13 +382,13 @@
         },
       ));
     } catch (cause) {
-      const error = new Error("历史比赛连接暂时不可用。", { cause });
+      const error = new Error("园艺资料连接暂时不可用。", { cause });
       error.network = true;
       throw error;
     }
     const payload = await response.json().catch(() => null);
     if (!response.ok) {
-      const error = new Error(payload?.error?.message || "历史比赛暂时不可用。");
+      const error = new Error(payload?.error?.message || "园艺资料暂时不可用。");
       error.publicPayload = payload;
       error.status = response.status;
       error.network = false;
@@ -414,13 +415,13 @@
         },
       ));
     } catch (cause) {
-      const error = new Error("日期赛事连接暂时不可用。", { cause });
+      const error = new Error("园艺资料连接暂时不可用。", { cause });
       error.network = true;
       throw error;
     }
     const payload = await response.json().catch(() => null);
     if (!response.ok) {
-      const error = new Error(payload?.error?.message || "日期赛事暂时不可用。");
+      const error = new Error(payload?.error?.message || "园艺资料暂时不可用。");
       error.publicPayload = payload;
       error.status = response.status;
       error.network = false;
@@ -446,13 +447,13 @@
         },
       ));
     } catch (cause) {
-      const error = new Error("比赛详情连接暂时不可用。", { cause });
+      const error = new Error("园艺资料详情连接暂时不可用。", { cause });
       error.network = true;
       throw error;
     }
     const payload = await response.json().catch(() => null);
     if (!response.ok) {
-      const error = new Error(payload?.error?.message || "比赛详情暂时不可用。");
+      const error = new Error(payload?.error?.message || "园艺资料详情暂时不可用。");
       error.publicPayload = payload;
       error.status = response.status;
       error.network = false;
@@ -477,4 +478,7 @@
     highlightDetail,
     SSEParser,
   };
+  // Product-neutral alias for the flower experience.  Keep the historical
+  // global above so older embedded pages can migrate without a hard cutover.
+  window.FlowerApi = window.CourtsideApi;
 })();

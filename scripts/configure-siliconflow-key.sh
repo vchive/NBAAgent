@@ -29,7 +29,7 @@ Usage: scripts/configure-siliconflow-key.sh [--force]
 
 Read a SiliconFlow API key without echoing it and atomically write
 secrets/siliconflow_api_key. Docker Compose mounts the file into the
-nbaagent container (gid 10001), so the final mode is 0640 with that group
+floweragent container (gid 10001), so the final mode is 0640 with that group
 when the host permits changing the numeric group.
 
   --force   overwrite an existing secret without asking

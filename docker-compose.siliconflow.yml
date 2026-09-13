@@ -4,8 +4,7 @@
 # This override enables the bounded public-data adapter as well as model
 # wording. Put it behind the public/auth profile (or equivalent
 # authentication/rate limiting) before exposing it.
-services:
-  nba-agent:
+x-intelligence-service: &intelligence-service
     environment:
       PUBLIC_DATA_MODE: hybrid
       GAME_INDEX_ENABLED: "true"
@@ -79,6 +78,12 @@ services:
       - siliconflow_api_key
       - aliyun_iqs_api_key
       - qianfan_search_api_key
+
+services:
+  flower-agent:
+    <<: *intelligence-service
+  nba-agent:
+    <<: *intelligence-service
 
 secrets:
   siliconflow_api_key:

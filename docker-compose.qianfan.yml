@@ -1,7 +1,6 @@
 # Optional Qianfan AI Search override. Combine this file with the public,
 # auth and SiliconFlow profiles after configuring secrets/qianfan_search_api_key.
-services:
-  nba-agent:
+x-search-service: &search-service
     environment:
       QIANFAN_SEARCH_ENABLED: "true"
       QIANFAN_SEARCH_API_KEY_FILE: /run/secrets/qianfan_search_api_key
@@ -10,6 +9,12 @@ services:
       QIANFAN_SEARCH_MAX_RESPONSE_BYTES: 800000
     secrets:
       - qianfan_search_api_key
+
+services:
+  flower-agent:
+    <<: *search-service
+  nba-agent:
+    <<: *search-service
 
 secrets:
   qianfan_search_api_key:

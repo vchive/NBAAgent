@@ -84,15 +84,19 @@ def _clean_text(value: Any, *, limit: int) -> str | None:
 
 
 def _query_text(query: NewsQuery) -> str:
+    is_flower = getattr(query, "domain", "nba") == "flower"
+    fallback = "花卉 园艺" if is_flower else "NBA"
     parts = [ref.display_name for ref in query.subject_refs]
     parts.extend(query.keywords[:8])
     safe = [str(part) for part in parts if not _INJECTION_RE.search(str(part))]
     value = _CONTROL_RE.sub(" ", " ".join(safe))
     value = re.sub(r"[^\w\u3400-\u9fff\s.'-]", " ", value, flags=re.UNICODE)
     value = " ".join(value.split())
-    if not re.search(r"(?<![A-Za-z])NBA(?![A-Za-z])", value, re.IGNORECASE):
+    if not is_flower and not re.search(
+        r"(?<![A-Za-z])NBA(?![A-Za-z])", value, re.IGNORECASE
+    ):
         value = f"NBA {value}".strip()
-    return value[:500] or "NBA"
+    return value[:500] or fallback
 
 
 def _published_time(value: Any) -> datetime | None:

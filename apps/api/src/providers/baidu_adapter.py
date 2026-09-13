@@ -70,14 +70,18 @@ def _clean_text(value: object, *, limit: int) -> str | None:
 
 
 def _query_text(query: NewsQuery) -> str:
+    # ``getattr`` keeps this adapter compatible with older typed-query shims
+    # used by downstream callers while treating an absent marker as legacy NBA.
+    is_flower = getattr(query, "domain", "nba") == "flower"
+    fallback = "花卉 园艺" if is_flower else "NBA"
     parts = [ref.display_name for ref in query.subject_refs]
     parts.extend(query.keywords[:8])
     if not parts:
-        parts = ["NBA"]
+        parts = [fallback]
     safe = [part for part in parts if not _INJECTION_RE.search(str(part))]
     value = _CONTROL_RE.sub(" ", " ".join(map(str, safe)))
     value = re.sub(r"[^\w\u3400-\u9fff\s.'-]", " ", value, flags=re.UNICODE)
-    return " ".join(value.split())[:160] or "NBA"
+    return " ".join(value.split())[:160] or fallback
 
 
 class _BaiduResultParser(HTMLParser):

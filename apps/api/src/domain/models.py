@@ -14,7 +14,7 @@ import re
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -847,6 +847,11 @@ class GameFilters(CanonicalModel):
 
 
 class NewsQuery(CanonicalModel):
+    # Internal routing marker.  It is deliberately absent from the public HTTP
+    # schemas: application code owns the domain and clients cannot use it to
+    # choose a provider or endpoint.  The NBA default preserves the legacy
+    # behaviour for every existing caller.
+    domain: Literal["nba", "flower"] = "nba"
     subject_refs: list[EntityRef] = Field(default_factory=list, max_length=16)
     keywords: list[str] = Field(default_factory=list, max_length=8)
     date_range: DateRange | None = None

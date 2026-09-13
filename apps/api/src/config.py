@@ -55,7 +55,18 @@ def _bool(name: str, default: bool) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class Settings:
+    # Product domain selected at the composition root.  ``flower`` is the
+    # shipped experience; ``nba`` remains an explicit compatibility profile
+    # for the original evaluation fixtures and migration rollbacks.
+    agent_domain: str = "flower"
     app_env: str = "local"
+    # The application entry point reads these values instead of baking a
+    # listener into the container command.  Loopback is the safe default for
+    # local review; a deployment that deliberately places the process behind
+    # a proxy may opt into another interface through an explicit environment
+    # value (the Compose host mapping remains loopback-only by default).
+    bind_host: str = "127.0.0.1"
+    bind_port: int = 8000
     public_data_mode: str = "fixture"
     # Optional fixed day for a reproducible fixture demo. Live/hybrid data
     # modes always use the service's actual local date.
@@ -131,6 +142,10 @@ class Settings:
     ddg_max_results: int = 5
     ddg_max_response_bytes: int = 512_000
     ddg_cache_ttl_seconds: int = 300
+    # Search adapters are shared by the legacy sports and flower domains.  A
+    # domain-specific prefix keeps a gardening query from being silently
+    # rewritten as an NBA search while preserving the old adapter defaults.
+    flower_search_prefix: str = "园艺 花卉"
     full_intelligence_enabled: bool = False
     default_intelligence_mode: str = "hybrid"
     llm_mode: str = "mock"
@@ -185,7 +200,10 @@ class Settings:
     auth_required: bool = False
     app_password: str = field(default="", repr=False)
     app_password_file: str = field(default="", repr=False)
-    auth_cookie_name: str = "nba_session"
+    # Product-scoped cookie name prevents a stale NBA deployment from being
+    # mistaken for the flower service while allowing AUTH_COOKIE_NAME to keep
+    # explicit legacy integrations working.
+    auth_cookie_name: str = "flower_session"
     auth_cookie_secure: bool = False
     auth_session_ttl_seconds: int = 86_400
     auth_max_failed_attempts: int = 8
@@ -194,7 +212,10 @@ class Settings:
     @classmethod
     def from_env(cls) -> Settings:
         settings = cls(
+            agent_domain=os.getenv("AGENT_DOMAIN", "flower").strip().lower(),
             app_env=os.getenv("APP_ENV", "local").lower(),
+            bind_host=os.getenv("BIND_HOST", "127.0.0.1").strip(),
+            bind_port=_int("BIND_PORT", 8000),
             public_data_mode=os.getenv("PUBLIC_DATA_MODE", "fixture").lower(),
             highlights_demo_date=os.getenv("HIGHLIGHTS_DEMO_DATE", "").strip(),
             provider_timeout_seconds=_float("PROVIDER_TIMEOUT_SECONDS", 8.0),
@@ -278,6 +299,7 @@ class Settings:
             ddg_max_results=_int("DDG_MAX_RESULTS", 5),
             ddg_max_response_bytes=_int("DDG_MAX_RESPONSE_BYTES", 512_000),
             ddg_cache_ttl_seconds=_int("DDG_CACHE_TTL_SECONDS", 300),
+            flower_search_prefix=os.getenv("FLOWER_SEARCH_PREFIX", "园艺 花卉").strip(),
             full_intelligence_enabled=_bool("FULL_INTELLIGENCE_ENABLED", False),
             default_intelligence_mode=os.getenv("DEFAULT_INTELLIGENCE_MODE", "hybrid").lower(),
             llm_mode=os.getenv("LLM_MODE", "mock").lower(),
@@ -327,7 +349,7 @@ class Settings:
             auth_required=_bool("AUTH_REQUIRED", False),
             app_password=os.getenv("APP_PASSWORD", ""),
             app_password_file=os.getenv("APP_PASSWORD_FILE", "").strip(),
-            auth_cookie_name=os.getenv("AUTH_COOKIE_NAME", "nba_session").strip(),
+            auth_cookie_name=os.getenv("AUTH_COOKIE_NAME", "flower_session").strip(),
             auth_cookie_secure=_bool("AUTH_COOKIE_SECURE", False),
             auth_session_ttl_seconds=_int("AUTH_SESSION_TTL_SECONDS", 86_400),
             auth_max_failed_attempts=_int("AUTH_MAX_FAILED_ATTEMPTS", 8),
@@ -337,12 +359,37 @@ class Settings:
         return settings
 
     def validate(self) -> None:
+        agent_domain = str(self.agent_domain or "").strip().lower()
         app_env = str(self.app_env).lower()
         public_data_mode = str(self.public_data_mode).lower()
         llm_mode = str(self.llm_mode).lower()
         runtime_profile = str(self.runtime_profile).lower()
         hermes_lite_mode = str(self.hermes_lite_mode).lower()
         default_intelligence_mode = str(self.default_intelligence_mode).lower()
+        bind_host = str(self.bind_host or "").strip()
+        if not bind_host or len(bind_host) > 255:
+            raise ValueError("BIND_HOST must contain 1..255 characters")
+        if any(ord(char) < 32 or ord(char) == 127 for char in bind_host):
+            raise ValueError("BIND_HOST contains control characters")
+        if any(char.isspace() for char in bind_host):
+            raise ValueError("BIND_HOST must not contain whitespace")
+        if isinstance(self.bind_port, bool) or not isinstance(self.bind_port, int):
+            raise ValueError("BIND_PORT must be an integer")
+        if not 1 <= self.bind_port <= 65_535:
+            raise ValueError("BIND_PORT must be between 1 and 65535")
+        if agent_domain not in {
+            "flower",
+            "flowers",
+            "gardening",
+            "horticulture",
+            "nba",
+            "basketball",
+        }:
+            raise ValueError("AGENT_DOMAIN must be flower or nba")
+        if not self.flower_search_prefix or len(self.flower_search_prefix) > 120:
+            raise ValueError("FLOWER_SEARCH_PREFIX must contain 1..120 characters")
+        if any(ord(char) < 32 or ord(char) == 127 for char in self.flower_search_prefix):
+            raise ValueError("FLOWER_SEARCH_PREFIX contains control characters")
         if public_data_mode not in {"fixture", "live", "hybrid"}:
             raise ValueError("PUBLIC_DATA_MODE must be fixture, live, or hybrid")
         if self.highlights_demo_date:

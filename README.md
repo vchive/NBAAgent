@@ -1,208 +1,121 @@
-# NBA Chat Agent
+# 种花 Agent
 
-面向中文球迷的 NBA Chat Agent 笔试题项目，按 GitHub SpecKit 的 SDD（Specification-
-Driven Development）流程推进。
+面向中文家庭种植者的花卉问答助手。你可以直接用自然语言询问选花、浇水、光照、
+土壤、施肥、修剪、繁殖、季节安排和常见病虫害；连续追问时，服务会在同一网页会话内
+保留最近的植物与环境上下文。
 
-## 当前阶段：可交付 Agent（fixture 默认、public hybrid 可部署）
+## 当前交付
 
-已完成需求规格、研究记录、HLD、LLD、数据模型、接口契约和验收指南，并打通了默认
-fixture/mock 模式的 FastAPI Agent：同步聊天、POST SSE、会话隔离、事实核验、PBP/系列赛
-确定性推导、安全短路、重试/缓存和“赛事焦点/精彩回顾”日期投影均可离线运行。FastAPI
-在仓库包含 Web Demo 时会从同一端口托管 UI，因此可以直接通过一个 `IP:端口` 访问完整演示。
-ESPN、受控 DuckDuckGo 搜索与官方 Hermes Agent 均为可替换适配器，默认关闭，不需要任何凭据。
+本仓库按 Specification-Driven Development（SDD）实现 `005-flower-agent`：
 
-“精彩回顾”使用失败可退化的 SQLite 通用缓存：最近列表、历史日期/区间和比赛详情首次
-核验后可跨浏览器访问和容器重建复用。历史终场数据允许先返回缓存再后台刷新；今日和
-进行中比赛只接受短 TTL 的 fresh 数据。详情写入会拒绝低完整度或终场比分冲突，最近列表
-最多后台预热 5 场详情。缓存只保存公开响应投影，不保存用户会话、问题、提示词或密钥。
+- 默认产品域和首屏品牌为“种花 Agent”，默认是**漫游模式**，不绑定具体植物。
+- 内置带别名和条件说明的离线花卉知识集；没有网络或额度时仍能给出保守、可执行的建议。
+- 全智能模式使用受控的无状态对话运行时，由应用传入最近四个完整回合和有界种植上下文。
+- 运行时只允许花卉知识查询、养护计划和受控资料搜索三类能力；不能访问 Shell、文件、
+  任意网址、浏览器、MCP、原生记忆或子代理。
+- 搜索结果只作为补充观察，清洗掉链接、提示注入和内部元数据；搜索/模型额度耗尽时保留
+  本地答案，并显示可理解的重试提示。
+- 农药混用、未知植物误食、人或宠物暴露等请求在检索和模型调用前短路，优先给出安全处置
+  与专业求助方向。
+- 同步和 SSE 接口共享会话、幂等、取消、大小限制及公开输出清洗契约。
 
-聊天检索使用独立的可查询赛事索引，而不是拿自然语言去匹配上述响应缓存键。球队、赛季、
-日期、比赛状态和系列赛场次先经过实体归一化并走关系字段过滤；新闻、战报和战术资料进入
-SQLite FTS5，由 canonical 球队/球员/赛季 token 约束后使用 BM25 排序。结构化记录未命中时
-才调用受控在线检索。网页摘要始终保持部分核验，不能写成已核验比分、统计或逐回合事实；
-固定演示快照也不能进入公开赛事索引。当前数据规模无需额外向量服务，后续只有在黄金题集
-证明 BM25 语义召回不足时才增加向量召回并与结构化过滤合并。
+详细规格、数据模型和接口契约见 [`specs/005-flower-agent`](specs/005-flower-agent/)。
 
-> **SiliconFlow BYOK 状态**：默认仍是完全离线的 `template`/`mock` 模式（不会读取或发送
-> 模型请求）。live profile 使用锁定的 `hermes-agent==0.19.0` 和
-> `HERMES_LITE_MODE=embedded_agent`；页面开启“全智能分析”后，请求会在 SafetyGuard 与会话
-> 上下文之后、规则 Parser 之前进入官方 `run_agent.AIAgent`。Agent 只能调用
-> `nba_query`、`nba_schedule`、`nba_news`、`nba_search` 四个服务端 NBA 工具，不能使用 shell、文件系统、
-> 浏览器、通用搜索、MCP、memory、skills 或子代理。默认模型为
-> `deepseek-ai/DeepSeek-V4-Flash`（[API 文档](https://api-docs.siliconflow.cn/docs/api/chat-completions-post)）。
-> 这是当前 API 进程内的受控面试演示形态，不是已部署的独立 Hermes sidecar；生产环境
-> 应迁移到隔离 sidecar。Key 仅通过 `SILICONFLOW_API_KEY`（本地）或
-> `SILICONFLOW_API_KEY_FILE`（挂载 secret）注入，绝不能提交到仓库、镜像、前端、日志或聊天。
-> `HERMES_LITE_MODE=sidecar` 目前是保守的未实现占位，会保持 not-ready/模板回退，不会
-> 偷换成进程内直连。
-> 同一网页聊天会话使用稳定的逻辑 Agent session，并显式传入最近 4 个完整回合；刷新页面
-> 继续当前应用会话，点击“新对话”才切换。这里的连续性由应用会话管理，底层原生
-> memory/session database 仍关闭；任何事实追问每轮都必须重新调用受控 NBA 工具核验。
-> 模型运行时和 `PUBLIC_DATA_MODE` 相互独立；`make deploy-live` 会叠加 public hybrid 数据
-> profile。若把 live profile 暴露到公网，任何已登录访问者都可能消耗 BYOK 额度，必须
-> 放在认证反代/VPN/受限安全组后，并配置供应商预算与限额。
+## 本地运行
 
-> **DuckDuckGo 状态**：`DDG_SEARCH_ENABLED=true` 只在 live/hybrid profile 的新闻、背景题中
-> 访问固定 Instant Answer 端点，最多返回 5 条候选并清洗 HTML/脚本/控制字符/提示注入。
-> 搜索结果保持部分核验，不能单独证明比分、排名、统计或 PBP；搜索失败不影响 NBA 核心问答。
-
-启动 API：
+需要 Python 3.12。默认配置是离线、模板回答，不读取任何模型或搜索密钥：
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e '.[dev]'
-cp .env.example .env  # 可选；不要提交 .env
-uvicorn apps.api.src.main:app --host 0.0.0.0 --port 8000
+uvicorn apps.api.src.main:app --host 127.0.0.1 --port 8000
 ```
 
-启动后打开 `http://<服务器IP>:8000/` 即可看到 UI；API 和 UI 使用同源地址，不需要额外
-启动 4173 静态服务器。若只想单独预览静态文件，仍可使用下方的 Web Demo 命令。
+打开 <http://127.0.0.1:8000/> 查看页面。静态页面也可以单独预览：
 
-探活和示例请求：
+```bash
+python3 -m http.server 4173 --bind 127.0.0.1 --directory apps/web-demo
+```
+
+服务默认只使用回环地址；不要在没有认证反向代理和安全组限制时绑定公网地址。停止本地
+进程后可用 `ss -ltnp | grep ':8000'` 确认没有监听器。
+
+## API 示例
 
 ```bash
 curl -fsS http://127.0.0.1:8000/healthz
 curl -fsS -X POST http://127.0.0.1:8000/api/v1/chat \
   -H 'content-type: application/json' \
-  -d '{"message":"2025-26 总决赛 G4 谁得分最高？","intelligence_mode":"full"}'
-curl -fsS 'http://127.0.0.1:8000/api/v1/highlights?date=2026-06-12&timezone=Asia/Shanghai'
-curl -fsS 'http://127.0.0.1:8000/api/v1/highlights/availability?from=2026-06-06&to=2026-06-13&timezone=Asia/Shanghai'
+  -d '{"message":"北阳台适合种什么花？"}'
 ```
 
-运行测试：
+请求支持可选 `session_id`、`client_message_id`、`client_timezone` 和
+`intelligence_mode`（`hybrid` 或 `full`）。省略 `session_id` 会创建新会话；网页点击
+“新对话”才会清空上下文。完整同步/SSE 约定见
+[`specs/005-flower-agent/contracts/http-api.md`](specs/005-flower-agent/contracts/http-api.md)。
 
-```bash
-python3 -m pytest -q
-```
+## 在线资料与全智能模式
 
-SQLite 默认写入 `/app/data/highlights.sqlite3`，Compose 使用具名卷 `highlights_data`。
-普通容器重建不会删除它；只有明确执行带 `-v` 的卷删除操作才会清空缓存。前端对历史请求
-采用 250ms 感知阈值，快速命中不闪 loading，慢请求保留原内容并只显示一处加载提示。
+在线能力由服务端配置，浏览器永远不能选择端点或携带密钥。可按部署需要启用阿里云 IQS、
+百度/千帆或 DuckDuckGo 的受控适配器；密钥优先通过 Docker secret 文件注入。示例配置文件
+仍只包含占位符，真实 key 不得写入仓库、镜像、日志或聊天记录。
 
-预热可检索赛事索引（重复执行幂等）：
+当 `FULL_INTELLIGENCE_ENABLED=true` 且运行时配置为 `embedded_agent` 时，`full` 请求会
+进入受控智能链路；安全短路和公开输出清洗始终由应用负责。运行时、搜索和网络故障会映射
+为 provider-neutral 的提示，例如“智能回答额度已用完”或“在线资料暂时不可用”，不会把
+供应商、模型、端点、工具名或原始错误返回给用户。
 
-```bash
-python3 scripts/warm-game-index.py \
-  --season 2025-26 \
-  --teams all \
-  --from 2025-09-01 \
-  --to 2026-07-01
+## Docker / Compose
 
-# 需要完整球员统计、场馆、上座、比赛时长和文字逐回合时显式补详情
-python3 scripts/warm-game-index.py \
-  --season 2025-26 \
-  --teams knicks,spurs \
-  --from 2026-06-01 \
-  --to 2026-06-30 \
-  --details
-```
-
-索引文件沿用 `GAME_INDEX_DB`，应放在持久卷内。赛程按球队抓取后以公开比赛 ID 去重；详情
-只补已结束比赛。若某来源不可用，应用会继续使用已有索引或原公开数据链路，不会让索引
-故障拖垮聊天。
-
-浏览器验收（Node.js 20+，首次运行需下载 Chromium）：
-
-```bash
-npm ci
-npx playwright install --with-deps chromium
-npm run e2e
-```
-
-可选的容器启动（本地 fixture，不启用登录）：
+规范服务名和镜像名是 `flower-agent` / `flower-agent:fixture`。基础 Compose 配置仍是
+离线 fixture，并将宿主端口限制在回环地址：
 
 ```bash
 docker compose up --build
 ```
 
-Dockerfile 已将第三方依赖层与业务源码层分开，并默认使用清华 PyPI 镜像；国内服务器
-首次构建仍需下载 Hermes 依赖，后续代码更新不会重复下载。若镜像不可达，可显式切换：
+数据卷名为 `floweragent-data`。旧部署脚本需要迁移时，可显式使用兼容 profile（不会在
+普通启动时额外创建容器）：
 
 ```bash
-docker compose build --build-arg PIP_INDEX_URL=https://pypi.org/simple
+docker compose --profile nba-compat up --build nba-agent
 ```
 
-Compose 默认将完整应用暴露在 `http://<服务器IP>:8000/`。
-后台对外部署请先设置访问密码，再使用 `make deploy`；查看状态用 `make deploy-status`。
+`make docker-build-nba` 和 `nba-agent` Python 命令也保留为迁移别名；它们仍启动同一个
+花卉应用，不会恢复旧的默认产品界面。
 
-```bash
-make configure-app-password   # 隐藏输入，写入 secrets/app_password
-make deploy                   # 自动加入 docker-compose.auth.yml
-```
-
-登录后才可访问聊天、赛事焦点和日期接口；`/healthz`、`/readyz`、`/livez` 仍可用于探活。
-完整说明见 [`docs/auth.md`](docs/auth.md)。
-
-启用 SiliconFlow（仅在你已准备好自己的 key 时；完整说明见
-[`docs/byok.md`](docs/byok.md)）：
+需要认证的受限部署：
 
 ```bash
 make configure-app-password
-make configure-siliconflow-key   # 交互式隐藏输入，写入 root:10001 / 0640 secret 文件
-make deploy-live
-curl -fsS http://127.0.0.1:8000/readyz
+make deploy
 ```
 
-`make deploy-live` 会组合 base、public、auth、SiliconFlow 四个 Compose 文件，并把 key 和
-访问密码作为 Docker secret 文件挂载，不会写入镜像层或环境变量。没有
-授权 key 时不要切换 live；服务会保持模板回退并在 `/healthz`/`/readyz` 标为 degraded。
-`make deploy-live` 使用 public override 的 `PUBLIC_DATA_MODE=hybrid`；只有单独运行
-`make docker-up-silicon` 时事实数据仍为 fixture。live profile 不应直接暴露未认证的 `8000`
-端口。
+需要启用模型和在线资料时，再配置相应 secret 后运行 `make deploy-live`。公网部署前必须
+通过认证反向代理/VPN/安全组限制访问，并设置供应商预算与速率上限。完整操作说明见
+[`specs/005-flower-agent/quickstart.md`](specs/005-flower-agent/quickstart.md)。
 
-在云主机上还需要同时放行两层网络策略：本机执行
-`ufw allow 8000/tcp`，并在云厂商安全组添加一条入站 TCP 8000 规则（演示阶段可先限制为
-你的公网 IP）。完成后使用 `http://<EIP>:8000/` 访问；若只能在本机访问，通常是云安全组
-或 EIP/NAT 尚未做端口映射。
-
-评测 CLI：
+## 测试与质量门禁
 
 ```bash
-python -m apps.api.src.evaluation.cli --repeat 3
+python3 -m ruff check apps/api tests
+python3 -m pytest -q
+npx playwright test tests/e2e/test_flower_ui.spec.ts --project=chromium --reporter=line
 ```
 
-## UI 交互 Demo
+测试覆盖离线问答、连续指代、搜索/模型故障、额度提示、危险请求短路、公开输出边界、
+HTTP/SSE 契约及浏览器首屏。评测时不要把实时公网数据或密钥作为测试前提。
 
-赛事转播风格的零依赖前端 Demo 已放在 [`apps/web-demo`](apps/web-demo/)。它用本地
-fixture 演示聊天流式状态、事实/分析分层、错误与重试、会话隔离，以及 Q2/Q3/Q4/OT
-节次切换；回放是 PBP 事件定位，不是视频播放，OT 标签会明确展示本场无加时的空状态。
+## 目录导航
 
-启动方式：
+- [花卉规格与验收契约](specs/005-flower-agent/spec.md)
+- [实施计划](specs/005-flower-agent/plan.md)
+- [快速验收](specs/005-flower-agent/quickstart.md)
+- [HTTP/SSE 契约](specs/005-flower-agent/contracts/http-api.md)
+- [受控 Agent 契约](specs/005-flower-agent/contracts/agent-runtime.md)
+- [搜索适配器契约](specs/005-flower-agent/contracts/search-provider.md)
+- [前端说明](apps/web-demo/README.md)
 
-```bash
-python3 -m http.server 4173 --directory apps/web-demo
-```
-
-打开 <http://127.0.0.1:4173> 即可查看。详细的交互探针和真实 API 接入替换点见
-[`apps/web-demo/README.md`](apps/web-demo/README.md)。
-
-- [需求规格](specs/001-nba-chat-agent/spec.md)
-- [实施计划](specs/001-nba-chat-agent/plan.md)
-- [研究决策](specs/001-nba-chat-agent/research.md)
-- [HLD](specs/001-nba-chat-agent/hld.md)
-- [LLD](specs/001-nba-chat-agent/lld.md)
-- [数据模型](specs/001-nba-chat-agent/data-model.md)
-- [HTTP/SSE 契约](specs/001-nba-chat-agent/contracts/http-api.md)
-- [Provider 契约](specs/001-nba-chat-agent/contracts/provider-adapter.md)
-- [评测契约](specs/001-nba-chat-agent/contracts/evaluation.md)
-- [本地验收指南](specs/001-nba-chat-agent/quickstart.md)
-- [SiliconFlow BYOK 配置指南](docs/byok.md)
-- [方案说明源文档](docs/solution.md)
-- [方案说明 PDF](docs/solution.pdf)
-
-## 开发流程
-
-```text
-constitution → specify → clarify（如需要）→ plan/HLD/LLD → tasks → implement → verify
-```
-
-SpecKit 项目治理原则位于 [.specify/memory/constitution.md](.specify/memory/constitution.md)。
-所有提交使用仓库主人 `vchive` 的 Git 身份。
-
-## 交付 profile
-
-方案说明 PDF 已生成在 [`docs/solution.pdf`](docs/solution.pdf)。本地默认仍是 fixture/mock，
-公网交付使用 `make deploy`（hybrid 公开数据 + 受控搜索 + 访问密码）；启用 SiliconFlow 和
-官方 Hermes 全智能模式使用 `make deploy-live`。正式隔离 Hermes sidecar 仍是后续可替换
-部署形态，当前 `embedded_agent` 只用于受控面试演示。
+仓库中 `specs/001-nba-chat-agent`、`docs/solution.pdf` 等文件是历史兼容资料，未作为默认
+花卉产品入口；它们保留用于迁移和审计，不应作为当前界面文案或运行时上下文。

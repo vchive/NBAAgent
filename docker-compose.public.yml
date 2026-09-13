@@ -3,8 +3,7 @@
 # available only through the explicit offline fixture profile.
 # Keep this override separate from the offline base so local development stays
 # reproducible and never contacts an external provider by accident.
-services:
-  nba-agent:
+x-public-service: &public-service
     environment:
       APP_ENV: public_demo
       PUBLIC_DATA_MODE: hybrid
@@ -29,3 +28,9 @@ services:
       # Same-origin access does not require CORS, but retaining the explicit
       # allow-list makes a separately hosted review page safe as well.
       ALLOWED_ORIGINS: http://115.190.174.39:8000
+
+services:
+  flower-agent:
+    <<: *public-service
+  nba-agent:
+    <<: *public-service

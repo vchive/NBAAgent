@@ -1,11 +1,16 @@
-services:
-  nba-agent:
+x-flower-agent: &flower-agent
     restart: unless-stopped
     build:
       context: .
-    image: nba-agent:fixture
+    image: flower-agent:fixture
     environment:
+      AGENT_DOMAIN: flower
       APP_ENV: local
+      # The process listens on the container interface so Docker's port
+      # forwarding can reach it.  The host-side publication below remains
+      # loopback-only; BIND_HOST is therefore not a public exposure.
+      BIND_HOST: 0.0.0.0
+      BIND_PORT: "8000"
       PUBLIC_DATA_MODE: fixture
       # Quote the ISO date: Compose's YAML parser otherwise converts it to a
       # Go time value ("2026-06-12 00:00:00 +0000 UTC") before injection.
@@ -24,7 +29,7 @@ services:
     tmpfs:
       - /tmp:size=16m,noexec,nosuid
     volumes:
-      - nbaagent-data:/app/data
+      - floweragent-data:/app/data
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -35,12 +40,30 @@ services:
         - python
         - -c
         - >-
-          import urllib.request;
-          urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=2)
+          import os, urllib.request;
+          port = int(os.getenv('BIND_PORT', '8000'));
+          urllib.request.urlopen(f'http://127.0.0.1:{port}/readyz', timeout=2)
       interval: 30s
       timeout: 3s
       start_period: 8s
       retries: 3
 
+services:
+  # Canonical service name for the rebranded product.
+  flower-agent:
+    <<: *flower-agent
+  # Explicit migration alias. It is opt-in so a plain `docker compose up`
+  # cannot launch two identical containers. Use
+  # `docker compose --profile nba-compat up nba-agent` only for old scripts.
+  nba-agent:
+    <<: *flower-agent
+    profiles: [nba-compat]
+    image: nba-agent:fixture
+    volumes:
+      - nbaagent-data:/app/data
+
 volumes:
+  floweragent-data:
+  # Kept for the opt-in legacy service alias. Existing NBA cache volumes are
+  # never removed by a rename and can still be mounted during migration.
   nbaagent-data:

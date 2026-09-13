@@ -1,5 +1,5 @@
 /*
- * COURTSIDE / NBA Intelligence
+ * 种花 Agent / Flower Intelligence
  * A dependency-free UI demo.  The demo transport emits the same logical
  * events as POST /api/v1/chat/stream, so it can be replaced by a real SSE
  * client without changing the renderer or reducer.
@@ -104,13 +104,13 @@
     logout: $("#logout-button"),
   };
 
-  const STORAGE_KEY = "courtside-demo-session-v1";
+  const STORAGE_KEY = "flower-agent-session-v1";
   // A fixed snapshot is an opt-in development transport, never an implicit
   // recovery path for a public/live page.  It can be enabled either by the
   // server reporting `mode: fixture` or by setting this runtime value before
   // app.js loads in a standalone static demo.
   const EXPLICIT_RUNTIME_MODE = String(window.COURTSIDE_RUNTIME_MODE || "").trim().toLowerCase();
-  const EXPLICIT_FIXTURE_MODE = EXPLICIT_RUNTIME_MODE === "demo";
+  const EXPLICIT_FIXTURE_MODE = ["demo", "fixture"].includes(EXPLICIT_RUNTIME_MODE);
   const STAGE_COPY = {
     understanding: "正在理解问题",
     checking: "正在核对相关信息",
@@ -121,7 +121,27 @@
   // Recommendation prompts are a browser-side convenience only.  Keep the
   // alias map deliberately small and deterministic: it identifies the topic
   // already visible in the conversation, but never tries to infer a result.
-  const NBA_TEAM_ALIASES = [
+  // Kept intentionally small: aliases are used only to make follow-up
+  // suggestions useful in the browser.  Facts and plant identification stay
+  // server-side, where the session context is authoritative.
+  const PLANT_ALIASES = [
+    ["月季", "玫瑰", "rose", "roses"],
+    ["绣球", "八仙花", "hydrangea", "hydrangeas"],
+    ["蝴蝶兰", "兰花", "orchid", "orchids"],
+    ["君子兰", "clivia"],
+    ["栀子", "栀子花", "gardenia"],
+    ["茉莉", "jasmine"],
+    ["长寿花", "kalanchoe"],
+    ["绿萝", "pothos"],
+    ["多肉", "succulent", "succulents"],
+    ["向日葵", "sunflower", "sunflowers"],
+    ["郁金香", "tulip", "tulips"],
+    ["薰衣草", "lavender"],
+  ];
+
+  // Legacy aliases are retained privately for old, explicitly selected NBA
+  // links.  They are never rendered by the default flower experience.
+  const LEGACY_NBA_TEAM_ALIASES = [
     ["老鹰", "亚特兰大老鹰", "Hawks", "ATL"],
     ["凯尔特人", "波士顿凯尔特人", "Celtics", "BOS"],
     ["篮网", "布鲁克林篮网", "Nets", "BKN"],
@@ -190,6 +210,7 @@
     toastTimer: null,
     lastRequest: null,
     contextRequest: null,
+    gardenContext: null,
     retryCount: 0,
     recommendationContext: null,
     // The left rail starts unbound.  A game context is created only after the
@@ -478,11 +499,15 @@
   }
 
   function handleHighlightTransportFailure(message, mode = "history") {
+    const publicMessage = safePublicErrorMessage(
+      message,
+      mode === "date" ? "日期资料服务暂时不可用。" : "园艺资料服务暂时不可用。",
+    );
     state.historyLoading = false;
     setHistoryControls("history", state.historyView);
-    clearHighlightProjection(message || "公开赛事数据暂时不可用，请稍后重试。");
+    clearHighlightProjection(publicMessage);
     setHistoryStatus(
-      `${message || "公开赛事数据暂时不可用。"} 可点击“${mode === "range" ? "查看" : "最近 5 场"}”重试。`,
+      `${publicMessage} 可稍后重试。`,
       true,
       "error",
     );
@@ -587,7 +612,10 @@
       if (error?.network) {
         setAuthGate(true, "登录服务暂时不可用，请稍后重试。");
       } else {
-        setAuthGate(true, error?.message || "密码不正确。");
+        // Authentication adapters may pass through an upstream error. Keep
+        // the gate limited to application-owned, public wording rather than
+        // exposing provider URLs, quota details, or stack traces.
+        setAuthGate(true, safePublicErrorMessage(error, "密码不正确。"));
       }
     } finally {
       if (el.authSubmit) el.authSubmit.disabled = false;
@@ -627,7 +655,7 @@
         detectApi();
         return;
       }
-      requireLogin(error?.message || "登录服务暂时不可用。");
+      requireLogin(safePublicErrorMessage(error, "登录服务暂时不可用。"));
     }
   }
 
@@ -637,50 +665,50 @@
     const checking = !live && !state.apiProbeComplete && Boolean(window.CourtsideApi?.baseUrl);
     const offlineFixture = !live && fixtureTransportEnabled();
     const modeText = normalizedMode === "live"
-      ? "LIVE DATA"
+      ? "ONLINE DATA"
       : normalizedMode === "hybrid"
-        ? "HYBRID DATA"
+        ? "ONLINE + LOCAL"
         : normalizedMode === "demo"
-          ? "DEMO SNAPSHOT"
-          : "DATA SERVICE";
+          ? "LOCAL KNOWLEDGE"
+          : "FLOWER SERVICE";
     if (el.modeLabel) {
       el.modeLabel.textContent = live
         ? modeText
         : checking
           ? "DATA SERVICE"
           : offlineFixture
-            ? "DEMO SNAPSHOT"
+            ? "LOCAL KNOWLEDGE"
             : "SERVICE OFFLINE";
       el.modeLabel.parentElement?.setAttribute(
         "title",
         live
-          ? (normalizedMode === "demo" ? "已连接对话服务，使用演示快照" : "已连接公开数据服务")
+          ? (normalizedMode === "demo" ? "已连接种花对话服务，使用本地知识" : "已连接园艺资料服务")
           : checking
             ? "正在检查数据服务"
             : offlineFixture
-              ? "已显式启用本地演示快照"
-              : "公开数据服务暂时不可用",
+              ? "已显式启用本地花卉知识"
+              : "园艺资料服务暂时不可用",
       );
     }
     if (el.onlineLabel) {
       if (el.onlineLabelText) {
         el.onlineLabelText.textContent = live
-          ? "API READY"
+          ? "CONNECTED"
           : checking
             ? "CONNECTING"
             : offlineFixture
-              ? "OFFLINE DEMO"
+              ? "LOCAL ONLY"
               : "SERVICE OFFLINE";
       }
       el.onlineLabel.parentElement?.setAttribute(
         "title",
         live
-          ? "已连接对话服务"
+          ? "已连接种花对话服务"
           : checking
             ? "正在连接对话服务"
             : offlineFixture
-              ? "当前使用显式启用的演示数据"
-              : "数据服务暂时不可用",
+              ? "当前使用显式启用的本地花卉知识"
+              : "种花服务暂时不可用",
       );
     }
   }
@@ -698,7 +726,7 @@
     if (el.intelligenceHelp) {
       el.intelligenceHelp.textContent = el.intelligenceMode.disabled
         ? "服务端未开启"
-        : "全量智能分析";
+        : "智能回答 + 资料核验";
     }
     // Reflect the server default after the API probe so the first message
     // follows the mode shown by the switch. Offline preview remains hybrid.
@@ -722,10 +750,10 @@
     const grid = $(".fact-grid", el.welcomeMessage);
     const foot = $(".answer-foot", el.welcomeMessage);
     if (label) label.textContent = "服务已连接";
-    if (title) title.textContent = "已连接公开赛事数据服务";
-    if (copy) copy.textContent = "您可以询问赛程、赛果、球员数据、关键回合或战术复盘。";
+    if (title) title.textContent = "已连接园艺资料服务";
+    if (copy) copy.textContent = "您可以询问选花、浇水、光照、施肥、修剪和病虫害。";
     if (grid) grid.hidden = true;
-    if (foot) foot.textContent = "数据将按北京时间核验 · 等待您的问题";
+    if (foot) foot.textContent = "资料会标注更新时间与不确定性 · 等待你的问题";
   }
 
   function setWelcomeForFixtureTransport() {
@@ -738,8 +766,8 @@
     // Fixture transport is still a valid offline answer source, but it must
     // not look like a selected/current game while the app is in roaming mode.
     if (label) label.textContent = "漫游模式";
-    if (title) title.textContent = "直接问一个 NBA 问题。";
-    if (copy) copy.textContent = "无需先选择比赛；想查看具体赛事时，再进入“赛事下钻”选择比赛。";
+    if (title) title.textContent = "直接问一个种植问题。";
+    if (copy) copy.textContent = "无需先选择植物；可以从空间、光照或养护目标开始提问。";
     if (grid) grid.hidden = true;
     if (foot) foot.textContent = "漫游模式 · 等待您的问题";
   }
@@ -751,11 +779,11 @@
     const copy = $(".answer-lead p", el.welcomeMessage);
     const grid = $(".fact-grid", el.welcomeMessage);
     const foot = $(".answer-foot", el.welcomeMessage);
-    if (label) label.textContent = "离线演示";
-    if (title) title.textContent = "公开赛事数据服务暂时不可用";
-    if (copy) copy.textContent = "当前展示固定演示快照，不代表今天的真实赛程。";
+    if (label) label.textContent = "离线模式";
+    if (title) title.textContent = "在线园艺资料暂时不可用";
+    if (copy) copy.textContent = "仍可使用内置常见花卉知识；需要实时信息时可稍后重试。";
     if (grid) grid.hidden = true;
-    if (foot) foot.textContent = "离线演示数据 · 演示日期 2026/06/12";
+    if (foot) foot.textContent = "离线知识可用 · 在线资料稍后重试";
   }
 
   function setWelcomeForUnavailableTransport() {
@@ -766,8 +794,8 @@
     const grid = $(".fact-grid", el.welcomeMessage);
     const foot = $(".answer-foot", el.welcomeMessage);
     if (label) label.textContent = "连接提示";
-    if (title) title.textContent = "公开赛事数据服务暂时不可用";
-    if (copy) copy.textContent = "当前不会使用固定演示数据代替回答；请检查网络后重试。";
+    if (title) title.textContent = "园艺资料服务暂时不可用";
+    if (copy) copy.textContent = "当前不会使用演示内容代替回答；请检查网络后重试。";
     if (grid) grid.hidden = true;
     if (foot) foot.textContent = "连接恢复后可继续当前会话";
   }
@@ -845,14 +873,14 @@
     const avatar = document.createElement("div");
     avatar.className = "message-avatar assistant-avatar";
     avatar.setAttribute("aria-hidden", "true");
-    avatar.textContent = "CS";
+    avatar.textContent = "花";
 
     const body = document.createElement("div");
     body.className = "message-body";
     const meta = document.createElement("div");
     meta.className = "message-meta";
     const name = document.createElement("strong");
-    name.textContent = "COURTSIDE";
+    name.textContent = "种花 AGENT";
     const time = document.createElement("span");
     time.textContent = currentShortTime();
     meta.append(name, time);
@@ -997,23 +1025,23 @@
     if (!state.apiAvailable) {
       return fixtureTransportEnabled()
         ? "演示数据：可选择日期查看固定演示结果"
-        : "公开赛事数据服务不可用，日期暂无法核验";
+        : "园艺资料服务不可用，日期暂无法核验";
     }
     const values = datesInMonth(state.calendarMonth)
       .filter(Boolean)
       .map((dateValue) => availabilityForDate(dateValue));
-    if (values.includes("loading")) return "正在核对本月赛事…";
+    if (values.includes("loading")) return "正在核对本月资料…";
     if (values.includes("unknown") || values.includes("error")) {
       return "尚未核验的日期暂不可选，核对完成后会自动开放";
     }
-    return "可选择有比赛或已确认无比赛的日期；灰色日期尚未核验";
+    return "可选择有资料或已确认无资料的日期；灰色日期尚未核验";
   }
 
   function calendarDayLabel(dateValue, status) {
     const [, month, day] = String(dateValue).split("-");
     const suffix = {
-      available: "有比赛",
-      empty: "无比赛，可查看",
+      available: "有资料",
+      empty: "无资料，可查看",
       future: "未来日期，不可选",
       loading: "正在核对",
       unknown: "尚未核验",
@@ -1279,7 +1307,7 @@
     const status = availabilityForDate(dateValue);
     if (["future", "loading", "unknown", "error"].includes(status)) {
       showToast(status === "loading" || status === "unknown"
-        ? "正在核对该日期是否有比赛，请稍候"
+        ? "正在核对该日期是否有资料，请稍候"
         : status === "error"
           ? "该日期暂时无法核验，请稍后重试"
           : status === "future"
@@ -1693,7 +1721,7 @@
       return {
         text: `智能分析${latency}`,
         className: "agent",
-        title: conversational ? "已完成智能回答" : "已完成智能分析与事实核验",
+      title: conversational ? "已完成智能回答" : "已完成智能回答与资料核验",
       };
     }
     if (mode === "model" && status === "used") {
@@ -1703,15 +1731,15 @@
       return { text: `智能分析${latency}`, className: "model", title: "已完成智能分析" };
     }
     if (mode === "fallback" && status === "disabled") {
-      return { text: "已完成事实核验", className: "fallback", title: "已使用已核验事实回答" };
+      return { text: "已完成资料核验", className: "fallback", title: "已使用可用资料回答" };
     }
     if (mode === "fallback") {
-      return { text: "已补充事实核验", className: "fallback", title: "回答已由已核验事实补充完成" };
+      return { text: "已补充资料核验", className: "fallback", title: "回答已由可用资料补充完成" };
     }
     if (conversational) {
       return { text: "会话处理", className: "deterministic", title: "由当前应用会话状态确定性回答" };
     }
-    return { text: "确定性事实", className: "deterministic", title: "客观事实由确定性核验链路生成" };
+      return { text: "建议已整理", className: "deterministic", title: "建议由当前会话与可用资料整理" };
   }
 
   function renderSimpleMarkdown(container, markdown) {
@@ -1746,8 +1774,8 @@
     return match ? match.index + match[1].length : -1;
   }
 
-  function teamsMentionedIn(text) {
-    const hits = NBA_TEAM_ALIASES.map(([canonical, ...aliases]) => {
+  function plantsMentionedIn(text) {
+    const hits = PLANT_ALIASES.map(([canonical, ...aliases]) => {
       const indices = [canonical, ...aliases]
         .map((alias) => teamAliasIndex(text, alias))
         .filter((index) => index >= 0);
@@ -1790,108 +1818,78 @@
     return evidence.join("\n");
   }
 
-  function seriesRecommendationDetails(text) {
+  function plantRecommendationDetails(text) {
     const source = String(text || "");
-    const isSeries = /系列赛|总决赛|季后赛|\bG\s*[1-7]\b|第[一二三四五六七1-7]场|收官战/i.test(source);
-    if (!isSeries) return { isSeries: false, maxGames: 0 };
-    let maxGames = 0;
-    for (const match of source.matchAll(/\bG\s*([1-7])\b/gi)) {
-      maxGames = Math.max(maxGames, Number(match[1]));
-    }
-    for (const match of source.matchAll(/(?:共|计入)\s*([1-7])\s*场/g)) {
-      maxGames = Math.max(maxGames, Number(match[1]));
-    }
-    for (const match of source.matchAll(/([0-4])\s*[–—-]\s*([0-4])/g)) {
-      const games = Number(match[1]) + Number(match[2]);
-      if (games >= 3) maxGames = Math.max(maxGames, games);
-    }
-    return { isSeries: true, maxGames };
+    const isPlan = /养护|浇水|施肥|修剪|光照|土壤|换盆|繁殖|病虫|黄叶|萎蔫|季节|多久|怎么做/i.test(source);
+    return { isPlan, maxSteps: (source.match(/(?:步骤|建议|要点)/g) || []).length };
   }
 
   function isContextualRecommendationQuestion(text) {
-    return /这轮|该轮|系列赛|这场|那场|哪一场|哪场|最精华|最精彩|最经典|最好看|最值得|收官战|转折点|刚才|上(?:一|个)场|最近(?:的)?一场|为什么不是|\bG\s*[1-7]\b/i.test(String(text || ""));
+    return /它|这盆|这株|刚才|上(?:一|个)问题|上一轮|这个植物|该花|后续|接下来|然后|怎么做|多久|还要/i.test(String(text || ""));
   }
 
   function updateRecommendationContext(response) {
     const question = String(state.run?.message || "").trim();
     const evidence = verifiedRecommendationEvidence(response);
-    const questionTeams = teamsMentionedIn(question);
-    const evidenceTeams = teamsMentionedIn(evidence);
+    const questionPlants = plantsMentionedIn(question);
+    const evidencePlants = plantsMentionedIn(evidence);
     const previous = state.recommendationContext;
-    let teams = null;
+    let plants = null;
 
-    if (questionTeams.length === 2) {
-      teams = questionTeams;
-    } else if (questionTeams.length === 1) {
-      const counterpart = evidenceTeams.find((team) => team !== questionTeams[0]);
-      if (counterpart) teams = [questionTeams[0], counterpart];
-      else if (previous?.teams?.includes(questionTeams[0]) && isContextualRecommendationQuestion(question)) {
-        teams = previous.teams;
-      }
-    } else if (evidenceTeams.length === 2) {
-      teams = evidenceTeams;
-    } else if (
-      previous?.teams?.length === 2
-      && isContextualRecommendationQuestion(question)
-      && (evidenceTeams.length === 0 || previous.teams.every((team) => evidenceTeams.includes(team)))
-    ) {
-      teams = previous.teams;
+    if (questionPlants.length) {
+      plants = questionPlants;
+    } else if (evidencePlants.length) {
+      plants = evidencePlants;
+    } else if (previous?.plants?.length && isContextualRecommendationQuestion(question)) {
+      plants = previous.plants;
     }
 
-    if (!teams) {
+    if (!plants) {
       state.recommendationContext = null;
       return null;
     }
 
-    const details = seriesRecommendationDetails(`${question}\n${evidence}`);
+    const details = plantRecommendationDetails(`${question}\n${evidence}`);
     state.recommendationContext = {
-      teams: [...teams],
-      isSeries: details.isSeries || Boolean(previous?.isSeries && teams.every((team) => previous.teams.includes(team))),
-      maxGames: Math.max(
-        details.maxGames,
-        teams.every((team) => previous?.teams?.includes(team)) ? Number(previous?.maxGames || 0) : 0,
+      plants: [...plants],
+      isPlan: details.isPlan || Boolean(previous?.isPlan && plants.some((plant) => previous.plants.includes(plant))),
+      maxSteps: Math.max(
+        details.maxSteps,
+        plants.some((plant) => previous?.plants?.includes(plant)) ? Number(previous?.maxSteps || 0) : 0,
       ),
     };
     return state.recommendationContext;
   }
 
   function contextualRecommendations(context) {
-    const [first, second] = context?.teams || [];
-    if (!first || !second) return [];
-    if (context.isSeries) {
-      return [
-        `${first} 与 ${second} 这轮哪场最值得回看？`,
-        "这轮系列赛的收官战是怎么赢下来的？",
-        context.maxGames >= 4
-          ? "比较这轮系列赛的 G2 和 G4。"
-          : "这轮系列赛的转折点是什么？",
-      ];
-    }
+    const plant = context?.plants?.[0];
+    if (!plant) return [];
     return [
-      `${first} 与 ${second} 最近一次交手结果如何？`,
-      "两队最近一次交手有哪些关键回合？",
-      `比较 ${first} 与 ${second} 的近期攻防表现。`,
+      `${plant} 的光照和浇水怎么安排？`,
+      `${plant} 黄叶或萎蔫时先排查什么？`,
+      `${plant} 这个季节需要换盆或施肥吗？`,
     ];
   }
 
   function renderRecommendations(response) {
     if (!el.recommendations || !el.recommendationList) return;
     const game = state.activeGame;
-    const home = game?.home_name || "这场比赛主队";
-    const away = game?.away_name || "这场比赛客队";
+    const plant = state.recommendationContext?.plants?.[0] || "这盆花";
     let suggestions = [];
     if (game) {
-      suggestions.push(`${away} 对 ${home} 谁得分最高？`);
-      suggestions.push("这场比赛最后 5 秒发生了什么？");
-      const winner = verifiedFinalWinnerName(game);
-      if (winner) suggestions.push(`${winner} 为什么能赢下这场比赛？`);
+      // Legacy event cards are not part of the flower UI. If an old deep link
+      // still selects one, keep recommendations in the current product domain
+      // instead of exposing sports terminology.
+      suggestions.push("这盆花下一步该怎么养？");
+      suggestions.push("需要补充哪些光照和浇水信息？");
+      suggestions.push("如何安全排查黄叶或虫害？");
     } else {
       const context = updateRecommendationContext(response);
       suggestions = contextualRecommendations(context);
       if (!suggestions.length) {
-        suggestions.push("今天有哪些 NBA 比赛？");
-        suggestions.push("最近一场比赛的关键回合是什么？");
-        suggestions.push("你能帮我做哪些 NBA 数据分析？");
+        suggestions.push("北阳台适合种什么花？");
+        suggestions.push("这盆花多久浇水、怎么判断该浇了？");
+        suggestions.push("月季黄叶时先做哪些低风险排查？");
       }
     }
     const values = [...new Set(suggestions.map((item) => item.trim()).filter(Boolean))].slice(0, 3);
@@ -1907,6 +1905,25 @@
     el.recommendations.hidden = values.length === 0;
   }
 
+  // Error envelopes can originate at an upstream adapter.  Keep the public
+  // surface useful while preventing provider names, URLs, billing text or
+  // implementation details from leaking into the conversation.
+  const INTERNAL_ERROR_RE = /(https?:\/\/|wss?:\/\/|api[_ -]?key|token|billing|quota\s+at|provider|endpoint|model[_ -]?name|stack trace)/iu;
+  function safePublicErrorMessage(responseOrError, fallback = "种花服务暂时不可用，请稍后重试。") {
+    const candidate = typeof responseOrError === "string"
+      ? responseOrError
+      : responseOrError?.error?.message || responseOrError?.message || "";
+    const value = String(candidate || "").trim();
+    if (!value || INTERNAL_ERROR_RE.test(value)) {
+      const code = String(responseOrError?.error?.code || responseOrError?.code || "").toUpperCase();
+      if (code.includes("QUOTA")) return "当前服务额度已用完，请稍后重试或联系管理员。";
+      if (code.includes("TIMEOUT")) return "服务响应超时，请稍后重试。";
+      if (code.includes("AUTH")) return "服务认证暂时不可用，请稍后重试。";
+      return fallback;
+    }
+    return value.replace(/https?:\/\/\S+/giu, "").trim() || fallback;
+  }
+
   function renderError(container, response, retryable) {
     if (Array.isArray(response?.notices) && response.notices.length) {
       const noticeCard = document.createElement("div");
@@ -1920,7 +1937,7 @@
     label.className = "block-label";
     label.textContent = "连接状态";
     const text = document.createElement("p");
-    text.textContent = response?.error?.message || "服务暂时不可用，请稍后重试。";
+    text.textContent = safePublicErrorMessage(response);
     card.append(label, text);
     const actions = document.createElement("div");
     actions.className = "error-actions";
@@ -1943,31 +1960,31 @@
   const CAPABILITY_NOTICE_DEFAULTS = Object.freeze({
     INTELLIGENCE_QUOTA_EXHAUSTED: {
       label: "智能分析提醒",
-      message: "智能分析额度已用完；已核验的赛事事实仍可查询，开放性分析暂时受限。",
+      message: "智能回答额度已用完；仍可使用本地花卉知识，开放性分析暂时受限。",
     },
     SEARCH_QUOTA_EXHAUSTED: {
       label: "在线搜索提醒",
-      message: "在线搜索额度已用完；本轮可能改用已有赛事事实或其他公开资料，最新内容可能不完整。",
+      message: "在线资料额度已用完；本轮改用本地花卉知识，最新地域信息可能不完整。",
     },
     SEARCH_CAPACITY_LIMITED: {
       label: "在线搜索提醒",
-      message: "部分在线搜索额度已用完；本轮已使用其他公开资料，结果可能不完整。",
+      message: "在线资料额度暂受限；本轮已使用本地知识，结果可能不完整。",
     },
     INTELLIGENCE_TEMPORARILY_UNAVAILABLE: {
       label: "智能分析提醒",
-      message: "智能分析暂时不可用；已核验的赛事事实仍可查询，开放性分析可能受限。",
+      message: "智能回答暂时不可用；仍可使用本地花卉知识，开放性分析可能受限。",
     },
     INTELLIGENCE_AUTH_UNAVAILABLE: {
       label: "智能分析提醒",
-      message: "智能分析当前不可用；已核验的赛事事实仍可查询，开放性分析暂时受限。",
+      message: "智能回答当前不可用；仍可使用本地花卉知识，开放性分析暂时受限。",
     },
     SEARCH_TEMPORARILY_UNAVAILABLE: {
       label: "在线搜索提醒",
-      message: "在线搜索暂时不可用，当前无法补充最新网页资料；已核验比赛仍可查询。",
+      message: "在线资料暂时不可用，当前无法补充最新网页信息；基础养护建议仍可提供。",
     },
     SEARCH_AUTH_UNAVAILABLE: {
       label: "在线搜索提醒",
-      message: "在线搜索当前不可用，暂时无法补充最新网页资料；已核验比赛仍可查询。",
+      message: "在线资料当前不可用，暂时无法补充最新网页信息；基础养护建议仍可提供。",
     },
   });
 
@@ -2004,7 +2021,7 @@
     const meta = document.createElement("div");
     meta.className = "message-meta";
     const name = document.createElement("strong");
-    name.textContent = "COURTSIDE";
+    name.textContent = "种花 AGENT";
     const time = document.createElement("span");
     time.textContent = currentShortTime();
     const dataOrigin = String(response.data_origin || "none").toLowerCase();
@@ -2078,16 +2095,16 @@
     chip.append(document.createTextNode(`${evidence.icon} ${evidence.text}`));
     const asOf = document.createElement("span");
     asOf.textContent = demoSnapshot
-      ? "固定演示快照 · 不代表实时公开赛事记录"
+      ? "本地知识快照 · 仅作一般养护参考"
       : mixedSnapshot
         ? response.as_of_beijing
-          ? `公开查询 + 固定演示快照 · 查询截至北京时间 ${response.as_of_beijing}`
-          : "公开查询 + 固定演示快照 · 不代表完整实时赛事记录"
+          ? `本地知识 + 在线资料 · 更新于 ${response.as_of_beijing}`
+          : "本地知识 + 在线资料 · 以现场观察为准"
       : response.as_of_beijing
-      ? `公开资料 · 数据截至北京时间 ${response.as_of_beijing}`
+      ? `园艺资料 · 更新于 ${response.as_of_beijing}`
       : response.status === "completed" && String(response.evidence_state || "none").toLowerCase() === "none"
         ? "本轮回答 · 无需展示时间"
-        : "公开资料 · 当前没有可用的时间口径";
+        : "园艺资料 · 当前没有可用的时间口径";
     foot.append(source, chip, asOf);
     card.append(foot);
     // `body` remains attached to the article while streaming.  Reusing the
@@ -2096,7 +2113,7 @@
     body.append(meta, card);
     renderRecommendations(response);
     if (placeholder.article && !placeholder.article.parentElement) {
-      placeholder.article.append(placeholder.avatar || createAvatar("assistant-avatar", "CS"), body);
+      placeholder.article.append(placeholder.avatar || createAvatar("assistant-avatar", "花"), body);
       el.chatLog.append(placeholder.article);
     }
   }
@@ -2115,7 +2132,7 @@
     const meta = document.createElement("div");
     meta.className = "message-meta";
     const name = document.createElement("strong");
-    name.textContent = "COURTSIDE";
+    name.textContent = "种花 AGENT";
     const time = document.createElement("span");
     time.textContent = currentShortTime();
     meta.append(name, time);
@@ -2225,23 +2242,26 @@
       request_id: requestId,
       session_id: state.sessionId,
       latency_ms: 1680,
-      as_of_beijing: "2026-06-13 11:42",
+      as_of_beijing: null,
       evidence_state: "verified",
-      data_origin: "demo_snapshot",
+      data_origin: "local_knowledge",
       corrections: [],
       follow_up: null,
       composition: { mode: "deterministic", status: "not_requested", latency_ms: 0 },
     };
 
-    if (/(博彩|下注|盘口|赔率|赌球|假球|黑哨|政治|涉华|社会争议|场外|绯闻|隐私|法律|犯罪|司法|人身攻击|辱骂|侮辱|歧视|仇恨)/i.test(text)) {
+    // Safety short-circuit: never suggest mixing pesticides or consuming an
+    // unknown plant. The UI deliberately gives immediate, practical steps and
+    // does not perform an external search for a high-risk request.
+    if (/(农药|杀虫剂|除草剂).{0,12}(混|一起|混合|同桶)|混.{0,12}(农药|杀虫剂|除草剂)|误食|吃了.{0,10}(叶子|花|植物)|猫|狗|宠物.{0,10}(吃|舔|咬)|中毒|喷药/i.test(text)) {
       return {
         ...base,
         status: "blocked",
         evidence_state: "none",
         as_of_beijing: null,
-        answer_markdown: "这个话题不属于赛事助手的讨论范围。您可以问我比赛、球员或球队数据。",
-        blocks: [],
-        follow_up: "G4 最后 5 秒发生了什么？",
+        answer_markdown: "先不要混用或继续接触这类物质。停止喷洒并离开通风处，保留产品标签和包装；若人或宠物已经误食、吸入或出现不适，请立即联系急救中心、兽医或当地中毒咨询机构。不要自行催吐，也不要根据网上说法配药。",
+        blocks: [{ type: "warning", label: "安全提示", content: "先隔离暴露源、冲洗皮肤或眼睛（按产品标签操作），记录产品名称和接触时间，并寻求专业帮助。" }],
+        follow_up: "如果没有发生暴露，我可以帮你制定低风险的病虫害排查步骤。",
       };
     }
 
@@ -2252,7 +2272,7 @@
       return {
         ...base,
         status: "failed",
-        error: { code: "UPSTREAM_TIMEOUT", retryable: true, message: "数据连接暂时中断，请稍后重试。" },
+        error: { code: "UPSTREAM_TIMEOUT", retryable: true, message: "园艺资料连接暂时中断，请稍后重试。" },
       };
     }
 
@@ -2260,139 +2280,100 @@
       return {
         ...base,
         status: "failed",
-        error: { code: "SERVICE_BUSY", retryable: true, message: "服务当前较忙，请稍后重试。" },
+        error: { code: "SERVICE_BUSY", retryable: true, message: "种花服务当前较忙，请稍后重试。" },
       };
     }
 
-    const contextShorthand = /这场|那场|最后那个球|上一条|刚才/i.test(text);
-    if (contextShorthand && !state.contextRequest && !state.activeGame) {
+    const plantHit = plantsMentionedIn(text)[0] || state.gardenContext?.plant || null;
+    const locationHit = text.match(/(北京|上海|广州|深圳|杭州|成都|重庆|南京|武汉|天津|西安|苏州|青岛)/)?.[1] || state.gardenContext?.location || null;
+    const lightHit = text.match(/(北阳台|南阳台|东向|西向|全日照|半阴|散射光|直射光|明亮无直射)/)?.[1] || state.gardenContext?.light || null;
+    const containerHit = text.match(/(\d+(?:\.\d+)?\s*(?:厘米|cm)\s*(?:盆|花盆)|地栽|阳台|窗台)/i)?.[1] || state.gardenContext?.container || null;
+    state.gardenContext = { ...(state.gardenContext || {}), ...(plantHit ? { plant: plantHit } : {}), ...(locationHit ? { location: locationHit } : {}), ...(lightHit ? { light: lightHit } : {}), ...(containerHit ? { container: containerHit } : {}) };
+
+    const contextShorthand = /它|这盆|这株|这个植物|刚才|上一条|上一轮|然后|接下来/i.test(text);
+    if (contextShorthand && !plantHit && !state.contextRequest && !state.activeGame) {
       return {
         ...base,
         status: "needs_clarification",
         evidence_state: "none",
         as_of_beijing: null,
-        answer_markdown: "请告诉我具体的比赛或日期，我再为您核对。",
+        answer_markdown: "我还不知道你指的是哪种植物。请告诉我植物名称，或发来叶片、花盆和光照的文字描述。",
         blocks: [],
-        follow_up: "例如：2025-26 总决赛 G4",
+        follow_up: "例如：绣球，北阳台，上午有两小时直射光。",
       };
     }
 
-    if (contextShorthand && (state.contextRequest || state.activeGame)) {
-      const selected = state.activeGame;
-      const matchup = selected
-        ? `${selected.away_name || "客队"} 对 ${selected.home_name || "主队"}`
-        : "2025-26 总决赛 G4";
-      if (selected && /什么时候|几点|开赛时间|比赛时间/i.test(text)) {
-        return {
-          ...base,
-          status: "completed",
-          answer_markdown: `${matchup}于 **${formatGameStart(selected.start_utc)}**（北京时间）开赛。`,
-          blocks: [{ type: "fact", label: "开赛时间", value: formatGameStart(selected.start_utc), unit: "北京时间" }],
-          follow_up: "还可以问我这场比赛的得分王或关键回合。",
-        };
-      }
-      if (selected && /在哪儿|在哪里|在哪进行|比赛地点|场馆|球馆|举办地/i.test(text)) {
-        const venue = selected.venue_name || "当前快照未提供场馆";
-        const city = selected.venue_city ? `（${selected.venue_city}）` : "";
-        return {
-          ...base,
-          status: "completed",
-          answer_markdown: selected.venue_name
-            ? `这场比赛在 **${venue}** 举行${city}。`
-            : "当前演示快照未提供这场比赛的场馆信息。",
-          blocks: selected.venue_name
-            ? [{ type: "fact", label: "比赛场馆", value: venue, unit: selected.venue_city || null }]
-            : [{ type: "warning", content: "当前演示快照未提供这场比赛的场馆信息。" }],
-          follow_up: "还可以问我这场比赛的关键回合。",
-        };
-      }
+    if (/你是谁|你能做什么|你是什么/i.test(text)) {
       return {
         ...base,
         status: "completed",
-        answer_markdown: selected
-          ? `我沿用当前选中的 ${matchup}：${selected.home_name || "主队"} ${selected.home_score ?? "—"}–${selected.away_score ?? "—"} ${selected.away_name || "客队"}。`
-          : "我沿用上一轮的 G4 比赛上下文：凯尔特人以 108–104 击败雷霆，系列赛大比分为 3–1。",
-        blocks: selected
-          ? [
-            { type: "text", content: `已沿用当前选中的比赛：**${matchup}**。` },
-            { type: "fact", label: "终场比分", value: `${selected.home_score ?? "—"}–${selected.away_score ?? "—"}`, unit: `${selected.home_abbreviation || "主队"} 主场` },
-          ]
-          : [
-            { type: "text", content: "已沿用上一轮确定的比赛：**2025-26 总决赛 G4**。" },
-            { type: "fact", label: "当前上下文", value: "BOS vs OKC", unit: "FINALS · G4" },
-            { type: "fact", label: "终场比分", value: "108–104", unit: "BOS 胜" },
-          ],
-        follow_up: "请回放全场最后 5 秒发生了什么？",
-      };
-    }
-
-    if (!options.forceSuccess && (/(天气|股票|写代码|旅游|食谱|电影推荐)/i.test(text) || (!/(nba|比赛|球员|球队|凯尔特人|雷霆|总决赛|系列赛|回合|战术|防守|比分|得分|冠军|布朗|塔图姆|亚历山大|霍姆格伦|怀特|多尔特|celtics|thunder|okc|bos|tatum|brown|gilgeous)/i.test(text) && text.length > 0))) {
-      return {
-        ...base,
-        status: "no_data",
-        evidence_state: "none",
-        as_of_beijing: null,
-        answer_markdown: "我专注于 NBA 比赛、球员和球队信息。换个篮球问题，我来帮您查。",
+        answer_markdown: "我是种花 Agent，帮你选择花卉、安排光照和浇水、处理常见养护问题，并在需要时查找当地或近期资料。涉及人、宠物或化学品安全时，我会先给出谨慎的求助建议。",
         blocks: [],
-        follow_up: "这轮系列赛目前大比分是多少？",
+        follow_up: "你可以先问：北阳台适合种什么花？",
       };
     }
 
-    if (/最后|关键|5\s*秒|回合|play[- ]?by[- ]?play/i.test(text)) {
-      const events = PBP.Q4.slice(-3);
+    if (/北阳台|南阳台|窗台|适合种|选什么花|推荐.*花/i.test(text)) {
       return {
         ...base,
         status: "completed",
-        answer_markdown: "全场最后 5 秒没有新的有效投篮命中，终场比分定格为 108–104。",
+        answer_markdown: "先按光照和空间选，不要只看花名：北向或散射光阳台可优先考虑绣球、蝴蝶兰、君子兰；如果每天有 4–6 小时直射光，再考虑月季、天竺葵等。",
         blocks: [
-          { type: "text", content: "全场最后 5 秒的关键节点如下，时间按该节剩余时间记录。" },
-          { type: "table", label: "Q4 · 最后 5 秒", columns: ["时间", "球队", "事件", "比分"], rows: events.map((event) => [event.clock, event.team, event.action, `${event.away}–${event.home}`]) },
-          { type: "analysis", label: "分析", content: "凯尔特人用一次及时暂停和连续防守篮板消耗了最后回合，雷霆未能再获得完整出手机会。" },
+          { type: "fact", label: "低光候选", value: "绣球 / 蝴蝶兰 / 君子兰", unit: "明亮散射光" },
+          { type: "fact", label: "高光候选", value: "月季 / 天竺葵", unit: "每天约 4–6 小时直射光" },
+          { type: "analysis", label: "下一步", content: "告诉我朝向、每天直射光时长、花盆大小和你想要的花期，我可以缩小到 2–3 个选择。" },
         ],
-        follow_up: "要不要看看第三节的转折回合？",
+        follow_up: "我家是北阳台，上午只有一小时光，应该选哪一种？",
       };
     }
 
-    if (/战术|限制|防守|复盘|为什么|失利|伟大/i.test(text)) {
+    if (/浇水|多久浇|该不该浇|干.*浇|施肥|肥料/i.test(text)) {
+      const plant = plantHit || "这盆花";
       return {
         ...base,
         status: "completed",
-        answer_markdown: "先说结论：凯尔特人通过换防与弱侧协防，降低了雷霆挡拆后的直线突破效率。",
+        answer_markdown: `先不要按固定天数浇${plant}：手指探入表土约 2–3 厘米，明显干燥再一次浇透，直到盆底少量出水；托盘积水要倒掉。光照、盆径、季节和介质都会改变频率。`,
         blocks: [
-          { type: "text", content: "先说结论：凯尔特人通过换防与弱侧协防，降低了雷霆挡拆后的直线突破效率。" },
-          { type: "fact", label: "对手核心", value: "S. Gilgeous-Alexander", unit: "27 PTS" },
-          { type: "fact", label: "末节分差", value: "+4", unit: "BOS" },
-          { type: "analysis", label: "分析", content: "1）挡拆第一道防线延误持球；2）弱侧提前收缩，迫使传球路线变长；3）轮转后优先保护篮下，再接受低效率外线出手。以上是基于已核验回合的战术解读。" },
+          { type: "fact", label: "判断信号", value: "表土下 2–3 厘米干燥", unit: "再浇透" },
+          { type: "warning", label: "避免", content: "不要让盆底长期泡水，也不要只看日历机械浇水。" },
         ],
-        follow_up: "需要我按回合拆解最后一节吗？",
+        follow_up: "这盆花是什么品种、花盆多大、放在哪里？",
       };
     }
 
-    if (/记得|赢了|输了|核验|对吗|是不是/i.test(text)) {
+    if (/黄叶|发黄|萎蔫|掉叶|虫|蚜|白粉|病/i.test(text)) {
       return {
         ...base,
         status: "completed",
-        corrections: [{ status: "corrected", message: "核验结果：G4 的胜者是凯尔特人，不是雷霆。" }],
-        answer_markdown: "凯尔特人以 108–104 获胜，系列赛总比分来到 3–1。",
+        evidence_state: "partial",
+        answer_markdown: `仅凭${plantHit || "文字症状"}不能确定病因。先按低风险顺序排查：土壤是否长期湿、根部是否有异味、叶背有没有小虫或蛛网、近期是否突然暴晒或施肥过量。`,
         blocks: [
-          { type: "text", content: "凯尔特人以 **108–104** 获胜，系列赛总比分来到 **3–1**。" },
-          { type: "table", label: "G4 比赛摘要", columns: ["项目", "结果"], rows: [["胜者", "凯尔特人"], ["得分王", "J. Brown · 32 分"], ["比赛状态", "FINAL"]] },
+          { type: "analysis", label: "可能原因（按常见度）", content: "浇水过多或排水差、光照骤变、根系受损、虫害或营养失衡。" },
+          { type: "text", label: "先做什么", content: "暂停施肥和强药；把植株移到稳定的明亮散射光，检查盆底排水与叶背，记录 2–3 天变化。若快速扩散、茎基部变软或整株萎蔫，请找当地园艺师确认。" },
         ],
-        follow_up: "要不要继续看最后 5 秒的逐回合记录？",
+        follow_up: "可以补充：植物名称、黄叶从老叶还是新叶开始、土壤湿度和最近一次施肥时间。",
+      };
+    }
+
+    if (/天气|温度|湿度|上海|北京|广州|九月|十月|季节/i.test(text)) {
+      return {
+        ...base,
+        status: "completed",
+        evidence_state: "partial",
+        answer_markdown: `${locationHit || "当地"}的季节养护会受当天温度、降雨和光照影响。没有实时天气时，先把${plantHit || "植株"}放在通风、光线稳定的位置，按表土干湿决定浇水，避免在高温或暴雨前施浓肥。若你告诉我城市、月份和植物，我可以再结合最新资料给出调整建议。`,
+        blocks: [{ type: "warning", label: "信息边界", content: "实时天气和品种差异可能改变频率；请以现场观察和产品标签为准。" }],
+        follow_up: "例如：上海九月，月季，南阳台，每天 5 小时直射光。",
       };
     }
 
     return {
       ...base,
       status: "completed",
-      answer_markdown: "凯尔特人在主场以 108–104 击败雷霆。杰伦·布朗得到全场最高的 32 分，凯尔特人将系列赛优势扩大到 3–1。",
+      answer_markdown: "我可以帮你选花、安排光照和浇水、制定施肥/修剪计划，并排查常见黄叶和虫害。为了给出更准确的建议，请告诉我植物名称（或外观）、城市/季节、光照时长和花盆大小。",
       blocks: [
-        { type: "text", content: "凯尔特人在主场以 **108–104** 击败雷霆。" },
-        { type: "fact", label: "全场最高", value: "J. Brown", unit: "32 PTS" },
-        { type: "fact", label: "系列赛大比分", value: "BOS 3–1", unit: "领先" },
-        { type: "table", label: "比赛摘要（单节得分）", columns: ["球队", "Q1", "Q2", "Q3", "Q4", "终场"], rows: [["雷霆", 27, 25, 28, 24, 104], ["凯尔特人", 24, 31, 31, 22, 108]] },
+        { type: "text", label: "最小补充条件", content: "植物 + 光照（朝向/每天直射时长）+ 城市或季节 + 容器/介质。" },
       ],
-      follow_up: "请回放全场最后 5 秒发生了什么？",
+      follow_up: "北阳台适合种什么花？",
     };
   }
 
@@ -2512,7 +2493,7 @@
           request_id: run.requestId || makeId("request"),
           session_id: state.sessionId,
           status: "failed",
-          error: { code: "UPSTREAM_TIMEOUT", retryable: true, message: "数据连接暂时中断，请稍后重试。" },
+          error: { code: "UPSTREAM_TIMEOUT", retryable: true, message: "种花服务连接暂时中断，请稍后重试。" },
         });
       }
     }).catch((error) => {
@@ -2544,7 +2525,7 @@
           return;
         }
         setWelcomeForUnavailableTransport();
-        showToast("数据连接已中断，可点击重试");
+        showToast("种花服务连接已中断，可点击重试");
         finishRun({
           request_id: run.requestId || makeId("request"),
           session_id: state.sessionId,
@@ -2552,7 +2533,7 @@
           error: {
             code: "NETWORK_UNAVAILABLE",
             retryable: true,
-            message: "数据连接暂时中断，请检查网络后重试。",
+            message: "种花服务连接暂时中断，请检查网络后重试。",
           },
         });
         return;
@@ -2561,7 +2542,11 @@
         request_id: run.requestId || makeId("request"),
         session_id: state.sessionId,
         status: "failed",
-        error: { code: "SERVICE_BUSY", retryable: true, message: error.message || "服务暂时不可用，请稍后重试。" },
+        error: {
+          code: "SERVICE_BUSY",
+          retryable: true,
+          message: safePublicErrorMessage(error, "种花服务暂时不可用，请稍后重试。"),
+        },
       });
     });
     return true;
@@ -2595,7 +2580,7 @@
       error: {
         code: "NETWORK_UNAVAILABLE",
         retryable: true,
-        message: "公开赛事数据服务暂时不可用，请检查网络后重试。",
+        message: "园艺资料服务暂时不可用，请检查网络后重试。",
       },
     });
     return true;
@@ -2642,7 +2627,7 @@
     }
     const message = el.input.value.trim();
     if (!message) {
-      showToast("请先输入一个 NBA 问题");
+      showToast("请先输入一个种植问题");
       el.input.focus();
       return;
     }
@@ -2677,6 +2662,7 @@
     state.lastRequest = null;
     state.contextRequest = null;
     state.recommendationContext = null;
+    state.gardenContext = null;
     state.retryCount = 0;
     state.intelligenceMode = state.defaultIntelligenceMode || "hybrid";
     // A new chat is also a new game-context boundary. Keep the reusable
@@ -2711,19 +2697,19 @@
   function resetHud() {
     setTeamToken(el.hudAwayToken, "—");
     setTeamToken(el.hudHomeToken, "—");
-    if (el.hudAwayName) el.hudAwayName.textContent = "暂无比赛";
-    if (el.hudHomeName) el.hudHomeName.textContent = "暂无比赛";
-    if (el.hudAwayRecord) el.hudAwayRecord.textContent = "客场";
-    if (el.hudHomeRecord) el.hudHomeRecord.textContent = "主场";
-    if (el.hudEyebrow) el.hudEyebrow.textContent = "GAME HUD / NO GAME SELECTED";
-    if (el.hudStatus) el.hudStatus.textContent = "NO DATA";
+    if (el.hudAwayName) el.hudAwayName.textContent = "尚未选择植物";
+    if (el.hudHomeName) el.hudHomeName.textContent = "尚未设置环境";
+    if (el.hudAwayRecord) el.hudAwayRecord.textContent = "植物";
+    if (el.hudHomeRecord) el.hudHomeRecord.textContent = "环境";
+    if (el.hudEyebrow) el.hudEyebrow.textContent = "PLANT PROFILE / NO PLANT SELECTED";
+    if (el.hudStatus) el.hudStatus.textContent = "未选择";
     if (el.awayScore) el.awayScore.textContent = "—";
     if (el.homeScore) el.homeScore.textContent = "—";
     if (el.scoreClock) el.scoreClock.textContent = "—";
-    if (el.hudPossession) el.hudPossession.textContent = "最后控球：—";
-    if (el.hudPace) el.hudPace.textContent = "节奏 —";
+    if (el.hudPossession) el.hudPossession.textContent = "下一步：—";
+    if (el.hudPace) el.hudPace.textContent = "湿度 —";
     if (el.hudLeaderName) el.hudLeaderName.textContent = "—";
-    if (el.hudLeaderLine) el.hudLeaderLine.textContent = "等待比赛详情";
+    if (el.hudLeaderLine) el.hudLeaderLine.textContent = "等待植物详情";
     el.quarterCells.forEach((cell) => {
       const score = $("[data-quarter-score]", cell);
       if (score) score.textContent = "—";
@@ -2733,10 +2719,10 @@
   function setConversationScope(game = null) {
     if (!el.conversationScope) return;
     const drilldown = Boolean(game && game.game_id);
-    el.conversationScope.textContent = drilldown ? "赛事下钻" : "漫游模式";
+    el.conversationScope.textContent = drilldown ? "植物档案" : "漫游模式";
     el.conversationScope.title = drilldown
-      ? "已注入当前选中比赛上下文；点击此处退出赛事下钻"
-      : "未选择具体比赛；问题按 NBA 全局范围理解，可先问赛程、球员或新闻";
+      ? "已注入当前选中植物上下文；点击此处退出植物档案"
+      : "未绑定具体植物；问题按通用园艺范围理解，可先问选花、养护或病虫害";
     el.conversationScope.dataset.scope = drilldown ? "drilldown" : "roaming";
     el.conversationScope.setAttribute("aria-pressed", drilldown ? "true" : "false");
   }
@@ -2744,7 +2730,7 @@
   function exitGameDrilldown() {
     if (!state.activeGame && !state.selectedGameId) return;
     clearSelectedGameContext();
-    showToast("已返回漫游模式，后续问题不再绑定具体比赛");
+    showToast("已返回漫游模式，后续问题不再绑定具体植物");
   }
 
   const REGULATION_PERIODS = ["Q1", "Q2", "Q3", "Q4"];
@@ -3010,7 +2996,9 @@
         state.detailLoadingGameId = null;
         state.activePbp = {};
         renderPbp("Q4");
-        if (error?.network === false) showToast(error.message || "该场比赛详情暂不可用");
+        if (error?.network === false) {
+          showToast(safePublicErrorMessage(error, "该场比赛详情暂不可用。"));
+        }
       }
     } finally {
       if (requestNumber === state.detailRequest) state.detailLoadingGameId = null;
@@ -3342,14 +3330,14 @@
     syncHighlightDatePicker(mode, safeDate);
     const historyTitle = options.historyTitle
       || (state.historyView === "range" && options.rangeFrom && options.rangeTo
-        ? `精彩回顾 · ${formatShortDate(options.rangeFrom)}—${formatShortDate(options.rangeTo)}`
+        ? `资料回顾 · ${formatShortDate(options.rangeFrom)}—${formatShortDate(options.rangeTo)}`
         : state.historyView === "date" && safeDate
-          ? `精彩回顾 · ${formatShortDate(safeDate)}`
-          : "精彩回顾 · 最近 5 场");
+          ? `资料回顾 · ${formatShortDate(safeDate)}`
+          : "资料回顾");
     const historyDivider = options.historyTitle || historyTitle;
     const listLabel = options.listLabel
       || (mode === "history"
-        ? (state.historyView === "range" ? "时间区间比赛" : state.historyView === "date" ? "当天比赛" : "最近 5 场比赛")
+        ? (state.historyView === "range" ? "时间区间资料" : state.historyView === "date" ? "当天资料" : "最近资料")
         : "漫游模式");
     if (el.highlightsTitle) {
       el.highlightsTitle.textContent = mode === "history" ? historyTitle : "漫游模式";
@@ -3361,7 +3349,7 @@
     if (el.dayDivider) {
       const dividerText = mode === "history"
         ? historyDivider
-        : "漫游模式 · 不绑定具体比赛";
+        : "漫游模式 · 不绑定具体植物";
       const label = $("span", el.dayDivider);
       if (label) label.textContent = dividerText;
     }
@@ -3376,12 +3364,12 @@
         // Reset a transient validation message before rendering a normal
         // empty-date response.
         el.highlightsEmpty.textContent = mode === "roaming"
-          ? options.emptyMessage || "漫游模式不绑定具体比赛，可直接提问；进入“赛事下钻”后选择比赛查看详情。"
+          ? options.emptyMessage || "漫游模式不绑定具体植物，可直接提问。"
           : options.emptyMessage || (state.historyView === "range"
-            ? "该时间范围暂无可用比赛记录。"
+            ? "该时间范围暂无可用资料。"
             : state.historyView === "date"
-              ? `${formatShortDate(safeDate)} 暂无可用比赛记录。`
-            : "最近暂无可用比赛记录。");
+              ? `${formatShortDate(safeDate)} 暂无可用资料。`
+            : "最近暂无可用资料。");
         el.highlightsEmpty.hidden = false;
         el.highlightsEmpty.classList.remove("is-loading");
       }
@@ -3457,7 +3445,10 @@
           return;
         }
         if (error?.network === false) {
-          const message = error?.publicPayload?.error?.message || "历史比赛暂时不可用。";
+          const message = safePublicErrorMessage(
+            error?.publicPayload || error,
+            "历史比赛暂时不可用。",
+          );
           state.historyLoading = false;
           setHistoryControls("history", state.historyView);
           clearHighlightProjection(message);
@@ -3466,7 +3457,7 @@
         }
         if (!fixtureTransportEnabled()) {
           handleHighlightTransportFailure(
-            error?.message || "历史比赛连接暂时不可用。",
+            safePublicErrorMessage(error, "历史比赛连接暂时不可用。"),
             "history",
           );
           return;
@@ -3549,7 +3540,10 @@
           return;
         }
         if (error?.network === false) {
-          const message = error?.publicPayload?.error?.message || "历史比赛暂时不可用。";
+          const message = safePublicErrorMessage(
+            error?.publicPayload || error,
+            "历史比赛暂时不可用。",
+          );
           state.historyLoading = false;
           setHistoryControls("history", state.historyView);
           clearHighlightProjection(message);
@@ -3558,7 +3552,7 @@
         }
         if (!fixtureTransportEnabled()) {
           handleHighlightTransportFailure(
-            error?.message || "历史比赛连接暂时不可用。",
+            safePublicErrorMessage(error, "历史比赛连接暂时不可用。"),
             "range",
           );
           return;
@@ -3638,7 +3632,10 @@
         if (error?.network === false) {
           // A future-date rejection must not leave the previously selected
           // game's card visible as if it belonged to the rejected/failed date.
-          const message = publicError?.message || "日期赛事暂时不可用。";
+          const message = safePublicErrorMessage(
+            error?.publicPayload || error,
+            "日期资料暂时不可用。",
+          );
           if (mode === "history" && selectedDate) {
             state.highlightAvailability.set(
               selectedDate,
@@ -3654,7 +3651,10 @@
         }
         if (!fixtureTransportEnabled()) {
           handleHighlightTransportFailure(
-            publicError?.message || error?.message || "日期赛事连接暂时不可用。",
+            safePublicErrorMessage(
+              error?.publicPayload || error,
+              "日期资料连接暂时不可用。",
+            ),
             "date",
           );
           return;
@@ -3729,7 +3729,7 @@
     loadHighlights("history", value);
   }
 
-  function clearHighlightProjection(message = "这一天暂无可用比赛记录。") {
+  function clearHighlightProjection(message = "暂无可用资料。") {
     cancelHighlightsLoading();
     state.activeGame = null;
     state.activePbp = null;
@@ -3738,13 +3738,13 @@
     setConversationScope(null);
     if (el.featuredGame) el.featuredGame.hidden = true;
     renderGameList([], state.historyView === "range"
-      ? "时间区间比赛"
+      ? "时间区间资料"
       : state.historyView === "date"
-        ? "当天比赛"
-        : state.highlightMode === "history" ? "最近 5 场比赛" : "漫游模式");
+        ? "当天资料"
+        : state.highlightMode === "history" ? "最近资料" : "漫游模式");
     if (el.highlightsEmpty) {
       el.highlightsEmpty.textContent = state.highlightMode === "roaming"
-        ? (message === "这一天暂无可用比赛记录。" ? "漫游模式不绑定具体比赛，可直接提问；进入“赛事下钻”后选择比赛查看详情。" : message)
+        ? (message === "暂无可用资料。" ? "漫游模式不绑定具体植物，可直接提问。" : message)
         : message;
       el.highlightsEmpty.hidden = false;
       el.highlightsEmpty.classList.remove("is-loading");

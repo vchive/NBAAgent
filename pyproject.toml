@@ -3,9 +3,9 @@ requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "nba-chat-agent"
+name = "flower-chat-agent"
 version = "0.1.0"
-description = "Evidence-first Chinese NBA chat agent"
+description = "Evidence-first Chinese flower-growing chat agent"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -25,6 +25,12 @@ dev = [
 ]
 
 [project.scripts]
+# Canonical product commands.
+flower-agent = "apps.api.src.main:run"
+flower-agent-eval = "apps.api.src.evaluation.cli:main"
+# Compatibility aliases for existing local scripts and deployments.  They
+# resolve to the same flower-first application and can be removed after the
+# repository rename has propagated to downstream callers.
 nba-agent = "apps.api.src.main:run"
 nba-agent-eval = "apps.api.src.evaluation.cli:main"
 

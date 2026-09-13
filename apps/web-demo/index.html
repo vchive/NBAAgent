@@ -3,21 +3,21 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#07111f" />
+    <meta name="theme-color" content="#10251b" />
     <meta
       name="description"
-      content="COURTSIDE NBA Intelligence — NBA 比赛数据与对话演示"
+      content="种花 Agent — 花卉种植、养护与病虫害对话助手"
     />
-    <title>COURTSIDE / NBA Intelligence</title>
+    <title>种花 Agent / Flower Intelligence</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <div class="auth-gate" id="auth-gate" hidden>
       <section class="auth-card" role="dialog" aria-modal="true" aria-labelledby="auth-title">
-        <div class="auth-mark" aria-hidden="true">CS</div>
-        <span class="eyebrow">PRIVATE COURTSIDE / ACCESS CONTROL</span>
-        <h1 id="auth-title">登录赛事工作台</h1>
-        <p class="auth-copy" id="auth-copy">请输入访问密码，进入比赛数据与回放。</p>
+        <div class="auth-mark" aria-hidden="true">花</div>
+        <span class="eyebrow">PRIVATE FLOWER AGENT / ACCESS CONTROL</span>
+        <h1 id="auth-title">登录种植工作台</h1>
+        <p class="auth-copy" id="auth-copy">请输入访问密码，进入花卉种植与养护助手。</p>
         <form id="auth-form" novalidate>
           <label class="sr-only" for="auth-password">访问密码</label>
           <input id="auth-password" name="password" type="password" autocomplete="current-password" maxlength="512" placeholder="访问密码" required />
@@ -29,7 +29,7 @@
     </div>
     <div class="app-shell">
       <header class="topbar">
-        <a class="brand" href="#top" aria-label="COURTSIDE NBA Intelligence 首页">
+        <a class="brand" href="#top" aria-label="种花 Agent 首页">
           <span class="brand-mark" aria-hidden="true">
             <svg viewBox="0 0 36 36" role="img">
               <circle cx="18" cy="18" r="16" fill="none" stroke="currentColor" stroke-width="1.5" />
@@ -37,15 +37,15 @@
             </svg>
           </span>
           <span class="brand-copy">
-            <span class="brand-kicker">COURTSIDE</span>
-            <strong>NBA INTELLIGENCE</strong>
+            <span class="brand-kicker">种花 AGENT</span>
+            <strong>FLOWER INTELLIGENCE</strong>
           </span>
         </a>
 
         <div class="topbar-actions">
           <span class="mode-pill" title="正在检查数据服务">
             <span class="status-dot" aria-hidden="true"></span>
-            <span id="mode-label">DATA SERVICE</span>
+            <span id="mode-label">FLOWER SERVICE</span>
           </span>
           <span class="beijing-clock" aria-label="北京时间">
             <span class="clock-label">北京时间</span>
@@ -62,37 +62,37 @@
       </header>
 
       <main class="workspace" id="top">
-        <aside class="rail left-rail" aria-label="赛事导航和示例问题">
+        <aside class="rail left-rail" aria-label="种植导航和示例问题">
           <div class="rail-heading">
             <div>
-              <span class="eyebrow">CONTROL ROOM</span>
+              <span class="eyebrow">GARDEN DESK</span>
               <h2 id="highlights-title">漫游模式</h2>
             </div>
             <span class="live-badge roam-badge"><span class="status-dot" aria-hidden="true"></span> <span id="highlights-badge-label">ROAM</span></span>
           </div>
 
-          <div class="highlight-switcher" role="group" aria-label="赛事浏览模式">
+          <div class="highlight-switcher legacy-game-ui" role="group" aria-label="资料浏览模式" hidden>
             <button type="button" class="highlight-mode active" data-highlight-mode="roaming" aria-pressed="true">漫游模式</button>
-            <button type="button" class="highlight-mode" data-highlight-mode="history" aria-pressed="false">赛事下钻</button>
+            <button type="button" class="highlight-mode" data-highlight-mode="history" aria-pressed="false">资料浏览</button>
             <div class="history-controls" id="history-controls" hidden>
-              <div class="history-view-switch" role="group" aria-label="赛事下钻范围">
-                <button type="button" class="history-view-button active" id="history-recent" aria-pressed="true">最近 5 场</button>
-                <button type="button" class="history-view-button" id="history-custom" aria-pressed="false">自定义时间</button>
+              <div class="history-view-switch" role="group" aria-label="资料浏览范围">
+                <button type="button" class="history-view-button active" id="history-recent" aria-pressed="true">最近资料</button>
+                <button type="button" class="history-view-button" id="history-custom" aria-pressed="false">自定义日期</button>
               </div>
               <span class="highlight-date-label" id="highlight-date-label">定位日期</span>
               <div class="highlight-date-picker" id="highlight-date-picker" hidden>
                 <button type="button" class="highlight-date-trigger" id="highlight-date-trigger" aria-expanded="false" aria-haspopup="dialog">
                   <span id="highlight-date-value">—</span><span class="date-trigger-chevron" aria-hidden="true">⌄</span>
                 </button>
-                <input id="highlight-date" type="date" aria-label="定位赛事日期" />
-                <div class="highlight-calendar" id="highlight-calendar" role="dialog" aria-label="选择赛事日期" hidden>
+                <input id="highlight-date" type="date" aria-label="定位资料日期" />
+                <div class="highlight-calendar" id="highlight-calendar" role="dialog" aria-label="选择资料日期" hidden>
                   <div class="calendar-heading">
                     <button type="button" class="calendar-nav" id="calendar-prev" aria-label="上一个月">‹</button>
                     <strong id="calendar-month">—</strong>
                     <button type="button" class="calendar-nav" id="calendar-next" aria-label="下一个月">›</button>
                   </div>
                   <div class="calendar-weekdays" aria-hidden="true"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div>
-                  <div class="calendar-grid" id="calendar-grid" role="grid" aria-label="赛事日期"></div>
+                  <div class="calendar-grid" id="calendar-grid" role="grid" aria-label="资料日期"></div>
                   <div class="calendar-status" id="calendar-status" role="status" aria-live="polite"><span class="calendar-status-text" id="calendar-status-text"></span></div>
                 </div>
               </div>
@@ -106,70 +106,70 @@
             </div>
           </div>
 
-          <button class="featured-game" id="featured-game" type="button" aria-label="进入赛事下钻后查看比赛" hidden>
-            <span class="game-meta"><span id="featured-game-meta">NBA FINALS · G4 · 演示快照</span><span class="game-state" id="featured-game-state">FINAL</span></span>
+          <button class="featured-game legacy-game-ui" id="featured-game" type="button" aria-label="查看选中的植物资料" hidden>
+            <span class="game-meta"><span id="featured-game-meta">植物资料</span><span class="game-state" id="featured-game-state">READY</span></span>
             <span class="mini-scoreboard">
-              <span class="mini-team"><span class="team-token token-bos" id="featured-home-token">BOS</span><span id="featured-home-name">凯尔特人</span></span>
-              <strong>108</strong>
-              <span class="mini-team"><span class="team-token token-okc" id="featured-away-token">OKC</span><span id="featured-away-name">雷霆</span></span>
-              <strong>104</strong>
+              <span class="mini-team"><span class="team-token token-neutral" id="featured-home-token">花</span><span id="featured-home-name">尚未选择植物</span></span>
+              <strong>—</strong>
+              <span class="mini-team"><span class="team-token token-neutral" id="featured-away-token">土</span><span id="featured-away-name">尚未设置环境</span></span>
+              <strong>—</strong>
             </span>
-            <span class="game-foot"><span id="featured-game-foot">2026/06/12 · 波士顿</span><span class="arrow" aria-hidden="true">↗</span></span>
+            <span class="game-foot"><span id="featured-game-foot">选择植物后显示</span><span class="arrow" aria-hidden="true">↗</span></span>
           </button>
-          <section class="games-section" id="games-section" aria-labelledby="games-section-title" hidden>
+          <section class="games-section legacy-game-ui" id="games-section" aria-labelledby="games-section-title" hidden>
             <div class="section-label games-section-heading">
-              <span id="games-section-title">赛事列表</span>
-              <span class="section-count" id="game-list-count">00 场</span>
+              <span id="games-section-title">资料列表</span>
+              <span class="section-count" id="game-list-count">00 条</span>
             </div>
-            <div class="game-list" id="game-list" role="list" aria-label="赛事列表"></div>
+            <div class="game-list" id="game-list" role="list" aria-label="资料列表"></div>
           </section>
-          <div class="highlights-empty" id="highlights-empty" hidden>这一天暂无可用比赛记录。</div>
+          <div class="highlights-empty legacy-game-ui" id="highlights-empty" hidden>暂无可用资料。</div>
 
           <div class="rail-section">
             <div class="section-label"><span>快速提问</span><span class="section-count">05</span></div>
             <div class="prompt-list" id="prompt-list">
-              <button type="button" class="prompt-button" data-prompt="2025-26 总决赛 G4 谁得分最高？">
-                <span class="prompt-index">01</span><span>G4 谁得分最高？</span><span class="prompt-arrow" aria-hidden="true">↗</span>
+              <button type="button" class="prompt-button" data-prompt="北阳台适合种什么花？">
+                <span class="prompt-index">01</span><span>北阳台适合种什么花？</span><span class="prompt-arrow" aria-hidden="true">↗</span>
               </button>
-              <button type="button" class="prompt-button" data-prompt="这轮系列赛目前大比分是多少？">
-                <span class="prompt-index">02</span><span>系列赛大比分</span><span class="prompt-arrow" aria-hidden="true">↗</span>
+              <button type="button" class="prompt-button" data-prompt="这盆绣球多久浇水？">
+                <span class="prompt-index">02</span><span>这盆绣球多久浇水？</span><span class="prompt-arrow" aria-hidden="true">↗</span>
               </button>
-              <button type="button" class="prompt-button" data-prompt="2025-26 总决赛 G4 请回放全场最后 5 秒发生了什么？">
-                <span class="prompt-index">03</span><span>最后 5 秒回放</span><span class="prompt-arrow" aria-hidden="true">↗</span>
+              <button type="button" class="prompt-button" data-prompt="月季黄叶，先排查什么？">
+                <span class="prompt-index">03</span><span>月季黄叶先排查什么？</span><span class="prompt-arrow" aria-hidden="true">↗</span>
               </button>
-              <button type="button" class="prompt-button" data-prompt="凯尔特人为什么能限制对手的挡拆？">
-                <span class="prompt-index">04</span><span>限制挡拆的战术</span><span class="prompt-arrow" aria-hidden="true">↗</span>
+              <button type="button" class="prompt-button" data-prompt="上海九月怎么调整月季施肥？">
+                <span class="prompt-index">04</span><span>上海九月怎么施肥？</span><span class="prompt-arrow" aria-hidden="true">↗</span>
               </button>
-              <button type="button" class="prompt-button" data-prompt="我记得雷霆在 G4 赢了，帮我核验一下。">
-                <span class="prompt-index">05</span><span>核验一个前提</span><span class="prompt-arrow" aria-hidden="true">↗</span>
+              <button type="button" class="prompt-button" data-prompt="猫吃了不认识的叶子怎么办？">
+                <span class="prompt-index">05</span><span>宠物误食叶片怎么办？</span><span class="prompt-arrow" aria-hidden="true">↗</span>
               </button>
             </div>
           </div>
 
           <div class="rail-note">
             <span class="note-icon" aria-hidden="true">◌</span>
-            <p>回答以已核验事实为基础。数字由比赛记录确定性汇总，分析与事实分开呈现。</p>
+            <p>建议会区分观察、可执行步骤与不确定性；涉及人和宠物安全时优先给出求助方向。</p>
           </div>
 
           <div class="rail-footer">
-            <span>NBA CHAT / v0.1</span>
+            <span>FLOWER CHAT / v0.1</span>
             <span class="online-label" id="online-label"><span class="status-dot" aria-hidden="true"></span> <span id="online-label-text">CONNECTING</span></span>
           </div>
         </aside>
 
-        <section class="chat-panel" aria-label="NBA 对话窗口">
+        <section class="chat-panel" aria-label="种花 Agent 对话窗口">
           <div class="panel-header">
             <div>
-              <span class="eyebrow">LIVE QUERY DESK / 001</span>
-              <h1>问问场边，发生了什么</h1>
-              <p class="panel-subtitle">比赛、球员、关键回合与战术复盘，一次问清。</p>
+              <span class="eyebrow">FLOWER QUERY DESK / 001</span>
+              <h1>种花 Agent，陪你把花养好</h1>
+              <p class="panel-subtitle">选花、浇水、光照、施肥与病虫害，一次问清。</p>
             </div>
             <div class="panel-controls">
-              <button type="button" class="scope-pill" id="conversation-scope" aria-pressed="false" title="未选择具体比赛，问题按漫游范围理解">漫游模式</button>
-              <label class="intelligence-toggle" for="intelligence-mode" title="开启后，问题会由智能分析并进行数据核验">
+              <button type="button" class="scope-pill" id="conversation-scope" aria-pressed="false" title="未绑定具体植物，问题按通用园艺范围理解">漫游模式</button>
+              <label class="intelligence-toggle" for="intelligence-mode" title="开启后，问题会由智能分析并核对园艺资料">
                 <input id="intelligence-mode" type="checkbox" role="switch" aria-describedby="intelligence-help" />
                 <span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
-                <span class="toggle-copy"><strong>全智能模式</strong><small id="intelligence-help">智能分析 + 数据核验</small></span>
+                <span class="toggle-copy"><strong>全智能模式</strong><small id="intelligence-help">智能回答 + 资料核验</small></span>
               </label>
               <div class="connection-state" id="connection-state" data-state="ready" aria-live="polite">
                 <span class="connection-dot" aria-hidden="true"></span>
@@ -179,26 +179,26 @@
           </div>
 
           <div class="chat-scroll" id="chat-log" role="log" aria-live="polite" aria-relevant="additions text" aria-busy="false">
-            <div class="day-divider" id="day-divider"><span>漫游模式 · 不绑定具体比赛</span></div>
+            <div class="day-divider" id="day-divider"><span>漫游模式 · 不绑定具体植物</span></div>
 
             <article class="message assistant-message welcome-message" data-message-id="welcome">
-              <div class="message-avatar assistant-avatar" aria-hidden="true">CS</div>
+              <div class="message-avatar assistant-avatar" aria-hidden="true">花</div>
               <div class="message-body">
-                <div class="message-meta"><strong>COURTSIDE</strong><span>19:42</span><span class="verified-mark">✓ 已就绪</span></div>
+                <div class="message-meta"><strong>种花 AGENT</strong><span>现在</span><span class="verified-mark">✓ 已就绪</span></div>
                 <div class="answer-card">
                   <div class="answer-lead">
                     <span class="answer-label">漫游模式</span>
-                    <h3>直接问一个 NBA 问题。</h3>
-                    <p>无需先选择比赛；想查看具体赛事时，再进入“赛事下钻”选择比赛。</p>
+                    <h3>先告诉我你的种植目标。</h3>
+                    <p>可以直接问选花、浇水、光照、施肥或病虫害；如果需要，我会再询问城市、光照和容器。</p>
                   </div>
-                  <div class="fact-grid" aria-label="比赛关键数据" hidden>
-                    <div class="fact-card accent-green"><span class="fact-label">终场比分</span><strong class="fact-value">—</strong><span class="fact-unit">等待查询</span></div>
-                    <div class="fact-card accent-orange"><span class="fact-label">得分王</span><strong class="fact-value">—</strong><span class="fact-unit">等待查询</span></div>
-                    <div class="fact-card accent-blue"><span class="fact-label">系列赛</span><strong class="fact-value">—</strong><span class="fact-unit">等待查询</span></div>
+                  <div class="fact-grid" aria-label="种植关键信息" hidden>
+                    <div class="fact-card accent-green"><span class="fact-label">植物</span><strong class="fact-value">—</strong><span class="fact-unit">等待描述</span></div>
+                    <div class="fact-card accent-orange"><span class="fact-label">光照</span><strong class="fact-value">—</strong><span class="fact-unit">等待描述</span></div>
+                    <div class="fact-card accent-blue"><span class="fact-label">季节</span><strong class="fact-value">—</strong><span class="fact-unit">等待描述</span></div>
                   </div>
                   <div class="answer-foot">
                     <span class="evidence-chip verified"><span aria-hidden="true">✓</span> 已就绪</span>
-                    <span>漫游模式 · 等待您的问题</span>
+                    <span>漫游模式 · 等待你的问题</span>
                   </div>
                 </div>
               </div>
@@ -221,8 +221,8 @@
 
           <form class="composer" id="chat-form" novalidate>
             <div class="composer-shell">
-              <label class="sr-only" for="message-input">输入您的 NBA 问题</label>
-              <textarea id="message-input" name="message" rows="1" maxlength="2000" autocomplete="off" placeholder="问一个关于比赛的问题……" aria-describedby="composer-help"></textarea>
+              <label class="sr-only" for="message-input">输入你的种植问题</label>
+              <textarea id="message-input" name="message" rows="1" maxlength="2000" autocomplete="off" placeholder="问一个关于花卉种植的问题……" aria-describedby="composer-help"></textarea>
               <button class="send-button" id="send-button" type="submit" aria-label="发送问题">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h15M13 6l6 6-6 6" /></svg>
               </button>
@@ -234,17 +234,17 @@
           </form>
         </section>
 
-        <aside class="rail right-rail" aria-label="比赛 HUD 和逐回合回放">
+        <aside class="rail right-rail legacy-game-ui" aria-label="植物档案和养护步骤" hidden>
           <section class="hud-card panel-card" aria-labelledby="hud-title">
             <div class="card-heading">
-              <div><span class="eyebrow" id="hud-eyebrow">GAME HUD / NO GAME SELECTED</span><h2 id="hud-title">终场数据</h2></div>
-              <span class="status-tag final-tag" id="hud-status">NO DATA</span>
+              <div><span class="eyebrow" id="hud-eyebrow">PLANT PROFILE / NO PLANT SELECTED</span><h2 id="hud-title">植物档案</h2></div>
+              <span class="status-tag final-tag" id="hud-status">未选择</span>
             </div>
             <div class="scoreboard">
               <div class="score-team away-team">
                 <span class="team-token token-neutral large-token" id="hud-away-token">—</span>
-                <span class="team-name" id="hud-away-name">暂无比赛</span>
-                <span class="team-record" id="hud-away-record">客场</span>
+                <span class="team-name" id="hud-away-name">尚未选择植物</span>
+                <span class="team-record" id="hud-away-record">植物</span>
               </div>
               <div class="score-center">
                 <div class="score-line"><strong id="away-score">—</strong><span>—</span><strong id="home-score">—</strong></div>
@@ -252,60 +252,60 @@
               </div>
               <div class="score-team home-team">
                 <span class="team-token token-neutral large-token" id="hud-home-token">—</span>
-                <span class="team-name" id="hud-home-name">暂无比赛</span>
-                <span class="team-record" id="hud-home-record">主场</span>
+                <span class="team-name" id="hud-home-name">尚未设置环境</span>
+                <span class="team-record" id="hud-home-record">环境</span>
               </div>
             </div>
-            <div class="quarter-strip" aria-label="各节比分，顺序为客队 OKC–主队 BOS">
-              <div data-quarter="Q1"><span>Q1</span><strong data-quarter-score="Q1">—</strong></div>
-              <div data-quarter="Q2"><span>Q2</span><strong data-quarter-score="Q2">—</strong></div>
-              <div data-quarter="Q3"><span>Q3</span><strong data-quarter-score="Q3">—</strong></div>
-              <div class="current" data-quarter="Q4"><span>Q4</span><strong data-quarter-score="Q4">—</strong></div>
+            <div class="quarter-strip" aria-label="植物养护摘要">
+              <div data-quarter="Q1"><span>光照</span><strong data-quarter-score="Q1">—</strong></div>
+              <div data-quarter="Q2"><span>浇水</span><strong data-quarter-score="Q2">—</strong></div>
+              <div data-quarter="Q3"><span>土壤</span><strong data-quarter-score="Q3">—</strong></div>
+              <div class="current" data-quarter="Q4"><span>季节</span><strong data-quarter-score="Q4">—</strong></div>
             </div>
             <div class="leader-row" id="hud-leader-row" aria-live="polite">
-              <span class="leader-label">得分王</span>
+              <span class="leader-label">重点提醒</span>
               <strong id="hud-leader-name">—</strong>
-              <span id="hud-leader-line">等待比赛详情</span>
+              <span id="hud-leader-line">等待植物详情</span>
             </div>
-            <div class="possession-row"><span><span class="possession-dot bos-pos" aria-hidden="true"></span> <span id="hud-possession">最后控球：—</span></span><span id="hud-pace">节奏 —</span></div>
+            <div class="possession-row"><span><span class="possession-dot bos-pos" aria-hidden="true"></span> <span id="hud-possession">下一步：—</span></span><span id="hud-pace">湿度 —</span></div>
           </section>
 
           <section class="pbp-card panel-card" aria-labelledby="pbp-title">
             <div class="card-heading pbp-heading">
-              <div><span class="eyebrow">PLAY-BY-PLAY / EVENT REPLAY</span><h2 id="pbp-title">关键回合</h2></div>
-              <span class="event-count" id="event-count">00 EVENTS</span>
+              <div><span class="eyebrow">CARE PLAN / STEP REPLAY</span><h2 id="pbp-title">养护步骤</h2></div>
+              <span class="event-count" id="event-count">00 STEPS</span>
             </div>
-            <div class="period-tabs" role="tablist" aria-label="选择比赛节次">
-              <button type="button" class="period-tab" role="tab" aria-selected="false" aria-controls="pbp-list" data-period="Q2">Q2</button>
-              <button type="button" class="period-tab" role="tab" aria-selected="false" aria-controls="pbp-list" data-period="Q3">Q3</button>
-              <button type="button" class="period-tab active" role="tab" aria-selected="true" aria-controls="pbp-list" data-period="Q4">Q4</button>
-              <button type="button" class="period-tab" role="tab" aria-selected="false" aria-controls="pbp-list" data-period="OT">OT</button>
+            <div class="period-tabs" role="tablist" aria-label="选择养护阶段">
+              <button type="button" class="period-tab" role="tab" aria-selected="false" aria-controls="pbp-list" data-period="Q2">种植</button>
+              <button type="button" class="period-tab" role="tab" aria-selected="false" aria-controls="pbp-list" data-period="Q3">养护</button>
+              <button type="button" class="period-tab active" role="tab" aria-selected="true" aria-controls="pbp-list" data-period="Q4">安全</button>
+              <button type="button" class="period-tab" role="tab" aria-selected="false" aria-controls="pbp-list" data-period="OT">进阶</button>
             </div>
-            <div class="pbp-list" id="pbp-list" role="list" aria-label="逐回合事件"></div>
+            <div class="pbp-list" id="pbp-list" role="list" aria-label="养护步骤"></div>
             <div class="replay-controls">
-              <button type="button" class="replay-play" id="replay-play" aria-label="播放关键回合" aria-pressed="false">
+              <button type="button" class="replay-play" id="replay-play" aria-label="查看养护步骤" aria-pressed="false">
                 <svg class="play-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10-6.5z" /></svg>
                 <svg class="pause-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h3v14H7zM14 5h3v14h-3z" /></svg>
-                <span id="replay-label">播放回放</span>
+                <span id="replay-label">查看步骤</span>
               </button>
               <div class="replay-progress">
                 <label class="sr-only" for="pbp-slider">回放进度</label>
                 <input id="pbp-slider" type="range" min="0" max="0" value="0" step="1" disabled />
-                <div class="progress-labels"><span id="replay-position">00 / 00</span><span>按序回放 · 非视频</span></div>
+                <div class="progress-labels"><span id="replay-position">00 / 00</span><span>按序查看 · 文字建议</span></div>
               </div>
             </div>
             <div class="selected-play" id="selected-play" aria-live="polite">
-              <span class="selected-play-kicker">SELECTED MOMENT</span>
-              <p id="selected-play-text">暂无选中的比赛，先从左侧选择一场赛事。</p>
+              <span class="selected-play-kicker">SELECTED STEP</span>
+              <p id="selected-play-text">暂无选中的步骤，先描述你的植物和环境。</p>
             </div>
           </section>
 
           <section class="evidence-card panel-card" aria-labelledby="evidence-title">
-            <div class="card-heading"><div><span class="eyebrow">DATA INTEGRITY</span><h2 id="evidence-title">口径说明</h2></div><span class="integrity-icon" aria-hidden="true">✓</span></div>
+              <div class="card-heading"><div><span class="eyebrow">ADVICE INTEGRITY</span><h2 id="evidence-title">建议说明</h2></div><span class="integrity-icon" aria-hidden="true">✓</span></div>
             <ul class="integrity-list">
-              <li><span class="integrity-dot green" aria-hidden="true"></span><span><strong>已核验事实</strong><small>比分、得分和回合来自已核验赛事记录</small></span></li>
-              <li><span class="integrity-dot amber" aria-hidden="true"></span><span><strong>分析观点</strong><small>以“分析”标签与事实明确区分</small></span></li>
-              <li><span class="integrity-dot gray" aria-hidden="true"></span><span><strong>暂无数据</strong><small>缺失字段不会用 0 或旧数据填充</small></span></li>
+              <li><span class="integrity-dot green" aria-hidden="true"></span><span><strong>可执行步骤</strong><small>先给低风险、可观察的养护行动</small></span></li>
+              <li><span class="integrity-dot amber" aria-hidden="true"></span><span><strong>谨慎判断</strong><small>症状只列可能原因，不替代专业诊断</small></span></li>
+              <li><span class="integrity-dot gray" aria-hidden="true"></span><span><strong>信息不足</strong><small>缺少关键条件时会明确提示并请求补充</small></span></li>
             </ul>
           </section>
         </aside>

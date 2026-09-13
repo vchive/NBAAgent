@@ -75,10 +75,12 @@ def _clean_text(value: Any, *, limit: int) -> str | None:
 
 
 def _query_text(query: NewsQuery) -> str:
+    is_flower = getattr(query, "domain", "nba") == "flower"
+    fallback = "花卉 园艺" if is_flower else "NBA basketball"
     parts = [ref.display_name for ref in query.subject_refs]
     parts.extend(query.keywords[:8])
     if not parts:
-        parts = ["NBA basketball"]
+        parts = [fallback]
     safe_parts = [str(part) for part in parts if not _INJECTION_RE.search(str(part))]
     value = _CONTROL_RE.sub(" ", " ".join(safe_parts))
     value = re.sub(r"[^\w\u3400-\u9fff\s.'-]", " ", value, flags=re.UNICODE)
@@ -91,7 +93,7 @@ def _query_text(query: NewsQuery) -> str:
         if units > 72:
             break
         result.append(char)
-    return "".join(result) or "NBA basketball"
+    return "".join(result) or fallback
 
 
 def _parse_date(value: Any) -> datetime | None:

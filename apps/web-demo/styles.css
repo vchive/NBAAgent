@@ -30,6 +30,25 @@
   --font-mono: "SFMono-Regular", "Roboto Mono", "Cascadia Code", Consolas, monospace;
 }
 
+/* The public product is the flower assistant.  The old event-drill widgets
+ * remain in the DOM only as a backwards-compatible integration surface for
+ * older deployments; they must never appear in the default experience. */
+.legacy-game-ui {
+  display: none !important;
+}
+
+/* A small botanical accent keeps the existing dark control-room layout while
+ * making the new product identity clear without relying on a third-party logo. */
+.brand-mark {
+  color: #79d39b;
+}
+
+.assistant-avatar {
+  color: #b9f3c8;
+  border-color: rgba(121, 211, 155, 0.4);
+  background: rgba(61, 142, 86, 0.22);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -245,7 +264,7 @@ input:focus-visible {
   height: 36px;
   display: grid;
   place-items: center;
-  color: var(--cyan);
+  color: #79d39b;
 }
 
 .brand-mark svg {
@@ -261,7 +280,7 @@ input:focus-visible {
 }
 
 .brand-kicker {
-  color: var(--cyan);
+  color: #79d39b;
   font: 600 10px/1 var(--font-mono);
   letter-spacing: 0.22em;
 }

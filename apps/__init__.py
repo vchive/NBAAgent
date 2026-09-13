@@ -1,1 +1,1 @@
-"""Application packages for the NBA Chat Agent."""
+"""Application packages for the 种花 Agent."""

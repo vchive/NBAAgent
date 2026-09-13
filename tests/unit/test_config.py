@@ -14,6 +14,34 @@ def test_siliconflow_defaults_are_explicit_and_valid() -> None:
     assert settings.siliconflow_max_tokens == 800
 
 
+def test_flower_product_defaults_are_canonical() -> None:
+    settings = Settings()
+    assert settings.agent_domain == "flower"
+    assert settings.auth_cookie_name == "flower_session"
+
+
+def test_listener_defaults_are_loopback_and_configurable(monkeypatch: pytest.MonkeyPatch) -> None:
+    defaults = Settings()
+    defaults.validate()
+    assert defaults.bind_host == "127.0.0.1"
+    assert defaults.bind_port == 8000
+
+    monkeypatch.setenv("BIND_HOST", "::1")
+    monkeypatch.setenv("BIND_PORT", "8123")
+    configured = Settings.from_env()
+    assert configured.bind_host == "::1"
+    assert configured.bind_port == 8123
+
+
+def test_listener_settings_reject_malformed_values() -> None:
+    with pytest.raises(ValueError, match="BIND_HOST"):
+        Settings(bind_host="127.0.0.1\nX").validate()
+    with pytest.raises(ValueError, match="BIND_PORT"):
+        Settings(bind_port=0).validate()
+    with pytest.raises(ValueError, match="BIND_PORT"):
+        Settings(bind_port=65_536).validate()
+
+
 def test_live_model_requires_an_enabled_runtime_profile() -> None:
     with pytest.raises(ValueError, match="HERMES_LITE_MODE"):
         Settings(llm_mode="live", runtime_profile="hybrid").validate()

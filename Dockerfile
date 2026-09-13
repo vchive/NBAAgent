@@ -1,15 +1,19 @@
 # syntax=docker/dockerfile:1.7
-# Fixture-first runtime image for local review and reproducible demos.
+# Fixture-first runtime image for the 种花 Agent local review build.
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    AGENT_DOMAIN=flower \
     PUBLIC_DATA_MODE=fixture \
     LLM_MODE=mock \
     RUNTIME_PROFILE=template \
     HERMES_LITE_MODE=off
 
 WORKDIR /app
+
+LABEL org.opencontainers.image.title="种花 Agent" \
+      org.opencontainers.image.description="Chinese flower-growing chat assistant"
 
 # Keep the package index configurable: mainland-China mirrors are dramatically
 # faster for the public interview host, while CI can pass the canonical PyPI
@@ -29,8 +33,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     "httpx>=0.27,<1" \
     "pydantic>=2.7,<3" \
     "uvicorn>=0.30,<1" \
-    && addgroup --system --gid 10001 nbaagent \
-    && adduser --system --uid 10001 --gid 10001 --home /nonexistent --no-create-home nbaagent
+    && addgroup --system --gid 10001 floweragent \
+    && adduser --system --uid 10001 --gid 10001 --home /nonexistent --no-create-home floweragent
 
 COPY README.md ./
 COPY apps ./apps
@@ -41,13 +45,16 @@ COPY scripts ./scripts
 # already present in the cached layer above.
 RUN python -m pip install --no-deps --no-build-isolation . \
     && mkdir -p /app/data \
-    && chown -R nbaagent:nbaagent /app
+    && chown -R floweragent:floweragent /app
 
-USER nbaagent
+USER floweragent
 
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=8s --retries=3 \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=2)"
+  CMD python -c "import os, urllib.request; port = int(os.getenv('BIND_PORT', '8000')); urllib.request.urlopen(f'http://127.0.0.1:{port}/readyz', timeout=2)"
 
-CMD ["uvicorn", "apps.api.src.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Let the validated Settings object own the bind policy.  This keeps the
+# image's default private and makes any non-loopback listener an explicit
+# BIND_HOST/BIND_PORT deployment choice rather than a hidden command override.
+CMD ["python", "-m", "apps.api.src.main"]

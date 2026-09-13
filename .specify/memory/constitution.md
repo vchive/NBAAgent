@@ -1,14 +1,26 @@
 <!--
 Sync Impact Report
-Version change: template → 1.0.0
-Modified principles: template placeholders replaced with five project principles.
-Added sections: Product and technical constraints; Development workflow and quality gates.
-Removed sections: none (template placeholders were replaced).
-Templates requiring updates: plan/spec/tasks templates reviewed; no structural changes required.
-Follow-up decisions: exact production data provider and hosting choice remain feature-level decisions.
+Version change: 1.0.0 → 2.0.0
+Modified principles:
+- Evidence-First NBA Facts → Evidence-First Gardening Guidance
+- Safety and Respectful Scope → Plant, Human and Environmental Safety
+- Product constraints changed from an NBA chat product to a Chinese flower-growing assistant.
+Preserved principles:
+- Specification-First Delivery
+- Contract- and Test-First Engineering
+- Observable, Reproducible and Simple Operations
+Added sections: none
+Removed sections: none
+Templates requiring updates:
+- ✅ .specify/templates/plan-template.md (generic Constitution Check remains compatible)
+- ✅ .specify/templates/spec-template.md (generic user stories and requirements remain compatible)
+- ✅ .specify/templates/tasks-template.md (generic test/task phases remain compatible)
+Runtime documentation:
+- ⚠ README.md and product documentation are updated by feature 005-flower-agent.
+Deferred items: none
 -->
 
-# NBA Chat Agent Constitution
+# Flower-Growing Agent Constitution
 
 ## Core Principles
 
@@ -19,21 +31,25 @@ before implementation. The specification MUST define user value, acceptance scen
 scope boundaries, measurable outcomes, and traceability to design and tests. Changes to
 behavior MUST update the specification in the same change set.
 
-### II. Evidence-First NBA Facts
+### II. Evidence-First Gardening Guidance
 
-Objective answers MUST be grounded in current, publicly accessible and reliable NBA data.
-The system MUST verify scores, dates, standings, player/team statistics, aggregates and
-play-by-play claims before presenting them. It MUST never invent a number or silently trust
-a user-supplied premise. Unverified information MUST be identified as unavailable or
-uncertain. Derived totals MUST be calculated from verified records rather than memory.
+Plant identity, toxicity, disease, pesticide, fertiliser, climate and seasonal claims MUST be
+grounded in curated horticultural knowledge or current public sources before being presented
+as facts. The system MUST distinguish observed symptoms from possible causes, MUST NOT claim
+visual certainty without sufficient evidence and MUST identify material uncertainty. Advice
+MUST adapt to the user's plant, location, light, season, container and recent care when those
+details are available; missing details MUST be requested only when they materially change the
+recommendation.
 
-### III. Safety and Respectful Scope
+### III. Plant, Human and Environmental Safety
 
-Safety filtering MUST occur before external retrieval for all topics covered by the brief's
-red lines, including politics or sensitive social controversy, private gossip, legal/criminal
-claims, unsupported game-fixing allegations, gambling or betting, and hateful or abusive
-content. A blocked request MUST receive a concise, respectful redirection to basketball;
-the system MUST not retrieve data first or expose internal implementation details.
+The assistant MUST prioritise the safety of people, pets, plants and the local environment.
+It MUST NOT recommend dangerous chemical mixtures, unlabelled pesticide use, consumption of
+an unidentified plant or disposal practices that contaminate soil or water. Toxicity and
+medical questions MUST include an appropriate uncertainty warning and direct urgent exposure
+cases to qualified medical, veterinary or poison-control help. Region-specific invasive-species,
+pesticide and disposal rules MUST be described as location-dependent unless current public
+guidance has been verified.
 
 ### IV. Contract- and Test-First Engineering
 
@@ -53,17 +69,19 @@ must be justified by a measurable requirement.
 
 ## Product and Technical Constraints
 
-- The primary experience is a Chinese, web-based, multi-turn chat for NBA fans.
-- User-facing time defaults to Asia/Shanghai (UTC+8); internal time values MUST be
-  unambiguous and season labels MUST support cross-calendar-year NBA seasons.
-- The first release MUST use public Internet data sources and MUST NOT depend on an
-  undisclosed internal database.
-- The UI MUST communicate loading, streaming or progress, empty results and recoverable
-  errors clearly.
-- The system MUST retain internal provenance and freshness data for verification; user-facing
-  answers may show the data-as-of time and verification status, but MUST NOT expose provider
-  names, endpoints, field names, prompts or implementation traces unless a later product
-  decision explicitly permits it.
+- The primary experience is a Chinese, web-based, multi-turn assistant for growing flowering
+  plants at home, on balconies and in small gardens.
+- User-facing dates and seasonal plans default to Asia/Shanghai unless the user supplies
+  another location or timezone; the assistant MUST not infer a precise location silently.
+- The first release MUST provide useful offline guidance from a curated plant catalogue and
+  MAY supplement it with bounded public web search when configured.
+- The UI MUST communicate the active plant/context, loading or progress, incomplete evidence,
+  recoverable errors and quota exhaustion clearly.
+- The system MUST retain internal provenance and freshness data for verification. Public
+  answers MAY show freshness and confidence, but MUST NOT expose provider names, endpoints,
+  model names, prompts, tool identifiers, credentials or implementation traces.
+- The HTTP service MUST bind to loopback by default. Public exposure requires an explicit,
+  authenticated reverse-proxy or deployment override.
 
 ## Development Workflow and Quality Gates
 
@@ -85,4 +103,4 @@ MAJOR for incompatible governance changes, MINOR for new or materially expanded 
 and PATCH for wording-only corrections. Every feature review checks the constitution gates and
 records unresolved risks before implementation.
 
-**Version**: 1.0.0 | **Ratified**: 2026-08-26 | **Last Amended**: 2026-08-26
+**Version**: 2.0.0 | **Ratified**: 2026-08-26 | **Last Amended**: 2026-09-13

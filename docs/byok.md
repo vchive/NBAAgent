@@ -23,7 +23,7 @@ FULL_INTELLIGENCE_ENABLED=true
 ## 推荐：Docker Compose secret（面试演示）
 
 在仓库根目录运行配置脚本。它会隐藏输入、原子写入 `secrets/siliconflow_api_key`，并设置
-目录 `0700`。由于 Compose 的 file secret 是 bind mount，镜像中的 `nbaagent` 用户使用
+目录 `0700`。由于 Compose 的 file secret 是 bind mount，镜像中的 `floweragent` 用户使用
 固定 gid `10001`；脚本会将文件设为 `root:10001`、`0640`，仅容器应用用户可读：
 
 ```bash
@@ -99,7 +99,7 @@ export REQUEST_DEADLINE_MS=45000
 export SILICONFLOW_API_KEY_FILE="$PWD/secrets/siliconflow_api_key"
 export ALIYUN_IQS_SEARCH_ENABLED=true
 export ALIYUN_IQS_API_KEY_FILE="$PWD/secrets/aliyun_iqs_api_key"
-uvicorn apps.api.src.main:app --host 0.0.0.0 --port 8000
+python3 -m apps.api.src.main
 ```
 
 也可以临时使用 `SILICONFLOW_API_KEY` 环境变量（不要写入命令历史、`.env`、CI 日志或
@@ -110,7 +110,7 @@ read -r -s -p 'SiliconFlow API key: ' SILICONFLOW_API_KEY; echo
 export SILICONFLOW_API_KEY
 export LLM_MODE=live RUNTIME_PROFILE=hybrid HERMES_LITE_MODE=embedded_agent
 export FULL_INTELLIGENCE_ENABLED=true
-uvicorn apps.api.src.main:app --host 0.0.0.0 --port 8000
+python3 -m apps.api.src.main
 unset SILICONFLOW_API_KEY
 ```
 
@@ -120,7 +120,7 @@ unset SILICONFLOW_API_KEY
 cp .env.example .env
 # 编辑 .env：至少设置 LLM_MODE/RUNTIME_PROFILE/HERMES_LITE_MODE；不要把真实 key 提交到 Git
 set -a; . ./.env; set +a
-uvicorn apps.api.src.main:app --host 0.0.0.0 --port 8000
+python3 -m apps.api.src.main
 ```
 
 对于 Docker，不要将整份 `.env` 通过 `env_file` 注入容器；使用上面的 Compose secret 文件。

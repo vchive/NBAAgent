@@ -18,6 +18,11 @@ from apps.api.src.api.http_routes import router as http_router
 from apps.api.src.api.sse_routes import SSEConnectionLimiter
 from apps.api.src.api.sse_routes import router as sse_router
 from apps.api.src.application.chat_use_case import ChatUseCase
+from apps.api.src.application.domain_router import DomainRouter
+from apps.api.src.application.flower_chat_use_case import (
+    FlowerChatUseCase,
+    FlowerSearchProvider,
+)
 from apps.api.src.config import Settings
 from apps.api.src.infrastructure.auth import AuthManager
 from apps.api.src.infrastructure.cache import InMemoryTTLCache
@@ -106,6 +111,28 @@ def _provider_stack(
     return live, None
 
 
+def _search_adapter_from_provider(provider: Any) -> Any | None:
+    """Find the already-composed bounded web-search adapter.
+
+    ``IndexedProvider`` and ``SearchAugmentedProvider`` are wrappers around the
+    same public source.  Walking only these known wrapper attributes lets the
+    flower vertical reuse the configured key/timeout/failover chain without
+    exposing a generic provider object to the Agent or accepting a user URL.
+    """
+
+    current = provider
+    seen: set[int] = set()
+    for _ in range(4):
+        if current is None or id(current) in seen:
+            return None
+        seen.add(id(current))
+        search = getattr(current, "search_provider", None)
+        if search is not None:
+            return search
+        current = getattr(current, "primary", None)
+    return None
+
+
 def create_app(*, settings: Settings | None = None, usecase: ChatUseCase | None = None) -> FastAPI:
     config = settings or Settings.from_env()
     # ``Settings.from_env`` validates itself, while callers injecting a
@@ -123,7 +150,7 @@ def create_app(*, settings: Settings | None = None, usecase: ChatUseCase | None 
         "prod",
     }
     app = FastAPI(
-        title="NBA Chat Agent",
+        title="种花 Agent",
         version="v1",
         docs_url=None if public_profile else "/docs",
         redoc_url=None,
@@ -203,15 +230,73 @@ def create_app(*, settings: Settings | None = None, usecase: ChatUseCase | None 
             max_retries=config.provider_max_retries,
             news_ttl_seconds=getattr(config, "ddg_cache_ttl_seconds", 300),
         )
-        usecase = ChatUseCase(
+        legacy_usecase = ChatUseCase(
             provider,
             settings=config,
             gateway=gateway,
             game_registry=app.state.game_registry,
             game_origin_registry=app.state.game_origin_registry,
         )
+        # The flower vertical reuses only the typed search adapter chain.  It
+        # never receives the NBA provider/gateway and therefore cannot issue a
+        # structured sports query by accident.  Fixture mode intentionally has
+        # no online adapter; the local knowledge base remains fully usable.
+        search_adapter = _search_adapter_from_provider(provider)
+        flower_search = (
+            FlowerSearchProvider(
+                search_adapter,
+                prefix=str(getattr(config, "flower_search_prefix", "园艺 花卉")),
+            )
+            if search_adapter is not None
+            else None
+        )
+        flower_runtime = __import__(
+            "apps.api.src.infrastructure.hermes_agent_runtime",
+            fromlist=["HermesAgentRuntime"],
+        ).HermesAgentRuntime(
+            domain="flower",
+            mode=(
+                str(getattr(config, "hermes_lite_mode", "off")).lower()
+                if str(getattr(config, "hermes_lite_mode", "off")).lower()
+                in {"embedded_agent", "sidecar"}
+                else "off"
+            ),
+            llm_mode=getattr(config, "llm_mode", "mock"),
+            api_key=getattr(config, "siliconflow_api_key", ""),
+            api_key_file=getattr(config, "siliconflow_api_key_file", ""),
+            base_url=getattr(
+                config, "siliconflow_base_url", "https://api.siliconflow.cn/v1"
+            ),
+            model=getattr(config, "siliconflow_model", "deepseek-ai/DeepSeek-V4-Flash"),
+            max_tokens=getattr(config, "siliconflow_max_tokens", 800),
+            timeout_ms=max(
+                1,
+                int(getattr(config, "hermes_lite_timeout_ms", 40_000)),
+            ),
+            max_iterations=getattr(config, "agent_max_iterations", 4),
+            max_tool_calls=getattr(config, "agent_max_tool_calls", 4),
+            tool_timeout_ms=getattr(config, "agent_tool_timeout_ms", 8_000),
+            max_tool_result_bytes=getattr(config, "agent_max_tool_result_bytes", 16_384),
+            max_output_bytes=getattr(config, "agent_max_output_bytes", 20_000),
+            package_version=getattr(config, "agent_package_version", "0.19.0"),
+            reasoning_effort=getattr(config, "agent_reasoning_effort", "none"),
+            model_timeout_seconds=getattr(config, "llm_timeout_seconds", 20.0),
+        )
+        flower_usecase = FlowerChatUseCase(
+            settings=config,
+            search_provider=flower_search,
+            hermes_runtime=flower_runtime,
+            legacy_usecase=legacy_usecase,
+        )
+        usecase = DomainRouter(
+            flower_usecase,
+            legacy_usecase,
+            default_domain=getattr(config, "agent_domain", "flower"),
+        )
         app.state.provider = provider
         app.state.fallback_provider = fallback
+        app.state.legacy_chat_use_case = legacy_usecase
+        app.state.flower_chat_use_case = flower_usecase
     else:
         app.state.provider = getattr(usecase, "provider", None)
         app.state.fallback_provider = None
@@ -228,6 +313,10 @@ def create_app(*, settings: Settings | None = None, usecase: ChatUseCase | None 
             usecase.game_origin_registry = app.state.game_origin_registry
         except (AttributeError, TypeError):
             pass
+        app.state.legacy_chat_use_case = (
+            getattr(usecase, "legacy_usecase", None) or usecase
+        )
+        app.state.flower_chat_use_case = getattr(usecase, "flower_usecase", None)
     app.state.chat_use_case = usecase
     app.include_router(http_router)
     app.include_router(sse_router)
@@ -442,7 +531,21 @@ app = create_app()
 def run() -> None:
     import uvicorn
 
-    uvicorn.run("apps.api.src.main:app", host="0.0.0.0", port=8000, reload=False)
+    # Keep the listener policy in the validated settings object.  In
+    # particular, do not let a Dockerfile/Compose command silently override
+    # the loopback-safe default; an operator must opt in through BIND_HOST and
+    # BIND_PORT when a reverse-proxy topology requires it.
+    config = Settings.from_env()
+    uvicorn.run(
+        "apps.api.src.main:app",
+        host=config.bind_host,
+        port=config.bind_port,
+        reload=False,
+    )
+
+
+if __name__ == "__main__":
+    run()
 
 
 __all__ = ["app", "create_app", "run", "_provider_stack"]

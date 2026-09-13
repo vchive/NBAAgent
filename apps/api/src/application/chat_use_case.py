@@ -264,6 +264,12 @@ class ChatResult:
     latency_ms: int = 0
     error: dict[str, Any] | None = None
     notices: list[dict[str, Any]] = field(default_factory=list)
+    # Flower-domain turns expose a deliberately small, privacy-safe snapshot
+    # of the active garden context.  Legacy NBA results leave this as ``None``
+    # so the compatibility wire contract is unchanged.  The projection is
+    # produced by the owning use case; never attach the full domain context or
+    # a transcript here.
+    garden_context: dict[str, Any] | None = None
     # Request-internal canonical identity.  A nested full-intelligence tool
     # call uses this to persist the uniquely resolved game for a later
     # deictic follow-up; it is deliberately omitted from ``to_dict`` so no
@@ -307,6 +313,12 @@ class ChatResult:
             "composition": dump(self.composition),
             "notices": dump(self.notices),
         }
+        if self.garden_context is not None:
+            # ``garden_context`` is already a server-owned projection, but run
+            # it through the same conservative dumper as blocks/notices so an
+            # embedding caller cannot smuggle a Pydantic/provider object into
+            # the public response.
+            payload["garden_context"] = dump(self.garden_context)
         if self.error is not None:
             payload = {
                 "request_id": str(self.request_id),

@@ -67,10 +67,12 @@ def _clean_text(value: Any, *, limit: int) -> str | None:
 
 
 def _query_text(query: NewsQuery) -> str:
+    is_flower = getattr(query, "domain", "nba") == "flower"
+    fallback = "花卉 园艺" if is_flower else "NBA basketball"
     parts = [ref.display_name for ref in query.subject_refs]
     parts.extend(query.keywords[:8])
     if not parts:
-        parts = ["NBA basketball"]
+        parts = [fallback]
     # NewsQuery validates keyword length, but callers can still construct a
     # mutable object or pass confusable control characters. Keep the egress
     # query bounded and plain-text only at this final boundary.
@@ -80,7 +82,7 @@ def _query_text(query: NewsQuery) -> str:
     value = " ".join(safe_parts)
     value = _CONTROL_RE.sub(" ", value)
     value = re.sub(r"[^\w\u3400-\u9fff\s.'-]", " ", value, flags=re.UNICODE)
-    return " ".join(value.split())[:160] or "NBA basketball"
+    return " ".join(value.split())[:160] or fallback
 
 
 class DuckDuckGoAdapter:
@@ -146,6 +148,7 @@ class DuckDuckGoAdapter:
     async def search_news(
         self, query: NewsQuery, budget: RequestBudget
     ) -> ProviderResult[list[NewsItem]]:
+        is_flower = getattr(query, "domain", "nba") == "flower"
         retrieved = datetime.now(UTC)
         if not budget.reserve_operation():
             return self._error(
@@ -227,7 +230,8 @@ class DuckDuckGoAdapter:
                 text = _clean_text(item.get("Text"), limit=1200)
                 if not text:
                     continue
-                title = text.split(" - ", 1)[0][:500] or "NBA 相关新闻"
+                fallback_title = "花卉园艺相关新闻" if is_flower else "NBA 相关新闻"
+                title = text.split(" - ", 1)[0][:500] or fallback_title
                 candidates.append((title, text, str(item.get("FirstURL") or "")))
                 if len(candidates) >= self.max_results:
                     break

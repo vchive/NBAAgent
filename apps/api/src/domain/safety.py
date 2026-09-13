@@ -86,7 +86,10 @@ def _obfuscated_literal_pattern(value: str) -> str:
 # Latin characters and Chinese names split with zero-width characters.
 _PUBLIC_IMPLEMENTATION_TERMS = (
     "hermes",
-    "agent",
+    # ``Agent`` is part of the public product name ("种花 Agent"), so it is
+    # not an implementation leak by itself.  Concrete runtime names such as
+    # Hermes remain blocked below; generic product wording must be allowed to
+    # cross the public answer boundary.
     "provider",
     "fixture",
     "cache",
@@ -122,6 +125,12 @@ _PUBLIC_IMPLEMENTATION_RE = re.compile(
     "|".join(_obfuscated_literal_pattern(value) for value in _PUBLIC_IMPLEMENTATION_TERMS),
     re.IGNORECASE,
 )
+# Generic ``Agent`` remains a useful implementation-disclosure signal when a
+# model spells it out or inserts separators (``A g e n t``).  The one public
+# exception is the shipped product identity ``种花 Agent``; mask that exact
+# phrase before applying the generic check below.
+_OBFUSCATED_AGENT_RE = re.compile(_obfuscated_literal_pattern("agent"), re.IGNORECASE)
+_FLOWER_PRODUCT_IDENTITY_RE = re.compile(r"种花\s*agent", re.IGNORECASE)
 
 
 def contains_public_implementation_leak(text: str) -> bool:
@@ -129,7 +138,14 @@ def contains_public_implementation_leak(text: str) -> bool:
 
     if not isinstance(text, str) or not text:
         return False
-    return bool(_PUBLIC_IMPLEMENTATION_RE.search(_normalise_public_boundary_text(text)))
+    normalized = _normalise_public_boundary_text(text)
+    # ``种花 Agent`` is intentionally user-facing branding, unlike a bare or
+    # obfuscated ``Agent`` mention that would disclose implementation detail.
+    normalized = _FLOWER_PRODUCT_IDENTITY_RE.sub("", normalized)
+    return bool(
+        _PUBLIC_IMPLEMENTATION_RE.search(normalized)
+        or _OBFUSCATED_AGENT_RE.search(normalized)
+    )
 
 # Search/news text is untrusted external content.  Provider and framework
 # names must never leak into public answers, but rejecting the entire answer

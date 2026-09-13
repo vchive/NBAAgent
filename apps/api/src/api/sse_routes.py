@@ -271,6 +271,7 @@ async def chat_stream(request: Request, body: ChatRequest):
                     "corrections": [],
                     "follow_up": "请重试刚才的问题。",
                     "latency_ms": 0,
+                    "garden_context": None,
                 }
                 try:
                     frame = state.append(

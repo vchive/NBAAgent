@@ -203,6 +203,35 @@ class CompositionInfo(_WireBase):
     status: CompositionStatus = CompositionStatus.NOT_REQUESTED
     latency_ms: int = Field(default=0, ge=0)
 
+
+class GardenContextProjection(_WireBase):
+    """Privacy-safe garden context shown beside a flower answer.
+
+    This is intentionally a flat, optional projection rather than the domain
+    ``GardenContext`` model.  It contains only coarse values useful for the
+    next gardening decision; transcripts, UUIDs, exact addresses, provider
+    metadata and observations are never part of the public response.
+    """
+
+    plant_name: str | None = Field(default=None, max_length=100)
+    location: str | None = Field(default=None, max_length=80)
+    climate: str | None = Field(default=None, max_length=80)
+    light: str | None = Field(default=None, max_length=80)
+    container: str | None = Field(default=None, max_length=80)
+    season: str | None = Field(default=None, max_length=40)
+
+    @field_validator(
+        "plant_name", "location", "climate", "light", "container", "season"
+    )
+    @classmethod
+    def _context_text_safe(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        # Context values are rendered by the browser and may also be fed back
+        # into a later model prompt.  Keep them single-line and apply the same
+        # public implementation/URL guard as answer text.
+        return _validate_public_text(value, allow_linebreaks=False)
+
 class TechnicalErrorCode(StrEnum):
     INVALID_PAYLOAD = "INVALID_PAYLOAD"
     SERVICE_BUSY = "SERVICE_BUSY"
@@ -383,12 +412,27 @@ class ChatResponse(_WireBase):
     blocks: list[AnswerBlock] = Field(default_factory=list, max_length=64)
     as_of_beijing: str | None = None
     evidence_state: EvidenceState
-    data_origin: Literal["public", "demo_snapshot", "mixed", "none"] = "none"
+    # The original NBA contract used only public/demo/mixed/none.  The flower
+    # vertical also needs to distinguish a local knowledge answer from a
+    # search-backed one; keeping the old values preserves compatibility for
+    # existing clients while allowing the domain-neutral router to carry its
+    # truthful provenance instead of failing validation (which previously
+    # surfaced as an OUTPUT_BLOCKED 500 for every flower answer).
+    data_origin: Literal[
+        "public",
+        "demo_snapshot",
+        "mixed",
+        "local",
+        "local_knowledge",
+        "search",
+        "none",
+    ] = "none"
     corrections: list[PublicCorrection] = Field(default_factory=list, max_length=16)
     follow_up: str | None = Field(default=None, max_length=1000)
     latency_ms: int = Field(ge=0)
     composition: CompositionInfo = Field(default_factory=CompositionInfo)
     notices: list[PublicNotice] = Field(default_factory=list, max_length=8)
+    garden_context: GardenContextProjection | None = None
 
     @field_validator("status", mode="before")
     @classmethod
@@ -445,6 +489,7 @@ class ChatResponse(_WireBase):
             data_origin = "none"
             corrections = [PublicCorrection.from_domain(item) for item in answer.corrections]
             follow_up = answer.follow_up
+            garden_context = None
         else:
             payload = dict(answer)
             markdown = payload.get("markdown", payload.get("answer_markdown", ""))
@@ -460,6 +505,12 @@ class ChatResponse(_WireBase):
                 PublicNotice.model_validate(item)
                 for item in payload.get("notices", []) or []
             ]
+            raw_context = payload.get("garden_context")
+            garden_context = (
+                GardenContextProjection.model_validate(raw_context)
+                if raw_context is not None
+                else None
+            )
         if isinstance(answer, DraftAnswer):
             composition = CompositionInfo()
             notices = []
@@ -477,6 +528,7 @@ class ChatResponse(_WireBase):
             latency_ms=latency_ms,
             composition=composition,
             notices=notices,
+            garden_context=garden_context,
         )
 
 
@@ -965,6 +1017,7 @@ __all__ = [
     "EvidenceState",
     "HealthCapabilities",
     "HealthResponse",
+    "GardenContextProjection",
     "HighlightAvailabilityDay",
     "HighlightDetailResponse",
     "HighlightsAvailabilityResponse",

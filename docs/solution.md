@@ -26,7 +26,7 @@ scoreboard 提供场馆时，场馆名称与城市会贯穿到赛事缓存、选
 cp .env.example .env  # 单端口部署可选；独立 4173 页面跨源调用 API 时需要它；不要提交 .env
 set -a; . ./.env; set +a  # Settings 读取进程环境变量，不会自动解析 .env 文件
 python3 -m pip install -e '.[dev]'
-uvicorn apps.api.src.main:app --host 0.0.0.0 --port 8000
+python3 -m apps.api.src.main
 ```
 
 浏览器访问 `http://<服务器IP>:8000/`。FastAPI 会从同一端口托管 UI、聊天和 highlights。
@@ -52,7 +52,7 @@ BYOK 需要单独说明：fixture 演示与自动测试完全离线且不需要�
 公开数据栈。若启用真实 key，服务必须置于认证反代/VPN/受限安全组之后，
 并设置供应商额度/限流；未认证的公网端口会带来额度消耗风险。
 
-需要单独调试静态页面时，仍可运行 `python3 -m http.server 4173 --directory apps/web-demo`；
+需要单独调试静态页面时，仍可运行 `python3 -m http.server 4173 --bind 127.0.0.1 --directory apps/web-demo`；
 此时 API 必须额外运行在 8000，并配置相应的 `ALLOWED_ORIGINS`。
 
 ## 1. 目标与边界

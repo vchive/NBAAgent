@@ -57,6 +57,7 @@ def _wire(result: ChatResult) -> ChatResponse | ErrorResponse:
                 "follow_up": result.follow_up,
                 "composition": result.composition,
                 "notices": result.notices,
+                "garden_context": result.garden_context,
             },
             latency_ms=result.latency_ms,
             as_of_beijing=result.as_of_beijing,
